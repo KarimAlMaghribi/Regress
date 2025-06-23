@@ -11,7 +11,9 @@ jobs:
     runs-on: windows-latest
     env:
       # Pfad zur vcpkg-Installation auf dem Runner
-      VCPKG_ROOT: ${{ runner.tool_cache }}\vcpkg
+      # Use the built-in environment variable instead of the unrecognized
+      # runner context to avoid workflow validation errors.
+      VCPKG_ROOT: ${{ env.RUNNER_TOOL_CACHE }}\vcpkg
       # Gewähltes Triplet für Leptonica
       VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
 
