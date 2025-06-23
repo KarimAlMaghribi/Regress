@@ -24,4 +24,4 @@ tracing = "0.1"
 async-trait = "0.1"
 
 [patch.crates-io]
-bindgen = "0.69"
+bindgen = { version = "=0.69.5" }
