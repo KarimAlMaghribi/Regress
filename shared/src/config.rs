@@ -8,8 +8,9 @@ pub struct Settings {
 
 impl Settings {
     pub fn new() -> Result<Self, config::ConfigError> {
-        let mut cfg = config::Config::default();
-        cfg.merge(config::Environment::default())?;
-        cfg.try_into()
+        config::Config::builder()
+            .add_source(config::Environment::default())
+            .build()?
+            .try_deserialize()
     }
 }
