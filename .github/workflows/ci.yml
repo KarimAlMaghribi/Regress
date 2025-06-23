@@ -15,4 +15,8 @@ jobs:
           toolchain: stable
           profile: minimal
           override: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libleptonica-dev libtesseract-dev
       - run: cargo build --workspace --release
