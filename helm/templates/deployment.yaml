@@ -1,0 +1,19 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: regress
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: regress
+  template:
+    metadata:
+      labels:
+        app: regress
+    spec:
+      containers:
+      - name: api-gateway
+        image: {{ .Values.image.repository }}-api-gateway
+        ports:
+        - containerPort: 8080
