@@ -1,4 +1,5 @@
 name: CI
+
 on:
   push:
     branches: [ main ]
@@ -6,17 +7,62 @@ on:
     branches: [ main ]
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
+  build-windows:
+    runs-on: windows-latest
+    env:
+      # Pfad zur vcpkg-Installation auf dem Runner
+      VCPKG_ROOT: ${{ runner.tool_cache }}\vcpkg
+      # Gewähltes Triplet für Leptonica
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
+
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Cache Cargo registry & git
+        uses: actions/cache@v3
+        with:
+          path: |
+            C:\Users\runneradmin\.cargo\registry
+            C:\Users\runneradmin\.cargo\git
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache vcpkg installed packages
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.VCPKG_ROOT }}\installed
+          key: ${{ runner.os }}-vcpkg-${{ env.VCPKG_DEFAULT_TRIPLET }}
+          restore-keys: ${{ runner.os }}-vcpkg-
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
           profile: minimal
           override: true
-      - name: Install system dependencies
+
+      - name: Setup vcpkg
+        shell: pwsh
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libleptonica-dev libtesseract-dev
-      - run: cargo build --workspace --release
+          git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
+          Push-Location $env:VCPKG_ROOT
+          .\bootstrap-vcpkg.bat
+          .\vcpkg integrate install
+          Pop-Location
+
+      - name: Install Leptonica via vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & "$env:VCPKG_ROOT\vcpkg.exe" install "leptonica:$env:VCPKG_DEFAULT_TRIPLET" --recurse
+
+      - name: Build workspace
+        shell: pwsh
+        run: |
+          cargo clean
+          cargo build --workspace --release --verbose
+
+      - name: Run tests
+        shell: pwsh
+        run: cargo test --workspace --verbose
