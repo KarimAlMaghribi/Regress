@@ -1,10 +1,16 @@
+[package.metadata.vcpkg]
+git          = "https://github.com/microsoft/vcpkg"
+branch       = "master"
+dependencies = ["leptonica"]
+triplet      = "x64-windows-static-md"
+
 [package]
-name = "text-extraction"
+name             = "text-extraction"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
-tesseract = "0.8"
-pdf = "0.8"
+tesseract        = "0.15.2"
+pdf              = "0.9.0"
 tracing.workspace = true
-shared = { path = "../../shared" }
+shared           = { path = "../../shared" }
