@@ -22,3 +22,6 @@ config = "0.13"
 thiserror = "1"
 tracing = "0.1"
 async-trait = "0.1"
+
+[patch.crates-io]
+bindgen = "0.69"
