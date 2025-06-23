@@ -10,9 +10,9 @@ jobs:
   build-windows:
     runs-on: windows-latest
     env:
-      # Pfad zur vcpkg-Installation auf dem Runner
-      VCPKG_ROOT: "${{ runner.tool_cache }}\\vcpkg"
-      # Gewähltes Triplet für Leptonica
+      # Klone vcpkg ins Repo-Verzeichnis
+      VCPKG_ROOT: ${{ github.workspace }}\\vcpkg
+      # Triplet für Leptonica
       VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
 
     steps:
@@ -45,8 +45,8 @@ jobs:
       - name: Setup vcpkg
         shell: pwsh
         run: |
-          git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
-          Push-Location $env:VCPKG_ROOT
+          git clone https://github.com/microsoft/vcpkg.git $Env:VCPKG_ROOT
+          Push-Location $Env:VCPKG_ROOT
           .\bootstrap-vcpkg.bat
           .\vcpkg integrate install
           Pop-Location
@@ -55,7 +55,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & "$env:VCPKG_ROOT\vcpkg.exe" install "leptonica:$env:VCPKG_DEFAULT_TRIPLET" --recurse
+          & "$Env:VCPKG_ROOT\vcpkg.exe" install "leptonica:$Env:VCPKG_DEFAULT_TRIPLET" --recurse
 
       - name: Build workspace
         shell: pwsh
