@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-tesseract = "0.7"
+tesseract = "0.8"
 pdf = "0.8"
 tracing.workspace = true
 shared = { path = "../../shared" }
