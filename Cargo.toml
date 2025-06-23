@@ -16,12 +16,11 @@ authors = ["Your Name <you@example.com>"]
 license = "MIT"
 
 [workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-config = "0.13"
-thiserror = "1"
-tracing = "0.1"
-async-trait = "0.1"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+config = "0.15.11"
+thiserror = "2.0.12"
+tracing = "0.1.41"
+async-trait = "0.1.88"
+bindgen       = "=0.72.0"
 
-[patch.crates-io]
-bindgen = { version = "=0.69.5" }
