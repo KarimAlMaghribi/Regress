@@ -1,4 +1,5 @@
 use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
+use actix_cors::Cors;
 use serde::Deserialize;
 use shared::{
     config::Settings,
@@ -137,6 +138,7 @@ async fn main() -> std::io::Result<()> {
     info!("starting http server on port 8083");
     HttpServer::new(|| {
         App::new()
+            .wrap(Cors::permissive())
             .service(extract)
             .route("/health", web::get().to(health))
     })

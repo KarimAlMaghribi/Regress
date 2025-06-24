@@ -1,5 +1,7 @@
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use actix_multipart::Multipart;
 use actix_cors::Cors;
+use futures_util::StreamExt as _;
 use serde::{Serialize, Deserialize};
 use tracing::{info, error};
 use tokio_postgres::NoTls;
@@ -13,6 +15,7 @@ use rdkafka::{
 };
 use std::time::Duration;
 use chrono::{DateTime, Utc};
+use tesseract;
 
 async fn health() -> impl Responder {
     "OK"
@@ -129,30 +132,46 @@ pub async fn history(
 }
 
 pub async fn classify(
-    req: web::Json<ClassifyRequest>,
+    mut payload: Multipart,
     db: web::Data<tokio_postgres::Client>,
+    producer: web::Data<FutureProducer>,
 ) -> actix_web::Result<HttpResponse> {
-    info!(pdf_id = req.pdf_id, prompt_id = req.prompt_id, "classification request");
-
-    let stmt = db
-        .prepare("SELECT text FROM pdf_texts WHERE pdf_id = $1")
-        .await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-    let row = db
-        .query_opt(&stmt, &[&req.pdf_id])
-        .await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
-    let Some(row) = row else {
-        return Err(actix_web::error::ErrorNotFound("pdf text"));
-    };
-    let extracted_text: String = row.get(0);
+    let mut pdf_bytes = Vec::new();
+    let mut prompt_id: i32 = 1;
+    while let Some(item) = payload.next().await {
+        let mut field = item?;
+        if field.name() == "promptId" {
+            let mut data = Vec::new();
+            while let Some(chunk) = field.next().await {
+                data.extend_from_slice(&chunk?);
+            }
+            if let Ok(v) = std::str::from_utf8(&data) {
+                if let Ok(id) = v.trim().parse() {
+                    prompt_id = id;
+                }
+            }
+        } else if field.name() == "file" {
+            while let Some(chunk) = field.next().await {
+                pdf_bytes.extend_from_slice(&chunk?);
+            }
+        }
+    }
+    let tmp_path = "/tmp/upload.pdf";
+    tokio::fs::write(tmp_path, &pdf_bytes).await.map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut tess = tesseract::Tesseract::new(None, Some("eng"))
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let text = tess
+        .set_image(tmp_path)
+        .and_then(|t| t.get_text())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+    let extracted_text = text;
 
     let stmt = db
         .prepare("SELECT text FROM prompts WHERE id = $1")
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let row = db
-        .query_opt(&stmt, &[&req.prompt_id])
+        .query_opt(&stmt, &[&prompt_id])
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let Some(row) = row else {
@@ -202,8 +221,8 @@ pub async fn classify(
     db.execute(
         &stmt,
         &[
-            &req.pdf_id.to_string(),
-            &req.prompt_id.to_string(),
+            &"upload.pdf",
+            &prompt_id.to_string(),
             &is_regress,
             &metrics,
             &responses,
@@ -211,6 +230,17 @@ pub async fn classify(
     )
     .await
     .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let result = ClassificationResult { id: 0, regress: is_regress };
+    let payload = serde_json::to_string(&result).unwrap();
+    let _ = producer
+        .send(
+            FutureRecord::to("classification-result")
+                .payload(&payload)
+                .key(&()),
+            Duration::from_secs(0),
+        )
+        .await;
 
     Ok(HttpResponse::Ok().json(json!({"is_regress": is_regress})))
 }
@@ -383,7 +413,7 @@ async fn main() -> std::io::Result<()> {
     let db = web::Data::new(db_client);
     let db_clone = db.clone();
     let cons = consumer;
-    let prod = producer;
+    let prod = producer.clone();
     let prompt_id: i32 = std::env::var("CLASS_PROMPT_ID")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -478,6 +508,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(Cors::permissive())
             .app_data(db.clone())
+            .app_data(web::Data::new(producer.clone()))
             .route("/classify", web::post().to(classify))
             .route("/history", web::get().to(history))
             .route("/run_prompt", web::get().to(run_prompt))

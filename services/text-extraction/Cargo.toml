@@ -13,6 +13,7 @@ edition.workspace = true
 tesseract        = "0.15.2"
 pdf              = "0.9.0"
 actix-web        = "4"
+actix-cors       = "0.6"
 serde.workspace  = true
 serde_json.workspace = true
 tracing.workspace = true

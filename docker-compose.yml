@@ -48,6 +48,14 @@ services:
       OPENAI_API_KEY: "sk-proj-tUvEXQuoFPPstEtXdpQN7E2TETKlsLSzjqXn-9pKto3wUlON2lYCTRNV_XZEx0D8UzstlNS8hPT3BlbkFJAxFPCiMLCUziTETVR0GPHiDQXp9li7FG37nmrdMi9T7-3bF5E8t19e8Jj-yk_TsFC-rWSD15oAs"
     ports:
       - "8084:8084"
+  metrics:
+    build:
+      context: .
+      dockerfile: services/metrics/Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/regress
+    ports:
+      - "8085:8085"
   kafka:
     image: bitnami/kafka:latest
     environment:

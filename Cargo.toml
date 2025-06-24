@@ -6,6 +6,7 @@ members = [
     "services/text-extraction",
     "services/prompt-manager",
     "services/classifier",
+    "services/metrics",
 ]
 resolver = "2"
 
