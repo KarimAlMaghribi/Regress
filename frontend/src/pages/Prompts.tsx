@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Typography, Box, TextField, Button, IconButton, List, ListItem } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { motion } from 'framer-motion';
+import PageHeader from '../components/PageHeader';
 
 interface Prompt {
   id: number;
@@ -49,7 +50,7 @@ export default function Prompts() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>Prompts</Typography>
+      <PageHeader title="Prompts" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Prompts' }]} />
       <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
         <TextField size="small" value={newText} onChange={e => setNewText(e.target.value)} label="New prompt" />
         <Button variant="contained" onClick={create} component={motion.button} whileHover={{ y: -2 }}>Add</Button>

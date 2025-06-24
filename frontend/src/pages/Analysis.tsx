@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Typography, Box, Paper, Button } from '@mui/material';
+import PageHeader from '../components/PageHeader';
 import { LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { motion } from 'framer-motion';
 
@@ -26,7 +27,7 @@ export default function Analysis() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>Prompt Analysis</Typography>
+      <PageHeader title="Prompt Analysis" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Analysis' }]} actions={<Button variant="contained" onClick={load}>Refresh</Button>} />
       <Paper sx={{ p: 2 }}>
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={data}>
@@ -38,9 +39,6 @@ export default function Analysis() {
           </LineChart>
         </ResponsiveContainer>
       </Paper>
-      <Button variant="contained" onClick={load} component={motion.button} whileHover={{ y: -2 }} sx={{ mt: 2 }}>
-        Refresh
-      </Button>
     </Box>
   );
 }

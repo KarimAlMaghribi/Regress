@@ -1,20 +1,37 @@
 import React, { useContext } from 'react';
 import {
-  AppBar, Toolbar, Typography, Drawer, List,
-  ListItemButton, ListItemText, IconButton, Box
+  AppBar,
+  Toolbar,
+  Typography,
+  Drawer,
+  List,
+  ListItemButton,
+  ListItemText,
+  IconButton,
+  Box,
+  useMediaQuery,
 } from '@mui/material';
 import { Link, useLocation } from 'react-router-dom';
 import MenuIcon from '@mui/icons-material/Menu';
 import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded';
+import DashboardIcon from '@mui/icons-material/Dashboard';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import ViewListIcon from '@mui/icons-material/ViewList';
+import AssessmentIcon from '@mui/icons-material/Assessment';
 import { ColorModeContext } from '../ColorModeContext';
 import { motion } from 'framer-motion';
 
 const drawerWidth = 240;
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const [open, setOpen] = React.useState(true);
+  const isMobile = useMediaQuery('(max-width:900px)');
+  const [open, setOpen] = React.useState(!isMobile);
   const { toggle } = useContext(ColorModeContext);
   const location = useLocation();
+
+  React.useEffect(() => {
+    setOpen(!isMobile);
+  }, [isMobile]);
 
   const handleDrawer = () => {
     console.log('Toggle drawer', !open);
@@ -49,8 +66,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </AppBar>
 
       <Drawer
-        variant="persistent"
+        variant={isMobile ? 'temporary' : 'persistent'}
         open={open}
+        onClose={() => setOpen(false)}
         sx={{
           width: drawerWidth,
           [`& .MuiDrawer-paper`]: {
@@ -63,26 +81,27 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       >
         <Toolbar />
         <List>
-          {[
-            { text: 'Upload', to: '/upload' },
-            { text: 'Prompts', to: '/prompts' },
-            { text: 'Analysis', to: '/analysis' },
-          ].map(({ text, to }) => (
+          {[{ text: 'Dashboard', to: '/', icon: <DashboardIcon /> },
+            { text: 'Upload', to: '/upload', icon: <UploadFileIcon /> },
+            { text: 'Prompts', to: '/prompts', icon: <ViewListIcon /> },
+            { text: 'Analysis', to: '/analysis', icon: <AssessmentIcon /> },
+          ].map(({ text, to, icon }) => (
             <ListItemButton
               key={text}
               component={motion(Link)}
               to={to}
               selected={location.pathname === to}
               whileHover={{ scale: 1.04 }}
-              sx={{ transformOrigin: 'center' }}
+              sx={{ transformOrigin: 'center', gap: 1 }}
             >
+              {icon}
               <ListItemText primary={text} />
             </ListItemButton>
           ))}
         </List>
       </Drawer>
 
-      <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 8 }}>
+      <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 8, width: { sm: `calc(100% - ${drawerWidth}px)` } }}>
         {children}
       </Box>
     </Box>

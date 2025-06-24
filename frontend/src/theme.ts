@@ -5,7 +5,7 @@ export const getDesignTokens = (mode: 'light' | 'dark') => ({
     mode,
     ...(mode === 'light'
       ? {
-          background: { default: '#F8F9FA', paper: '#FFFFFF' },
+          background: { default: '#F5F7FA', paper: '#FFFFFF' },
           primary: { main: '#3A86FF' },
         }
       : {
@@ -23,6 +23,9 @@ export const getDesignTokens = (mode: 'light' | 'dark') => ({
             mode === 'dark'
               ? 'linear-gradient(135deg, rgba(108,93,211,0.08), rgba(58,134,255,0.06))'
               : undefined,
+          padding: 24,
+          borderRadius: 8,
+          boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
         },
       },
     },
@@ -33,6 +36,12 @@ export const getDesignTokens = (mode: 'light' | 'dark') => ({
         },
       },
     },
+  },
+  typography: {
+    h4: { fontSize: '32px', fontWeight: 600 },
+    h5: { fontSize: '24px', fontWeight: 600 },
+    subtitle2: { fontSize: '14px', fontWeight: 500 },
+    body1: { fontSize: '16px' },
   },
 });
 

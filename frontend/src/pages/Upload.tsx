@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import { motion } from 'framer-motion';
+import PageHeader from '../components/PageHeader';
 
 interface Prompt { id: number; text: string }
 
@@ -61,7 +62,7 @@ export default function Upload() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>Upload PDF</Typography>
+      <PageHeader title="Upload" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Upload' }]} />
       <Paper
         component={motion.div}
         whileHover={{ scale: 1.03 }}
