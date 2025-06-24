@@ -1,7 +1,7 @@
 [package.metadata.vcpkg]
 git          = "https://github.com/microsoft/vcpkg"
 branch       = "master"
-dependencies = ["leptonica"]
+dependencies = ["leptonica", "tesseract"]
 triplet      = "x64-windows-static-md"
 
 [package]

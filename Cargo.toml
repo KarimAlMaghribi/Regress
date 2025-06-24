@@ -26,5 +26,5 @@ bindgen     = "=0.72.0"
 
 [workspace.metadata.vcpkg]
 git          = "https://github.com/microsoft/vcpkg"
-dependencies = ["leptonica"]
+dependencies = ["leptonica", "tesseract"]
 triplet      = "x64-windows-static-md"
