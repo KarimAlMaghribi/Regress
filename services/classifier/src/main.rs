@@ -53,7 +53,7 @@ pub async fn history(
     params: web::Query<HistoryParams>,
 ) -> actix_web::Result<HttpResponse> {
     let mut query = String::from(
-        "SELECT id, run_time, file_name, prompts, regress, metrics FROM classifications",
+        "SELECT id, run_time, file_name, prompts, regress, metrics, responses FROM classifications",
     );
     let mut clauses: Vec<String> = Vec::new();
     let mut values: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = Vec::new();
@@ -88,6 +88,8 @@ pub async fn history(
         .map(|r| {
             let metrics_value: serde_json::Value = r.get(5);
             let metrics: Metrics = serde_json::from_value(metrics_value).unwrap_or_default();
+            let responses_value: serde_json::Value = r.get(6);
+            let responses: Vec<String> = serde_json::from_value(responses_value).unwrap_or_default();
             HistoryItem {
                 id: r.get(0),
                 prompt_id: r.get::<_, String>(3),
@@ -95,7 +97,7 @@ pub async fn history(
                 pdf_filenames: vec![r.get::<_, Option<String>>(2).unwrap_or_default()],
                 run_time: r.get(1),
                 metrics,
-                responses: Vec::new(),
+                responses,
             }
         })
         .collect();
@@ -145,12 +147,13 @@ pub async fn classify(
         "cost": (pdf_data.len() as f64) / 1000.0,
         "hallucinationRate": 0.0
     });
+    let responses = serde_json::json!([format!("result={}", is_regress)]);
     let stmt = db
-        .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics) VALUES ($1, $2, $3, $4)")
+        .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)")
         .await
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
     db
-        .execute(&stmt, &[&fname, &prompts_str, &is_regress, &metrics])
+        .execute(&stmt, &[&fname, &prompts_str, &is_regress, &metrics, &responses])
         .await
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
@@ -182,7 +185,8 @@ mod tests {
                     file_name TEXT,
                     prompts TEXT,
                     regress BOOLEAN NOT NULL,
-                    metrics JSONB NOT NULL
+                    metrics JSONB NOT NULL,
+                    responses JSONB NOT NULL
                 )",
                 &[],
             )
@@ -230,7 +234,8 @@ async fn main() -> std::io::Result<()> {
                 file_name TEXT,
                 prompts TEXT,
                 regress BOOLEAN NOT NULL,
-                metrics JSONB NOT NULL
+                metrics JSONB NOT NULL,
+                responses JSONB NOT NULL
             )",
             &[],
         )
