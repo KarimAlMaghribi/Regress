@@ -160,6 +160,73 @@ pub async fn classify(
     Ok(HttpResponse::Ok().json(Classification { regress: is_regress }))
 }
 
+#[derive(Deserialize)]
+pub struct PromptQuery {
+    prompt_id: i32,
+}
+
+#[derive(Serialize)]
+struct CompletionResponse {
+    result: String,
+}
+
+pub async fn run_prompt(
+    db: web::Data<tokio_postgres::Client>,
+    query: web::Query<PromptQuery>,
+) -> actix_web::Result<HttpResponse> {
+    let stmt = db
+        .prepare("SELECT text, name FROM prompts WHERE id = $1")
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let row = db
+        .query_opt(&stmt, &[&query.prompt_id])
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let Some(row) = row else {
+        return Err(actix_web::error::ErrorNotFound("prompt"));
+    };
+    let prompt_text: String = row.get(0);
+    let prompt_name: String = row.get(1);
+
+    let api_key = std::env::var("OPENAI_API_KEY")
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    openai::set_key(api_key);
+    info!(prompt_name, prompt_text, "sending prompt to OpenAI");
+    let completion = openai::chat::ChatCompletion::builder(
+        "gpt-4-turbo",
+        vec![openai::chat::ChatCompletionMessage {
+            role: openai::chat::Role::User,
+            content: prompt_text.clone(),
+            name: None,
+        }],
+    )
+    .create()
+    .await
+    .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let response_text = completion
+        .choices
+        .get(0)
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_default();
+    info!(prompt_name, prompt_text, response_text, "openai completion returned");
+
+    let stmt = db
+        .prepare(
+            "INSERT INTO api_logs (prompt_id, prompt_name, prompt_text, response_text, run_time) VALUES ($1, $2, $3, $4, now())",
+        )
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    db
+        .execute(
+            &stmt,
+            &[&query.prompt_id, &prompt_name, &prompt_text, &response_text],
+        )
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+
+    Ok(HttpResponse::Ok().json(CompletionResponse { result: response_text }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

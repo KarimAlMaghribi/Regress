@@ -27,6 +27,7 @@ bindgen     = "=0.72.0"
 tokio       = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
 tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1"] }
 rdkafka     = { version = "0.36", features = ["tokio"] }
+openai      = "1"
 
 [workspace.metadata.vcpkg]
 git          = "https://github.com/microsoft/vcpkg"
