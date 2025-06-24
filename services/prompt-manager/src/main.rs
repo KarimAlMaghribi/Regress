@@ -97,3 +97,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::Router;
+    use tower::ServiceExt; // for `oneshot`
+
+    #[tokio::test]
+    async fn health_ok() {
+        let app = Router::new().route("/health", get(health));
+        let res = app.oneshot(axum::http::Request::builder().uri("/health").body(axum::body::Body::empty()).unwrap()).await.unwrap();
+        assert!(res.status().is_success());
+    }
+}

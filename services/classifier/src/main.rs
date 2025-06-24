@@ -1,4 +1,4 @@
-use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use actix_cors::Cors;
 use serde::{Serialize, Deserialize};
 use tracing::{info, error};
@@ -13,6 +13,10 @@ use rdkafka::{
 };
 use std::time::Duration;
 use chrono::{DateTime, Utc};
+
+async fn health() -> impl Responder {
+    "OK"
+}
 
 // OpenAI-Imports
 use openai::Credentials;
@@ -477,8 +481,23 @@ async fn main() -> std::io::Result<()> {
             .route("/classify", web::post().to(classify))
             .route("/history", web::get().to(history))
             .route("/run_prompt", web::get().to(run_prompt))
+            .route("/health", web::get().to(health))
     })
         .bind(("0.0.0.0", 8084))?
         .run()
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, web, App};
+
+    #[actix_rt::test]
+    async fn health_ok() {
+        let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
+        let req = test::TestRequest::get().uri("/health").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
 }
