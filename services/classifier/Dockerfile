@@ -2,7 +2,8 @@ FROM rust:1.72 as builder
 WORKDIR /app
 COPY Cargo.toml ./Cargo.toml
 COPY shared ./shared
-COPY services/classifier ./services/classifier
+# Copy all service crates so the workspace is complete
+COPY services ./services
 RUN cargo build --release --package classifier --manifest-path services/classifier/Cargo.toml
 
 FROM debian:buster-slim
