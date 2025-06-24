@@ -21,6 +21,8 @@ FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         tesseract-ocr \
+        libssl3 \
+        ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/text-extraction /usr/local/bin/text-extraction
 CMD ["text-extraction"]
