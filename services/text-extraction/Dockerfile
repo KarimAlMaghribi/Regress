@@ -2,7 +2,8 @@ FROM rust:1.72 as builder
 WORKDIR /app
 COPY Cargo.toml ./Cargo.toml
 COPY shared ./shared
-COPY services/text-extraction ./services/text-extraction
+# Copy all service crates so the workspace is complete
+COPY services ./services
 RUN cargo build --release --package text-extraction --manifest-path services/text-extraction/Cargo.toml
 
 FROM debian:buster-slim

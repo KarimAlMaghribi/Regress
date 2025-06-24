@@ -2,7 +2,8 @@ FROM rust:1.72 as builder
 WORKDIR /app
 COPY Cargo.toml ./Cargo.toml
 COPY shared ./shared
-COPY services/pdf-ingest ./services/pdf-ingest
+# Copy all service crates so the workspace is complete
+COPY services ./services
 RUN cargo build --release --package pdf-ingest --manifest-path services/pdf-ingest/Cargo.toml
 
 FROM debian:buster-slim
