@@ -1,5 +1,6 @@
-use axum::{routing::get, Router, Json, extract::State};
-use sea_orm::{Database, DatabaseConnection, EntityTrait, ConnectionTrait};
+use axum::{routing::{get, post, put, delete}, Router, Json, extract::{State, Path}};
+use sea_orm::{Database, DatabaseConnection, EntityTrait, ConnectionTrait, ActiveModelTrait, Set};
+use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 
 mod model;
@@ -10,13 +11,50 @@ async fn health() -> &'static str {
     "OK"
 }
 
-async fn list_prompts(State(db): State<DatabaseConnection>) -> Result<Json<Vec<String>>, axum::http::StatusCode> {
+#[derive(Serialize)]
+struct PromptData {
+    id: i32,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct PromptInput {
+    text: String,
+}
+
+async fn list_prompts(State(db): State<DatabaseConnection>) -> Result<Json<Vec<PromptData>>, axum::http::StatusCode> {
     let items = Prompt::find()
         .all(&db)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    let texts = items.into_iter().map(|p| p.text).collect();
+    let texts = items.into_iter().map(|p| PromptData { id: p.id, text: p.text }).collect();
     Ok(Json(texts))
+}
+
+async fn create_prompt(State(db): State<DatabaseConnection>, Json(input): Json<PromptInput>) -> Result<Json<PromptData>, axum::http::StatusCode> {
+    let mut model: model::ActiveModel = Default::default();
+    model.text = Set(input.text);
+    let res = model.insert(&db).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(PromptData { id: res.id, text: res.text }))
+}
+
+async fn update_prompt(Path(id): Path<i32>, State(db): State<DatabaseConnection>, Json(input): Json<PromptInput>) -> Result<Json<PromptData>, axum::http::StatusCode> {
+    let Some(mut model) = Prompt::find_by_id(id).one(&db).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)? else {
+        return Err(axum::http::StatusCode::NOT_FOUND);
+    };
+    model.text = input.text;
+    let active: model::ActiveModel = model.into();
+    let res = active.update(&db).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(PromptData { id: res.id, text: res.text }))
+}
+
+async fn delete_prompt(Path(id): Path<i32>, State(db): State<DatabaseConnection>) -> Result<(), axum::http::StatusCode> {
+    let Some(model) = Prompt::find_by_id(id).one(&db).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)? else {
+        return Err(axum::http::StatusCode::NOT_FOUND);
+    };
+    let active: model::ActiveModel = model.into();
+    active.delete(&db).await.map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(())
 }
 
 #[tokio::main]
@@ -36,7 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/health", get(health))
-        .route("/prompts", get(list_prompts))
+        .route("/prompts", get(list_prompts).post(create_prompt))
+        .route("/prompts/:id", put(update_prompt).delete(delete_prompt))
         .with_state(db.clone());
     info!("starting prompt-manager");
     axum::Server::bind(&"0.0.0.0:8082".parse::<std::net::SocketAddr>()?)

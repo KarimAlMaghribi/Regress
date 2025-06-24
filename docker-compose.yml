@@ -44,6 +44,8 @@ services:
     build:
       context: .
       dockerfile: services/classifier/Dockerfile
+    ports:
+      - "8084:8084"
   kafka:
     image: bitnami/kafka:latest
     environment:
