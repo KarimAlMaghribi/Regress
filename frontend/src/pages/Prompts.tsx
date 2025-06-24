@@ -13,14 +13,19 @@ export default function Prompts() {
   const [newText, setNewText] = useState('');
 
   const load = () => {
+    console.log('Loading prompts ...');
     fetch('http://localhost:8082/prompts')
       .then(r => r.json())
-      .then(setPrompts);
+      .then(d => {
+        console.log('Loaded prompts', d.length);
+        setPrompts(d);
+      });
   };
 
   useEffect(() => { load(); }, []);
 
   const create = () => {
+    console.log('Creating prompt');
     fetch('http://localhost:8082/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -29,6 +34,7 @@ export default function Prompts() {
   };
 
   const update = (id: number, text: string) => {
+    console.log('Updating prompt', id);
     fetch(`http://localhost:8082/prompts/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -37,6 +43,7 @@ export default function Prompts() {
   };
 
   const remove = (id: number) => {
+    console.log('Deleting prompt', id);
     fetch(`http://localhost:8082/prompts/${id}`, { method: 'DELETE' }).then(load);
   };
 

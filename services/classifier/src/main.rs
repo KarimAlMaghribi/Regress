@@ -2,7 +2,7 @@ use actix_multipart::Multipart;
 use actix_web::{web, App, HttpResponse, HttpServer};
 use futures_util::StreamExt as _;
 use serde::Serialize;
-use tracing::info;
+use tracing::{debug, info};
 
 #[derive(Serialize)]
 struct Classification {
@@ -10,6 +10,7 @@ struct Classification {
 }
 
 async fn classify(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
+    debug!("classification request received");
     let mut pdf_data = Vec::new();
     let mut prompts: Vec<String> = Vec::new();
 
@@ -21,6 +22,7 @@ async fn classify(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
             data.extend_from_slice(&chunk?);
         }
         if name == "file" {
+            debug!("received pdf data: {} bytes", data.len());
             pdf_data = data;
         } else if name == "prompts" {
             let s = String::from_utf8_lossy(&data);
@@ -29,6 +31,7 @@ async fn classify(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
     }
 
     let text = String::from_utf8_lossy(&pdf_data).to_lowercase();
+    debug!("prompts used: {:?}", prompts);
     let is_regress = if prompts.is_empty() {
         text.contains("regress")
     } else {
@@ -41,6 +44,7 @@ async fn classify(mut payload: Multipart) -> actix_web::Result<HttpResponse> {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
+    info!("starting classifier service");
     HttpServer::new(|| App::new().route("/classify", web::post().to(classify)))
         .bind(("0.0.0.0", 8084))?
         .run()
