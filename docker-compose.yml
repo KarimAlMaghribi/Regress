@@ -1,18 +1,28 @@
 version: '3.9'
 services:
   api-gateway:
-    build: ./services/api-gateway
+    build:
+      context: .
+      dockerfile: services/api-gateway/Dockerfile
     ports:
       - "8080:8080"
   pdf-ingest:
-    build: ./services/pdf-ingest
+    build:
+      context: .
+      dockerfile: services/pdf-ingest/Dockerfile
     ports:
       - "8081:8081"
   text-extraction:
-    build: ./services/text-extraction
+    build:
+      context: .
+      dockerfile: services/text-extraction/Dockerfile
   prompt-manager:
-    build: ./services/prompt-manager
+    build:
+      context: .
+      dockerfile: services/prompt-manager/Dockerfile
     ports:
       - "8082:8082"
   classifier:
-    build: ./services/classifier
+    build:
+      context: .
+      dockerfile: services/classifier/Dockerfile
