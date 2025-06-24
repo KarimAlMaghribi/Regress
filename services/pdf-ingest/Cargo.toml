@@ -5,6 +5,8 @@ edition.workspace = true
 
 [dependencies]
 actix-web = "4"
+actix-multipart = "0.6"
+futures-util = "0.3"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
