@@ -17,3 +17,4 @@ chrono = { version = "0.4", features = ["serde"] }
 shared = { path = "../../shared" }
 openai.workspace = true
 rdkafka.workspace = true
+actix-cors = "0.6"
