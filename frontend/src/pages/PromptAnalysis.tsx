@@ -19,6 +19,8 @@ import {
   DialogTitle,
   DialogContent,
   OutlinedInput,
+  useMediaQuery,
+  Divider,
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import {
@@ -34,6 +36,7 @@ import {
 } from 'recharts';
 import { motion } from 'framer-motion';
 import useMetrics, { MetricRecord } from '../hooks/useMetrics';
+import PageHeader from '../components/PageHeader';
 
 const ALL_METRICS: (keyof MetricRecord)[] = [
   'accuracy',
@@ -62,6 +65,7 @@ const COLORS = [
 ];
 
 export default function PromptAnalysis() {
+  const isMobile = useMediaQuery('(max-width:900px)');
   const today = useMemo(() => new Date(), []);
   const [start, setStart] = useState<Date | null>(new Date(today.getTime() - 7 * 86400000));
   const [end, setEnd] = useState<Date | null>(today);
@@ -104,7 +108,7 @@ export default function PromptAnalysis() {
 
   return (
     <Box>
-      <Typography variant="h4" gutterBottom>Prompt Analysis</Typography>
+      <PageHeader title="Prompt Analysis" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Analysis' }]} actions={<Button variant="contained" onClick={refresh}>Refresh</Button>} />
 
       {/* KPI Cards */}
       <Grid container spacing={2} sx={{ mb: 2 }}>
@@ -140,6 +144,8 @@ export default function PromptAnalysis() {
         </Grid>
       </Grid>
 
+      <Divider sx={{ my: 4 }} />
+
       {alert && (
         <Alert severity="warning" sx={{ mb: 2 }}>
           Threshold breached! Accuracy &lt; {thresholds.accuracy} or Hallucination &gt; {thresholds.hallucinationRate}
@@ -147,6 +153,7 @@ export default function PromptAnalysis() {
       )}
 
       <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle1" gutterBottom>Filter</Typography>
         <Grid container spacing={2} alignItems="center">
           <Grid item>
             <FormControl size="small" sx={{ minWidth: 160 }}>
@@ -187,6 +194,12 @@ export default function PromptAnalysis() {
               </Select>
             </FormControl>
           </Grid>
+        </Grid>
+      </Paper>
+
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle1" gutterBottom>Zeitraum</Typography>
+        <Grid container spacing={2} alignItems="center">
           <Grid item>
             <DatePicker
               label="Start"
@@ -203,6 +216,12 @@ export default function PromptAnalysis() {
               slotProps={{ textField: { size: 'small' } }}
             />
           </Grid>
+        </Grid>
+      </Paper>
+
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Typography variant="subtitle1" gutterBottom>Einstellungen</Typography>
+        <Grid container spacing={2} alignItems="center">
           <Grid item>
             <FormControl size="small">
               <Checkbox
@@ -269,6 +288,12 @@ export default function PromptAnalysis() {
       <Snackbar open={snackOpen} autoHideDuration={6000} onClose={() => setSnackOpen(false)}>
         <Alert onClose={() => setSnackOpen(false)} severity="error">{error}</Alert>
       </Snackbar>
+
+      <Box sx={{ position: 'fixed', bottom: 0, left: isMobile ? 0 : 240, right: 0, bgcolor: 'background.paper', borderTop: 1, borderColor: 'divider', p: 1, display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
+        <Button onClick={() => setSelectedPoint(null)}>Schließen</Button>
+        <Button variant="outlined">Exportieren</Button>
+        <Button variant="contained">Feedback</Button>
+      </Box>
     </Box>
   );
 }
