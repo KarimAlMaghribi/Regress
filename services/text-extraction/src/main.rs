@@ -17,7 +17,17 @@ fn extract_text(path: &str) -> Result<String> {
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    let text = extract_text("sample.pdf")?;
+    let args: Vec<String> = std::env::args().collect();
+    let path = if let Some(p) = args.get(1) {
+        p.to_owned()
+    } else if let Ok(p) = std::env::var("PDF_PATH") {
+        p
+    } else {
+        return Err(shared::error::AppError::Io(
+            "missing PDF path argument or PDF_PATH env var".into(),
+        ));
+    };
+    let text = extract_text(&path)?;
     info!("extracted text: {}", text);
     Ok(())
 }

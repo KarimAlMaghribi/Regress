@@ -23,6 +23,16 @@ vcpkg install leptonica:x64-windows-static-md \
 
 The CI workflow installs these packages automatically.
 
+## Usage
+
+`text-extraction` now takes the path to a PDF either as the first command line
+argument or via the `PDF_PATH` environment variable. The `classifier` expects an
+`OPENAI_API_KEY` environment variable.
+
+The `prompt-manager` uses a lightweight SQLite database located at
+`prompts.db`. It exposes `/prompts` to retrieve all stored prompts and
+automatically creates the table on startup if it does not exist.
+
 ## Running with Docker
 
 Build and start all services, including the frontend, via Docker Compose:
