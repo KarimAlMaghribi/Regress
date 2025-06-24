@@ -1,6 +1,10 @@
 use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
 use serde::Deserialize;
-use shared::{error::Result, config::Settings, dto::{PdfUploaded, TextExtracted}};
+use shared::{
+    config::Settings,
+    dto::{PdfUploaded, TextExtracted},
+    error::Result,
+};
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     producer::{FutureProducer, FutureRecord},
@@ -9,10 +13,10 @@ use rdkafka::{
 use std::time::Duration;
 use tokio_postgres::NoTls;
 use tesseract::Tesseract;
-use tracing::{debug, info, error};
+use tracing::{debug, error, info};
 
 fn extract_text(path: &str) -> Result<String> {
-    debug!(?path, "extracting text");
+    info!(?path, "starting ocr");
     // Specify the language as an `Option<&str>` as required by `Tesseract::new`
     // `Tesseract::set_image` takes ownership of `self` and returns it again, so
     // reassign the returned value to preserve the instance for subsequent calls.
@@ -24,7 +28,7 @@ fn extract_text(path: &str) -> Result<String> {
     let text = tess
         .get_text()
         .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
-    debug!("extracted text length: {}", text.len());
+    info!(len = text.len(), "ocr finished");
     Ok(text)
 }
 
@@ -53,6 +57,14 @@ async fn main() -> std::io::Result<()> {
     let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
     info!("connected to database");
     tokio::spawn(async move { if let Err(e) = connection.await { error!(%e, "db error") } });
+    db_client
+        .execute(
+            "CREATE TABLE IF NOT EXISTS pdf_texts (pdf_id INTEGER PRIMARY KEY, text TEXT NOT NULL)",
+            &[],
+        )
+        .await
+        .unwrap();
+    info!("ensured pdf_texts table exists");
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "text-extraction")
         .set("bootstrap.servers", &settings.message_broker_url)
@@ -83,7 +95,20 @@ async fn main() -> std::io::Result<()> {
                                 let path = format!("/tmp/pdf_{}.pdf", event.id);
                                 tokio::fs::write(&path, &data).await.unwrap();
                                 if let Ok(text) = extract_text(&path) {
+                                    let text = text.to_lowercase();
                                     info!(id = event.id, "extracted text");
+                                    let stmt = db
+                                        .prepare(
+                                            "INSERT INTO pdf_texts (pdf_id, text) VALUES ($1, $2) \
+         ON CONFLICT (pdf_id) DO UPDATE SET text = EXCLUDED.text",
+                                        )
+                                        .await
+                                        .unwrap();
+                                    if let Err(e) = db.execute(&stmt, &[&event.id, &text]).await {
+                                        error!(%e, id = event.id, "failed to store text");
+                                        continue;
+                                    }
+                                    info!(id = event.id, "stored ocr text");
                                     let evt = TextExtracted { id: event.id, text };
                                     let payload = serde_json::to_string(&evt).unwrap();
                                     let _ = prod
@@ -95,6 +120,7 @@ async fn main() -> std::io::Result<()> {
                                         )
                                         .await;
                                     info!(id = evt.id, "published text-extracted event");
+                                    let _ = tokio::fs::remove_file(&path).await;
                                 }
                             }
                         }
