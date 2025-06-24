@@ -54,7 +54,7 @@ async fn main() -> std::io::Result<()> {
             match cons.recv().await {
                 Err(e) => eprintln!("kafka error: {e}"),
                 Ok(m) => {
-                    if let Some(payload) = m.payload_view::<str>().unwrap() {
+                    if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Ok(event) = serde_json::from_str::<PdfUploaded>(payload) {
                             let stmt = db.prepare("SELECT data FROM pdfs WHERE id = $1").await.unwrap();
                             if let Ok(row) = db.query_one(&stmt, &[&event.id]).await {
