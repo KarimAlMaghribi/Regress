@@ -160,11 +160,11 @@ pub async fn classify(
     tokio::fs::write(tmp_path, &pdf_bytes).await.map_err(actix_web::error::ErrorInternalServerError)?;
     let mut tess = tesseract::Tesseract::new(None, Some("eng"))
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
-    let text = tess
+    let extracted_text = tess
         .set_image(tmp_path)
-        .and_then(|t| t.get_text())
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?
+        .get_text()
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
-    let extracted_text = text;
 
     let stmt = db
         .prepare("SELECT text FROM prompts WHERE id = $1")
@@ -377,6 +377,8 @@ async fn main() -> std::io::Result<()> {
     let settings = Settings::new().unwrap_or_else(|_| Settings {
         database_url: "postgres://postgres:postgres@db:5432/regress".into(),
         message_broker_url: String::new(),
+        openai_api_key: String::new(),
+        class_prompt_id: 0,
     });
     let (db_client, connection) =
         tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
