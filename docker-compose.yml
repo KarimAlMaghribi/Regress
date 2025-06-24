@@ -26,3 +26,9 @@ services:
     build:
       context: .
       dockerfile: services/classifier/Dockerfile
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+    ports:
+      - "3000:80"
