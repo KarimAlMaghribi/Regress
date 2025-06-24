@@ -17,6 +17,7 @@ stores the following columns in the `classifications` table:
 | `file_name`  | TEXT      | original file name              |
 | `prompts`    | TEXT      | comma separated prompt texts    |
 | `regress`    | BOOLEAN   | classification result           |
+| `metrics`    | JSONB     | analysis metrics                |
 
 A list of stored records can be fetched via `GET /history`.
 
@@ -51,10 +52,10 @@ Response:
 [
   {
     "id": 1,
-    "run_time": "2024-06-24T12:00:00Z",
-    "file_name": "claim.pdf",
-    "prompts": "fraud,duplicate",
-    "regress": true
+    "promptId": "fraud,duplicate",
+    "pdfFilenames": ["claim.pdf"],
+    "runTime": "2024-06-24T12:00:00Z",
+    "metrics": { "accuracy": 1.0, "cost": 0.0, "hallucinationRate": 0.0 }
   }
 ]
 ```

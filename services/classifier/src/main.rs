@@ -1,7 +1,7 @@
 use actix_multipart::Multipart;
 use actix_web::{web, App, HttpResponse, HttpServer};
 use futures_util::StreamExt as _;
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use tracing::{debug, info};
 use tokio_postgres::NoTls;
 use shared::config::Settings;
@@ -12,32 +12,91 @@ struct Classification {
     regress: bool,
 }
 
-#[derive(Serialize)]
-struct ClassificationRecord {
-    id: i32,
-    run_time: DateTime<Utc>,
-    file_name: Option<String>,
-    prompts: String,
-    regress: bool,
+#[derive(Serialize, Deserialize, Default)]
+struct Metrics {
+    accuracy: f64,
+    cost: f64,
+    #[serde(rename = "hallucinationRate")]
+    hallucination_rate: f64,
 }
 
-pub async fn history(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<HttpResponse> {
+#[derive(Serialize)]
+struct HistoryItem {
+    id: i32,
+    #[serde(rename = "promptId")]
+    prompt_id: String,
+    #[serde(rename = "promptName", skip_serializing_if = "Option::is_none")]
+    prompt_name: Option<String>,
+    #[serde(rename = "pdfFilenames")]
+    pdf_filenames: Vec<String>,
+    #[serde(rename = "runTime")]
+    run_time: DateTime<Utc>,
+    metrics: Metrics,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    responses: Vec<String>,
+}
+
+#[derive(Deserialize)]
+pub struct HistoryParams {
+    #[serde(default)]
+    limit: Option<i64>,
+    #[serde(default, rename = "start")]
+    start: Option<DateTime<Utc>>,
+    #[serde(default, rename = "end")]
+    end: Option<DateTime<Utc>>,
+    #[serde(default, rename = "promptId")]
+    prompt: Option<String>,
+}
+
+pub async fn history(
+    db: web::Data<tokio_postgres::Client>,
+    params: web::Query<HistoryParams>,
+) -> actix_web::Result<HttpResponse> {
+    let mut query = String::from(
+        "SELECT id, run_time, file_name, prompts, regress, metrics FROM classifications",
+    );
+    let mut clauses: Vec<String> = Vec::new();
+    let mut values: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = Vec::new();
+    if let Some(ref p) = params.prompt {
+        clauses.push(format!("prompts ILIKE ${}", values.len() + 1));
+        values.push(Box::new(format!("%{}%", p)));
+    }
+    if let Some(start) = params.start {
+        clauses.push(format!("run_time >= ${}", values.len() + 1));
+        values.push(Box::new(start));
+    }
+    if let Some(end) = params.end {
+        clauses.push(format!("run_time <= ${}", values.len() + 1));
+        values.push(Box::new(end));
+    }
+    if !clauses.is_empty() {
+        query.push_str(" WHERE ");
+        query.push_str(&clauses.join(" AND "));
+    }
+    query.push_str(" ORDER BY id DESC");
+    if let Some(l) = params.limit {
+        query.push_str(&format!(" LIMIT {}", l));
+    }
+
     let rows = db
-        .query(
-            "SELECT id, run_time, file_name, prompts, regress FROM classifications ORDER BY id DESC",
-            &[],
-        )
+        .query(&query, &values.iter().map(|v| &**v).collect::<Vec<_>>())
         .await
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
-    let items: Vec<ClassificationRecord> = rows
+    let items: Vec<HistoryItem> = rows
         .into_iter()
-        .map(|r| ClassificationRecord {
-            id: r.get(0),
-            run_time: r.get(1),
-            file_name: r.get(2),
-            prompts: r.get(3),
-            regress: r.get(4),
+        .map(|r| {
+            let metrics_value: serde_json::Value = r.get(5);
+            let metrics: Metrics = serde_json::from_value(metrics_value).unwrap_or_default();
+            HistoryItem {
+                id: r.get(0),
+                prompt_id: r.get::<_, String>(3),
+                prompt_name: None,
+                pdf_filenames: vec![r.get::<_, Option<String>>(2).unwrap_or_default()],
+                run_time: r.get(1),
+                metrics,
+                responses: Vec::new(),
+            }
         })
         .collect();
 
@@ -81,12 +140,17 @@ pub async fn classify(
 
     let prompts_str = prompts.join(",");
     let fname = file_name.unwrap_or_else(|| "upload".into());
+    let metrics = serde_json::json!({
+        "accuracy": if is_regress { 1.0 } else { 0.0 },
+        "cost": (pdf_data.len() as f64) / 1000.0,
+        "hallucinationRate": 0.0
+    });
     let stmt = db
-        .prepare("INSERT INTO classifications (file_name, prompts, regress) VALUES ($1, $2, $3)")
+        .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics) VALUES ($1, $2, $3, $4)")
         .await
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
     db
-        .execute(&stmt, &[&fname, &prompts_str, &is_regress])
+        .execute(&stmt, &[&fname, &prompts_str, &is_regress, &metrics])
         .await
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
 
@@ -112,7 +176,14 @@ mod tests {
         tokio::spawn(async move { let _ = connection.await; });
         client
             .execute(
-                "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS classifications (
+                    id SERIAL PRIMARY KEY,
+                    run_time TIMESTAMPTZ DEFAULT now(),
+                    file_name TEXT,
+                    prompts TEXT,
+                    regress BOOLEAN NOT NULL,
+                    metrics JSONB NOT NULL
+                )",
                 &[],
             )
             .await
@@ -131,7 +202,7 @@ mod tests {
         assert!(resp.status().is_success());
 
         let resp = test::TestRequest::get().uri("/history").to_request();
-        let body = test::call_and_read_body_json::<Vec<ClassificationRecord>>(&app, resp).await;
+        let body = test::call_and_read_body_json::<Vec<HistoryItem>>(&app, resp).await;
         assert!(!body.is_empty());
     }
 }
@@ -158,7 +229,8 @@ async fn main() -> std::io::Result<()> {
                 run_time TIMESTAMPTZ DEFAULT now(),
                 file_name TEXT,
                 prompts TEXT,
-                regress BOOLEAN NOT NULL
+                regress BOOLEAN NOT NULL,
+                metrics JSONB NOT NULL
             )",
             &[],
         )

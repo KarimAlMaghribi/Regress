@@ -1,12 +1,20 @@
 import { useState, useEffect, useCallback } from 'react';
 import { z } from 'zod';
 
+const MetricsSchema = z.object({
+  accuracy: z.number(),
+  cost: z.number(),
+  hallucinationRate: z.number(),
+}).catchall(z.any());
+
 export const AnalysisResultSchema = z.object({
-  id: z.number(),
-  run_time: z.string(),
-  file_name: z.string().nullable(),
-  prompts: z.string(),
-  regress: z.boolean(),
+  id: z.string(),
+  promptId: z.string(),
+  promptName: z.string().optional(),
+  pdfFilenames: z.array(z.string()),
+  runTime: z.string(),
+  metrics: MetricsSchema,
+  responses: z.array(z.string()).optional(),
 });
 
 export type AnalysisResult = z.infer<typeof AnalysisResultSchema>;
@@ -24,10 +32,17 @@ export default function useAnalysisHistory(options: HistoryOptions) {
   const [error, setError] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
+    const params = new URLSearchParams();
+    params.set('limit', String(options.limit ?? 50));
+    if (options.promptId) params.set('promptId', options.promptId);
+    if (options.start) params.set('start', options.start.toISOString());
+    if (options.end) params.set('end', options.end.toISOString());
+
     try {
       setLoading(true);
-      const url = `http://localhost:8084/history`;
-      const res = await fetch(url);
+      const res = await fetch(
+        `http://localhost:8084/history?${params.toString()}`
+      );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const parsed = z.array(AnalysisResultSchema).parse(json);
@@ -40,7 +55,7 @@ export default function useAnalysisHistory(options: HistoryOptions) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [options.promptId, options.start?.toISOString(), options.end?.toISOString(), options.limit]);
 
   useEffect(() => {
     fetchData();
