@@ -1,8 +1,9 @@
 use actix_web::{web, App, HttpServer, Responder};
 use shared::dto::{UploadRequest, UploadResponse};
-use tracing::info;
+use tracing::{debug, info};
 
 async fn health() -> impl Responder {
+    debug!("health check request");
     "OK"
 }
 
@@ -14,6 +15,7 @@ async fn upload(item: web::Json<UploadRequest>) -> impl Responder {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
+    info!("starting api-gateway");
     HttpServer::new(|| {
         App::new()
             .route("/health", web::get().to(health))

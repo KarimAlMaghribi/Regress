@@ -7,12 +7,14 @@ use shared::dto::{UploadResponse, PdfUploaded};
 use rdkafka::{producer::{FutureProducer, FutureRecord}, ClientConfig};
 use tokio_postgres::NoTls;
 use std::time::Duration;
+use tracing::{debug, info};
 
 async fn upload(
     mut payload: Multipart,
     db: web::Data<tokio_postgres::Client>,
     producer: web::Data<FutureProducer>,
 ) -> Result<HttpResponse, Error> {
+    info!("handling upload request");
     while let Some(item) = payload.next().await {
         let mut field = item?;
         let mut data = Vec::new();
@@ -20,6 +22,7 @@ async fn upload(
             let bytes: Bytes = chunk?;
             data.extend_from_slice(&bytes);
         }
+        debug!("storing pdf with {} bytes", data.len());
         let stmt = db
             .prepare("INSERT INTO pdfs (data) VALUES ($1) RETURNING id")
             .await
@@ -29,6 +32,7 @@ async fn upload(
             .await
             .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
         let id: i32 = row.get(0);
+        info!(id, "pdf stored in database");
         let payload = serde_json::to_string(&PdfUploaded { id }).unwrap();
         let _ = producer
             .send(
@@ -38,6 +42,7 @@ async fn upload(
                 Duration::from_secs(0),
             )
             .await;
+        info!(id, "published pdf-uploaded event");
         return Ok(HttpResponse::Ok().json(UploadResponse { id: id.to_string() }));
     }
     Ok(HttpResponse::BadRequest().finish())
@@ -46,10 +51,12 @@ async fn upload(
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
+    info!("starting pdf-ingest service");
     let settings = Settings::new().unwrap();
     let (db_client, connection) =
         tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
     let db_client = web::Data::new(db_client);
+    info!("connected to database");
     tokio::spawn(async move { if let Err(e) = connection.await { eprintln!("db error: {e}") } });
     db_client
         .execute(
@@ -58,10 +65,12 @@ async fn main() -> std::io::Result<()> {
         )
         .await
         .unwrap();
+    info!("ensured pdfs table exists");
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &settings.message_broker_url)
         .create()
         .unwrap();
+    info!("kafka producer created");
     let db = db_client.clone();
     HttpServer::new(move || {
         App::new()

@@ -20,6 +20,9 @@ export default function App() {
 
 function AnimatedRoutes() {
   const location = useLocation();
+  React.useEffect(() => {
+    console.log('Navigated to', location.pathname);
+  }, [location.pathname]);
   return (
     <AnimatePresence mode="wait">
       <Routes location={location} key={location.pathname}>

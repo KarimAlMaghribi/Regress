@@ -16,6 +16,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const { toggle } = useContext(ColorModeContext);
   const location = useLocation();
 
+  const handleDrawer = () => {
+    console.log('Toggle drawer', !open);
+    setOpen(!open);
+  };
+
+  const handleColorMode = () => {
+    console.log('Toggle color mode');
+    toggle();
+  };
+
   return (
     <Box sx={{ display: 'flex' }}>
       <AppBar
@@ -28,11 +38,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         }}
       >
         <Toolbar>
-          <IconButton edge="start" color="inherit" onClick={() => setOpen(!open)}>
+          <IconButton edge="start" color="inherit" onClick={handleDrawer}>
             <MenuIcon />
           </IconButton>
           <Typography variant="h6" sx={{ flexGrow: 1 }}>Regress</Typography>
-          <IconButton color="inherit" onClick={toggle} component={motion.button} whileHover={{ rotate: 20 }}>
+          <IconButton color="inherit" onClick={handleColorMode} component={motion.button} whileHover={{ rotate: 20 }}>
             <DarkModeRoundedIcon />
           </IconButton>
         </Toolbar>

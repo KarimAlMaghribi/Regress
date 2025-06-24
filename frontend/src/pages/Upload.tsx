@@ -16,12 +16,17 @@ export default function Upload() {
   const [result, setResult] = useState<string>('');
 
   useEffect(() => {
+    console.log('Loading prompts ...');
     fetch('http://localhost:8082/prompts')
       .then(r => r.json())
-      .then(setPrompts);
+      .then(d => {
+        console.log('Loaded prompts', d.length);
+        setPrompts(d);
+      });
   }, []);
 
   const onDrop = useCallback((files: File[]) => {
+    console.log('Selected file', files[0]);
     setFile(files[0]);
   }, []);
 
@@ -29,13 +34,17 @@ export default function Upload() {
 
   const analyze = () => {
     if (!file) return;
+    console.log('Analyzing file', file.name);
     const form = new FormData();
     form.append('file', file);
     const texts = prompts.filter(p => selected.includes(p.id)).map(p => p.text).join(',');
     form.append('prompts', texts);
     fetch('http://localhost:8084/classify', { method: 'POST', body: form })
       .then(r => r.json())
-      .then(d => setResult(d.regress ? 'Regressfall' : 'Kein Regressfall'));
+      .then(d => {
+        console.log('Classification result', d);
+        setResult(d.regress ? 'Regressfall' : 'Kein Regressfall');
+      });
   };
 
   const dropStyles = {
