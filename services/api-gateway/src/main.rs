@@ -1,8 +1,8 @@
-use actix_web::{web, App, HttpRequest, HttpServer, Responder, HttpResponse};
-use actix_web::dev::Payload;
 use actix_cors::Cors;
-use futures_util::future;
+use actix_web::web::Payload;
+use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use awc::Client;
+use futures_util::future;
 use tracing::{debug, info};
 
 async fn health() -> impl Responder {
@@ -17,20 +17,24 @@ async fn health() -> impl Responder {
     ];
     let checks = urls.iter().map(|u| client.get(*u).send());
     let results = future::join_all(checks).await;
-    if results.iter().any(|r| r.as_ref().map(|res| !res.status().is_success()).unwrap_or(true)) {
+    if results.iter().any(|r| {
+        r.as_ref()
+            .map(|res| !res.status().is_success())
+            .unwrap_or(true)
+    }) {
         return HttpResponse::ServiceUnavailable().finish();
     }
     HttpResponse::Ok().finish()
 }
 
-async fn upload(req: HttpRequest, mut body: Payload) -> impl Responder {
+async fn upload(req: HttpRequest, body: Payload) -> impl Responder {
     info!("forwarding upload request");
     let client = Client::default();
     let mut forward = client.post("http://pdf-ingest:8081/upload");
     for (h, v) in req.headers().iter() {
         forward = forward.insert_header((h.clone(), v.clone()));
     }
-    let mut res = match forward.send_stream(body.into()).await {
+    let mut res = match forward.send_stream(body).await {
         Ok(r) => r,
         Err(e) => {
             return HttpResponse::InternalServerError().body(format!("{e}"));
@@ -47,7 +51,7 @@ async fn proxy(req: HttpRequest, body: Payload, url: String) -> HttpResponse {
     for (h, v) in req.headers().iter() {
         forward = forward.insert_header((h.clone(), v.clone()));
     }
-    let mut res = match forward.send_stream(body.into()).await {
+    let mut res = match forward.send_stream(body).await {
         Ok(r) => r,
         Err(e) => return HttpResponse::InternalServerError().body(format!("{e}")),
     };
@@ -58,7 +62,14 @@ async fn proxy(req: HttpRequest, body: Payload, url: String) -> HttpResponse {
 
 async fn prompts(req: HttpRequest, body: Payload) -> impl Responder {
     let tail = req.match_info().query("tail");
-    let url = format!("http://prompt-manager:8082/prompts{}", if tail.is_empty() { String::new() } else { format!("/{}", tail) });
+    let url = format!(
+        "http://prompt-manager:8082/prompts{}",
+        if tail.is_empty() {
+            String::new()
+        } else {
+            format!("/{}", tail)
+        }
+    );
     proxy(req, body, url).await
 }
 
@@ -75,12 +86,8 @@ async fn main() -> std::io::Result<()> {
             .wrap(Cors::permissive())
             .route("/health", web::get().to(health))
             .route("/upload", web::post().to(upload))
-            .service(
-                web::resource("/classify").route(web::to(classify))
-            )
-            .service(
-                web::resource("/prompts/{tail:.*}").route(web::to(prompts))
-            )
+            .service(web::resource("/classify").route(web::to(classify)))
+            .service(web::resource("/prompts/{tail:.*}").route(web::to(prompts)))
     })
     .bind(("0.0.0.0", 8080))?
     .run()
