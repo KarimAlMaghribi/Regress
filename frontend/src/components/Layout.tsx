@@ -1,36 +1,79 @@
-import React from 'react';
-import { AppBar, Toolbar, Typography, Drawer, List, ListItem, ListItemText } from '@mui/material';
-import { Link } from 'react-router-dom';
+import React, { useContext } from 'react';
+import {
+  AppBar, Toolbar, Typography, Drawer, List,
+  ListItemButton, ListItemText, IconButton, Box
+} from '@mui/material';
+import { Link, useLocation } from 'react-router-dom';
+import MenuIcon from '@mui/icons-material/Menu';
+import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded';
+import { ColorModeContext } from '../ColorModeContext';
+import { motion } from 'framer-motion';
 
 const drawerWidth = 240;
 
 export default function Layout({ children }: { children: React.ReactNode }) {
+  const [open, setOpen] = React.useState(true);
+  const { toggle } = useContext(ColorModeContext);
+  const location = useLocation();
+
   return (
-    <div style={{ display: 'flex' }}>
-      <AppBar position="fixed" sx={{ zIndex: 1201 }}>
+    <Box sx={{ display: 'flex' }}>
+      <AppBar
+        elevation={0}
+        position="fixed"
+        sx={{
+          backdropFilter: 'blur(16px)',
+          background:
+            'linear-gradient(135deg, rgba(108,93,211,0.8), rgba(58,134,255,0.8))',
+        }}
+      >
         <Toolbar>
-          <Typography variant="h6" noWrap component="div">
-            Regress
-          </Typography>
+          <IconButton edge="start" color="inherit" onClick={() => setOpen(!open)}>
+            <MenuIcon />
+          </IconButton>
+          <Typography variant="h6" sx={{ flexGrow: 1 }}>Regress</Typography>
+          <IconButton color="inherit" onClick={toggle} component={motion.button} whileHover={{ rotate: 20 }}>
+            <DarkModeRoundedIcon />
+          </IconButton>
         </Toolbar>
       </AppBar>
+
       <Drawer
-        variant="permanent"
-        sx={{ width: drawerWidth, [`& .MuiDrawer-paper`]: { width: drawerWidth } }}
+        variant="persistent"
+        open={open}
+        sx={{
+          width: drawerWidth,
+          [`& .MuiDrawer-paper`]: {
+            width: drawerWidth,
+            borderRight: 'none',
+            backdropFilter: 'blur(12px)',
+            backgroundColor: 'rgba(0,0,0,0.25)',
+          },
+        }}
       >
         <Toolbar />
         <List>
-          <ListItem button component={Link} to="/upload">
-            <ListItemText primary="Upload" />
-          </ListItem>
-          <ListItem button component={Link} to="/prompts">
-            <ListItemText primary="Prompts" />
-          </ListItem>
+          {[
+            { text: 'Upload', to: '/upload' },
+            { text: 'Prompts', to: '/prompts' },
+          ].map(({ text, to }) => (
+            <ListItemButton
+              key={text}
+              component={motion(Link)}
+              to={to}
+              selected={location.pathname === to}
+              whileHover={{ scale: 1.04 }}
+              sx={{ transformOrigin: 'center' }}
+            >
+              <ListItemText primary={text} />
+            </ListItemButton>
+          ))}
         </List>
       </Drawer>
-      <main style={{ flexGrow: 1, padding: '80px 24px 24px 24px' }}>
+
+      <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 8 }}>
         {children}
-      </main>
-    </div>
+      </Box>
+    </Box>
   );
 }

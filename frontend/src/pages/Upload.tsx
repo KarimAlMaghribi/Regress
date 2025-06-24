@@ -1,6 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { Box, Typography, Paper, Select, MenuItem, Button, FormControl, InputLabel, OutlinedInput, Chip } from '@mui/material';
+import {
+  Box, Typography, Paper, Select, MenuItem, Button,
+  FormControl, InputLabel, OutlinedInput, Chip
+} from '@mui/material';
+import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import { motion } from 'framer-motion';
 
 interface Prompt { id: number; text: string }
 
@@ -33,20 +38,47 @@ export default function Upload() {
       .then(d => setResult(d.regress ? 'Regressfall' : 'Kein Regressfall'));
   };
 
+  const dropStyles = {
+    p: 6,
+    border: '2px dashed',
+    borderColor: 'primary.main',
+    borderRadius: 3,
+    textAlign: 'center',
+    cursor: 'pointer',
+    background:
+      'linear-gradient(135deg, rgba(108,93,211,0.1), rgba(58,134,255,0.05))',
+    transition: 'border 0.2s ease',
+  } as const;
+
   return (
     <Box>
       <Typography variant="h4" gutterBottom>Upload PDF</Typography>
-      <Paper {...getRootProps()} sx={{ p: 4, textAlign: 'center', border: '2px dashed #bbb', mb:2 }}>
+      <Paper
+        component={motion.div}
+        whileHover={{ scale: 1.03 }}
+        whileTap={{ scale: 0.99 }}
+        {...getRootProps()}
+        sx={dropStyles}
+      >
         <input {...getInputProps()} />
-        {isDragActive ? <p>Drop the file here...</p> : <p>{file ? file.name : "Drag 'n' drop file here, or click to select"}</p>}
+        <CloudUploadIcon sx={{ fontSize: 56, mb: 2 }} />
+        <Typography variant="h6">
+          {isDragActive
+            ? 'Ablegen zum Hochladen'
+            : file?.name ?? 'Datei hierher ziehen oder klicken ...'}
+        </Typography>
       </Paper>
-      <FormControl fullWidth sx={{ mb:2 }}>
+      <FormControl fullWidth sx={{ mb: 2 }}>
         <InputLabel id="prompt-label">Prompts</InputLabel>
         <Select
           labelId="prompt-label"
           multiple
           value={selected}
-          onChange={e => setSelected(typeof e.target.value === 'string' ? [] : e.target.value as number[])}
+          onChange={e =>
+            setSelected(
+              typeof e.target.value === 'string' ? [] : (e.target.value as number[])
+            )
+          }
           input={<OutlinedInput label="Prompts" />}
           renderValue={(selectedIds) => (
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
@@ -62,8 +94,20 @@ export default function Upload() {
           ))}
         </Select>
       </FormControl>
-      <Button variant="contained" onClick={analyze} disabled={!file}>Analyze</Button>
-      {result && <Typography sx={{ mt:2 }}>Result: {result}</Typography>}
+      <Button
+        variant="contained"
+        onClick={analyze}
+        disabled={!file}
+        component={motion.button}
+        whileHover={{ y: -2 }}
+      >
+        Analyze
+      </Button>
+      {result && (
+        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+          <Typography sx={{ mt: 2 }}>Result: {result}</Typography>
+        </motion.div>
+      )}
     </Box>
   );
 }
