@@ -26,8 +26,9 @@ A list of stored records can be fetched via `GET /history`.
   `prompt-manager` service in table `prompts(id SERIAL, text TEXT)`.
 
 ## Frontend Hooks
-- `useAnalysisHistory` loads records from `http://localhost:8084/history` and
-  exposes them to `AnalysisHistory` page.
+- `useAnalysisHistory` loads records from the classifier service using the
+  base URL defined by `VITE_CLASSIFIER_URL` (defaults to
+  `http://localhost:8084`) and exposes them to the `AnalysisHistory` page.
 
 ## Example Request
 ```
