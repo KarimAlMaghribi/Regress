@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Typography, Box, TextField, Button, IconButton, List, ListItem } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
+import { motion } from 'framer-motion';
 
 interface Prompt {
   id: number;
@@ -44,7 +45,7 @@ export default function Prompts() {
       <Typography variant="h4" gutterBottom>Prompts</Typography>
       <Box sx={{ display: 'flex', gap: 1, mb: 2 }}>
         <TextField size="small" value={newText} onChange={e => setNewText(e.target.value)} label="New prompt" />
-        <Button variant="contained" onClick={create}>Add</Button>
+        <Button variant="contained" onClick={create} component={motion.button} whileHover={{ y: -2 }}>Add</Button>
       </Box>
       <List>
         {prompts.map((p, idx) => (
@@ -60,7 +61,9 @@ export default function Prompts() {
               }}
               onBlur={e => update(p.id, e.target.value)}
             />
-            <IconButton onClick={() => remove(p.id)}><DeleteIcon /></IconButton>
+            <IconButton component={motion.button} whileTap={{ rotate: 20 }} onClick={() => remove(p.id)}>
+              <DeleteIcon />
+            </IconButton>
           </ListItem>
         ))}
       </List>
