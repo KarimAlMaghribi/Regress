@@ -25,21 +25,28 @@ impl LanguageModel for OpenAI {
     async fn classify(&self, text: &str) -> Result<Classification> {
         let resp = self
             .client
-            .post("https://api.openai.com/v1/classify")
+            .post("https://api.openai.com/v1/chat/completions")
             .bearer_auth(&self.api_key)
-            .json(&serde_json::json!({"text": text}))
+            .json(&serde_json::json!({
+                "model": "gpt-3.5-turbo",
+                "messages": [{"role": "user", "content": text}],
+                "max_tokens": 1,
+                "temperature": 0.0
+            }))
             .send()
             .await
             .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
-        let data: Classification = resp.json().await.map_err(|e| shared::error::AppError::Io(e.to_string()))?;
-        Ok(data)
+        let value: serde_json::Value = resp.json().await.map_err(|e| shared::error::AppError::Io(e.to_string()))?;
+        let result = value["choices"][0]["message"]["content"].as_str().unwrap_or("").to_string();
+        Ok(Classification { result, confidence: 1.0 })
     }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
-    let model = OpenAI { client: Client::new(), api_key: "KEY".into() };
+    let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_else(|_| "KEY".into());
+    let model = OpenAI { client: Client::new(), api_key };
     let c = model.classify("hello world").await?;
     info!(?c, "classification");
     Ok(())
