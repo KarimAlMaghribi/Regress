@@ -195,7 +195,7 @@ pub async fn run_prompt(
     let completion = openai::chat::ChatCompletion::builder(
         "gpt-4-turbo",
         vec![openai::chat::ChatCompletionMessage {
-            role: openai::types::Role::User,
+            role: openai::chat::Role::User,
             content: Some(prompt_text.clone()),
             name: None,
             function_call: None,
