@@ -9,3 +9,8 @@ pub struct UploadRequest {
 pub struct UploadResponse {
     pub id: String,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PdfUploaded {
+    pub id: i32,
+}
