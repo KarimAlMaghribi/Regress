@@ -22,3 +22,13 @@ vcpkg install leptonica:x64-windows-static-md \
 ```
 
 The CI workflow installs these packages automatically.
+
+## Running with Docker
+
+Build and start all services, including the frontend, via Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+After the build completes, open <http://localhost:3000> in your browser to view the dashboard.
