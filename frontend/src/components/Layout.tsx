@@ -3,39 +3,30 @@ import {
   AppBar,
   Toolbar,
   Typography,
-  Drawer,
-  List,
-  ListItemButton,
-  ListItemText,
   IconButton,
   Box,
   useMediaQuery,
 } from '@mui/material';
-import { Link, useLocation } from 'react-router-dom';
-import MenuIcon from '@mui/icons-material/Menu';
-import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded';
-import DashboardIcon from '@mui/icons-material/Dashboard';
-import UploadFileIcon from '@mui/icons-material/UploadFile';
-import ViewListIcon from '@mui/icons-material/ViewList';
-import AssessmentIcon from '@mui/icons-material/Assessment';
 import { ColorModeContext } from '../ColorModeContext';
 import { motion } from 'framer-motion';
+import MenuIcon from '@mui/icons-material/Menu';
+import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded';
+import Sidebar from './Sidebar';
 
-const drawerWidth = 240;
+const expandedWidth = 240;
+const collapsedWidth = 80;
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const isMobile = useMediaQuery('(max-width:900px)');
   const [open, setOpen] = React.useState(!isMobile);
   const { toggle } = useContext(ColorModeContext);
-  const location = useLocation();
 
   React.useEffect(() => {
     setOpen(!isMobile);
   }, [isMobile]);
 
-  const handleDrawer = () => {
-    console.log('Toggle drawer', !open);
-    setOpen(!open);
+  const handleToggle = () => {
+    setOpen((o) => !o);
   };
 
   const handleColorMode = () => {
@@ -44,7 +35,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <Box sx={{ display: 'flex' }}>
+    <Box>
       <AppBar
         elevation={0}
         position="fixed"
@@ -55,54 +46,35 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         }}
       >
         <Toolbar>
-          <IconButton edge="start" color="inherit" onClick={handleDrawer}>
+          <IconButton edge="start" color="inherit" onClick={handleToggle}>
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" sx={{ flexGrow: 1 }}>Regress</Typography>
-          <IconButton color="inherit" onClick={handleColorMode} component={motion.button} whileHover={{ rotate: 20 }}>
+          <Typography variant="h6" sx={{ flexGrow: 1 }}>
+            Regress
+          </Typography>
+          <IconButton
+            color="inherit"
+            onClick={handleColorMode}
+            component={motion.button}
+            whileHover={{ rotate: 20 }}
+          >
             <DarkModeRoundedIcon />
           </IconButton>
         </Toolbar>
       </AppBar>
 
-      <Drawer
-        variant={isMobile ? 'temporary' : 'persistent'}
-        open={open}
-        onClose={() => setOpen(false)}
+      <Box
         sx={{
-          width: drawerWidth,
-          [`& .MuiDrawer-paper`]: {
-            width: drawerWidth,
-            borderRight: 'none',
-            backdropFilter: 'blur(12px)',
-            backgroundColor: 'rgba(0,0,0,0.25)',
-          },
+          display: 'grid',
+          gridTemplateColumns: `${open ? `repeat(2, ${expandedWidth / 2}px)` : `repeat(2, ${collapsedWidth / 2}px)`} repeat(10, 1fr)`,
+          minHeight: '100vh',
+          mt: 8,
         }}
       >
-        <Toolbar />
-        <List>
-          {[{ text: 'Dashboard', to: '/', icon: <DashboardIcon /> },
-            { text: 'Upload', to: '/upload', icon: <UploadFileIcon /> },
-            { text: 'Prompts', to: '/prompts', icon: <ViewListIcon /> },
-            { text: 'Analysis', to: '/analysis', icon: <AssessmentIcon /> },
-          ].map(({ text, to, icon }) => (
-            <ListItemButton
-              key={text}
-              component={motion(Link)}
-              to={to}
-              selected={location.pathname === to}
-              whileHover={{ scale: 1.04 }}
-              sx={{ transformOrigin: 'center', gap: 1 }}
-            >
-              {icon}
-              <ListItemText primary={text} />
-            </ListItemButton>
-          ))}
-        </List>
-      </Drawer>
-
-      <Box component="main" sx={{ flexGrow: 1, p: 3, mt: 8, width: { sm: `calc(100% - ${drawerWidth}px)` } }}>
-        {children}
+        <Sidebar open={open} onToggle={handleToggle} onClose={() => setOpen(false)} />
+        <Box component="main" sx={{ gridColumn: 'span 10', p: 3 }}>
+          {children}
+        </Box>
       </Box>
     </Box>
   );
