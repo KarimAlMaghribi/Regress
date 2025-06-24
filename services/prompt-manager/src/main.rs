@@ -22,7 +22,10 @@ async fn list_prompts(State(db): State<DatabaseConnection>) -> Result<Json<Vec<S
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    let settings = Settings::new().unwrap_or_else(|_| Settings { database_url: "sqlite://prompts.db".into(), message_broker_url: String::new() });
+    let settings = Settings::new().unwrap_or_else(|_| Settings {
+        database_url: "postgres://postgres:postgres@db:5432/regress".into(),
+        message_broker_url: String::new(),
+    });
     let db: DatabaseConnection = Database::connect(&settings.database_url).await?;
     // create table if not exists
     db.execute(sea_orm::Statement::from_string(

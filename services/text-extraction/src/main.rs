@@ -1,3 +1,5 @@
+use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
+use serde::Deserialize;
 use shared::error::Result;
 use tesseract::Tesseract;
 use tracing::info;
@@ -15,19 +17,38 @@ fn extract_text(path: &str) -> Result<String> {
         .map_err(|e| shared::error::AppError::Io(e.to_string()))
 }
 
-fn main() -> Result<()> {
+#[derive(Deserialize)]
+struct ExtractRequest {
+    path: String,
+}
+
+#[post("/extract")]
+async fn extract(req: web::Json<ExtractRequest>) -> impl Responder {
+    match extract_text(&req.path) {
+        Ok(text) => HttpResponse::Ok().body(text),
+        Err(e) => {
+            HttpResponse::InternalServerError().body(format!("error: {}", e))
+        }
+    }
+}
+
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     let args: Vec<String> = std::env::args().collect();
-    let path = if let Some(p) = args.get(1) {
-        p.to_owned()
-    } else if let Ok(p) = std::env::var("PDF_PATH") {
-        p
-    } else {
-        return Err(shared::error::AppError::Io(
-            "missing PDF path argument or PDF_PATH env var".into(),
-        ));
-    };
-    let text = extract_text(&path)?;
-    info!("extracted text: {}", text);
-    Ok(())
+    if let Some(p) = args.get(1) {
+        let text = extract_text(p).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        info!("extracted text: {}", text);
+        return Ok(());
+    }
+    if let Ok(p) = std::env::var("PDF_PATH") {
+        let text = extract_text(&p).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        info!("extracted text: {}", text);
+        return Ok(());
+    }
+
+    HttpServer::new(|| App::new().service(extract))
+        .bind(("0.0.0.0", 8083))?
+        .run()
+        .await
 }
