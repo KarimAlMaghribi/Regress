@@ -51,11 +51,11 @@ jobs:
           .\vcpkg integrate install
           Pop-Location
 
-      - name: Install Leptonica via vcpkg
+      - name: Install dependencies via vcpkg
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & "$Env:VCPKG_ROOT\vcpkg.exe" install "leptonica:$Env:VCPKG_DEFAULT_TRIPLET" --recurse
+          & "$Env:VCPKG_ROOT\vcpkg.exe" install "leptonica:$Env:VCPKG_DEFAULT_TRIPLET" "tesseract:$Env:VCPKG_DEFAULT_TRIPLET" --recurse
 
       - name: Build workspace
         shell: pwsh
