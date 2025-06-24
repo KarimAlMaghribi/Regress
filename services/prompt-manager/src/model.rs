@@ -8,7 +8,7 @@ pub struct Model {
     pub text: String,
 }
 
-#[derive(Copy, Clone, Debug, EnumIter)]
+#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}

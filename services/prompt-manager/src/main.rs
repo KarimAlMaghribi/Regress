@@ -25,7 +25,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::new().unwrap_or_else(|_| Settings { database_url: "sqlite://prompts.db".into(), message_broker_url: String::new() });
     let db: DatabaseConnection = Database::connect(&settings.database_url).await?;
     // create table if not exists
-    db.execute(sea_orm::Statement::from_string(db.get_database_backend(), "CREATE TABLE IF NOT EXISTS prompts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)".into())).await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
+        "CREATE TABLE IF NOT EXISTS prompts (id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT NOT NULL)",
+    ))
+    .await?;
 
     let app = Router::new()
         .route("/health", get(health))
