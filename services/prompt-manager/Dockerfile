@@ -1,4 +1,4 @@
-FROM rust:1.78 as builder
+FROM rust:nightly as builder
 WORKDIR /app
 COPY Cargo.toml ./Cargo.toml
 COPY shared ./shared
