@@ -8,13 +8,13 @@ async fn health() -> &'static str {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
-    let settings = Settings::new()?;
+    let settings = Settings::new().map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     let _db: DatabaseConnection = Database::connect(settings.database_url).await?;
     let app = Router::new().route("/health", get(health));
     info!("starting prompt-manager");
-    axum::Server::bind(&"0.0.0.0:8082".parse()?)
+    axum::Server::bind(&"0.0.0.0:8082".parse::<std::net::SocketAddr>()?)
         .serve(app.into_make_service())
         .await?;
     Ok(())
