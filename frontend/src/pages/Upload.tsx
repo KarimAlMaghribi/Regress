@@ -40,7 +40,8 @@ export default function Upload() {
     form.append('file', file);
     const texts = prompts.filter(p => selected.includes(p.id)).map(p => p.text).join(',');
     form.append('prompts', texts);
-    fetch('http://localhost:8084/classify', { method: 'POST', body: form })
+    const backend = import.meta.env.VITE_CLASSIFIER_URL || 'http://localhost:8084';
+    fetch(`${backend}/classify`, { method: 'POST', body: form })
       .then(r => r.json())
       .then(d => {
         console.log('Classification result', d);
