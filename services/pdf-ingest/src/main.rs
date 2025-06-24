@@ -32,7 +32,9 @@ async fn upload(
         let payload = serde_json::to_string(&PdfUploaded { id }).unwrap();
         let _ = producer
             .send(
-                FutureRecord::to("pdf-uploaded").payload(&payload),
+                FutureRecord::to("pdf-uploaded")
+                    .payload(&payload)
+                    .key(&()),
                 Duration::from_secs(0),
             )
             .await;
