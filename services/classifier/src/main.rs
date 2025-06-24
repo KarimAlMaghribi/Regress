@@ -205,7 +205,7 @@ pub async fn run_prompt(
         content: Some(prompt_text.clone()),
         name: None,
         function_call: None,
-        tool_calls: Vec::new(),
+        tool_calls: None,
         tool_call_id: None,
     };
 
