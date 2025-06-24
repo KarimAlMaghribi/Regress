@@ -1,14 +1,8 @@
-FROM rustlang/rust:nightly as builder
+FROM rust:1.70-slim as builder
 WORKDIR /app
 # Install system packages required to compile the text-extraction crate
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        pkg-config \
-        clang \
-        libtesseract-dev \
-        libleptonica-dev \
-        tesseract-ocr \
+    && apt-get install -y --no-install-recommends build-essential pkg-config clang libtesseract-dev libleptonica-dev tesseract-ocr ca-certificates libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 COPY Cargo.toml ./Cargo.toml
 COPY shared ./shared

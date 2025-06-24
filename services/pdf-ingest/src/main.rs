@@ -1,5 +1,6 @@
 use actix_multipart::Multipart;
 use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
+use actix_cors::Cors;
 use actix_web::web::Bytes;
 use futures_util::StreamExt as _;
 use shared::config::Settings;
@@ -78,6 +79,7 @@ async fn main() -> std::io::Result<()> {
     let db = db_client.clone();
     HttpServer::new(move || {
         App::new()
+            .wrap(Cors::permissive())
             .app_data(db.clone())
             .app_data(web::Data::new(producer.clone()))
             .route("/upload", web::post().to(upload))

@@ -1,18 +1,15 @@
 [package]
-name = "pdf-ingest"
+name = "metrics-service"
 version.workspace = true
 edition.workspace = true
 
 [dependencies]
 actix-web = "4"
-actix-multipart = "0.6"
-futures-util = "0.3"
 actix-cors = "0.6"
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-shared = { path = "../../shared" }
-tokio.workspace = true
 tokio-postgres.workspace = true
-rdkafka.workspace = true
+shared = { path = "../../shared" }
+chrono = { version = "0.4", features = ["serde"] }
