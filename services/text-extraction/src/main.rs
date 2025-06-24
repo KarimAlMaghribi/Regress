@@ -6,9 +6,9 @@ fn extract_text(path: &str) -> Result<String> {
     // Specify the language as an `Option<&str>` as required by `Tesseract::new`
     // `Tesseract::set_image` takes ownership of `self` and returns it again, so
     // reassign the returned value to preserve the instance for subsequent calls.
-    let tess = Tesseract::new(None, Some("eng"))
+    let mut tess = Tesseract::new(None, Some("eng"))
         .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
-    let tess = tess
+    tess = tess
         .set_image(path)
         .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
     tess.get_text()
