@@ -2,9 +2,17 @@ use actix_multipart::Multipart;
 use actix_web::{web, App, HttpResponse, HttpServer};
 use futures_util::StreamExt as _;
 use serde::{Serialize, Deserialize};
-use tracing::{debug, info};
+use tracing::{debug, info, error};
 use tokio_postgres::NoTls;
 use shared::config::Settings;
+use shared::dto::{TextExtracted, ClassificationResult};
+use serde_json::json;
+use rdkafka::{
+    consumer::{Consumer, StreamConsumer},
+    producer::{FutureProducer, FutureRecord},
+    ClientConfig, Message,
+};
+use std::time::Duration;
 use chrono::{DateTime, Utc};
 
 // OpenAI-Imports
@@ -304,6 +312,16 @@ async fn main() -> std::io::Result<()> {
             eprintln!("db error: {e}");
         }
     });
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("group.id", "classifier")
+        .set("bootstrap.servers", &settings.message_broker_url)
+        .create()
+        .unwrap();
+    consumer.subscribe(&["text-extracted"]).unwrap();
+    let producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", &settings.message_broker_url)
+        .create()
+        .unwrap();
     db_client
         .execute(
             "CREATE TABLE IF NOT EXISTS classifications (
@@ -320,6 +338,50 @@ async fn main() -> std::io::Result<()> {
         .await
         .unwrap();
     let db = web::Data::new(db_client);
+    let db_clone = db.clone();
+    let cons = consumer;
+    let prod = producer;
+    tokio::spawn(async move {
+        info!("starting kafka consume loop");
+        loop {
+            match cons.recv().await {
+                Err(e) => error!(%e, "kafka error"),
+                Ok(m) => {
+                    if let Some(Ok(payload)) = m.payload_view::<str>() {
+                        if let Ok(event) = serde_json::from_str::<TextExtracted>(payload) {
+                            info!(id = event.id, "received text-extracted event");
+                            let text = event.text.to_lowercase();
+                            let is_regress = text.contains("regress");
+                            let metrics = serde_json::json!({
+                                "accuracy": if is_regress { 1.0 } else { 0.0 },
+                                "cost": (text.len() as f64) / 1000.0,
+                                "hallucinationRate": 0.0
+                            });
+                            let responses = serde_json::json!([]);
+                            let stmt = db_clone
+                                .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)")
+                                .await
+                                .unwrap();
+                            let _ = db_clone
+                                .execute(&stmt, &[&"kafka", &"", &is_regress, &metrics, &responses])
+                                .await;
+                            let result = ClassificationResult { id: event.id, regress: is_regress };
+                            let payload = serde_json::to_string(&result).unwrap();
+                            let _ = prod
+                                .send(
+                                    FutureRecord::to("classification-result")
+                                        .payload(&payload)
+                                        .key(&()),
+                                    Duration::from_secs(0),
+                                )
+                                .await;
+                            info!(id = event.id, "classification published");
+                        }
+                    }
+                }
+            }
+        }
+    });
 
     HttpServer::new(move || {
         App::new()

@@ -1,7 +1,12 @@
 use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
 use serde::Deserialize;
-use shared::{error::Result, config::Settings, dto::PdfUploaded};
-use rdkafka::{consumer::{StreamConsumer, Consumer}, ClientConfig, Message};
+use shared::{error::Result, config::Settings, dto::{PdfUploaded, TextExtracted}};
+use rdkafka::{
+    consumer::{Consumer, StreamConsumer},
+    producer::{FutureProducer, FutureRecord},
+    ClientConfig, Message,
+};
+use std::time::Duration;
 use tokio_postgres::NoTls;
 use tesseract::Tesseract;
 use tracing::{debug, info, error};
@@ -55,10 +60,15 @@ async fn main() -> std::io::Result<()> {
         .unwrap();
     consumer.subscribe(&["pdf-uploaded"]).unwrap();
     info!("kafka consumer subscribed to pdf-uploaded");
+    let producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", &settings.message_broker_url)
+        .create()
+        .unwrap();
     let db = web::Data::new(db_client);
     tokio::spawn(async move {
         let db = db.clone();
         let cons = consumer;
+        let prod = producer;
         info!("starting kafka consume loop");
         loop {
             match cons.recv().await {
@@ -74,6 +84,17 @@ async fn main() -> std::io::Result<()> {
                                 tokio::fs::write(&path, &data).await.unwrap();
                                 if let Ok(text) = extract_text(&path) {
                                     info!(id = event.id, "extracted text");
+                                    let evt = TextExtracted { id: event.id, text };
+                                    let payload = serde_json::to_string(&evt).unwrap();
+                                    let _ = prod
+                                        .send(
+                                            FutureRecord::to("text-extracted")
+                                                .payload(&payload)
+                                                .key(&()),
+                                            Duration::from_secs(0),
+                                        )
+                                        .await;
+                                    info!(id = evt.id, "published text-extracted event");
                                 }
                             }
                         }
