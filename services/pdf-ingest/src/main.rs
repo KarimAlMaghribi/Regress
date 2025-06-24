@@ -6,6 +6,7 @@ use shared::config::Settings;
 use shared::dto::{UploadResponse, PdfUploaded};
 use rdkafka::{producer::{FutureProducer, FutureRecord}, ClientConfig};
 use tokio_postgres::NoTls;
+use std::time::Duration;
 
 async fn upload(
     mut payload: Multipart,
@@ -30,7 +31,10 @@ async fn upload(
         let id: i32 = row.get(0);
         let payload = serde_json::to_string(&PdfUploaded { id }).unwrap();
         let _ = producer
-            .send( FutureRecord::to("pdf-uploaded").payload(&payload), 0)
+            .send(
+                FutureRecord::to("pdf-uploaded").payload(&payload),
+                Duration::from_secs(0),
+            )
             .await;
         return Ok(HttpResponse::Ok().json(UploadResponse { id: id.to_string() }));
     }
@@ -43,6 +47,7 @@ async fn main() -> std::io::Result<()> {
     let settings = Settings::new().unwrap();
     let (db_client, connection) =
         tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
+    let db_client = web::Data::new(db_client);
     tokio::spawn(async move { if let Err(e) = connection.await { eprintln!("db error: {e}") } });
     db_client
         .execute(
@@ -55,9 +60,10 @@ async fn main() -> std::io::Result<()> {
         .set("bootstrap.servers", &settings.message_broker_url)
         .create()
         .unwrap();
+    let db = db_client.clone();
     HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(db_client.clone()))
+            .app_data(db.clone())
             .app_data(web::Data::new(producer.clone()))
             .route("/upload", web::post().to(upload))
     })
