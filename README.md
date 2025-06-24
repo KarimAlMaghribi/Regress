@@ -23,6 +23,13 @@ vcpkg install leptonica:x64-windows-static-md \
 
 The CI workflow installs these packages automatically.
 
+## Configuration
+
+All services read the database connection string from the `DATABASE_URL` environment variable.
+Kafka connection is read from `MESSAGE_BROKER_URL`.
+The classifier additionally requires `OPENAI_API_KEY` and uses `CLASS_PROMPT_ID` to select a prompt.
+Defaults are provided in `docker-compose.yml`.
+
 ## Usage
 
 `text-extraction` starts an HTTP service on port `8083`. Send a `POST` request
@@ -43,6 +50,10 @@ Build and start all services, including the frontend, via Docker Compose:
 ```bash
 docker compose up --build
 ```
+
+1. Ensure Docker and Docker Compose are installed.
+2. Run `docker compose up --build` to build all images and start the services.
+3. Access the frontend at <http://localhost:3000>.
 
 After the build completes, open <http://localhost:3000> in your browser to use the application.
 

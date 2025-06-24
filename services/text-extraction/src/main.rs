@@ -49,6 +49,10 @@ async fn extract(req: web::Json<ExtractRequest>) -> impl Responder {
     }
 }
 
+async fn health() -> impl Responder {
+    "OK"
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
@@ -131,8 +135,26 @@ async fn main() -> std::io::Result<()> {
     });
 
     info!("starting http server on port 8083");
-    HttpServer::new(|| App::new().service(extract))
+    HttpServer::new(|| {
+        App::new()
+            .service(extract)
+            .route("/health", web::get().to(health))
+    })
         .bind(("0.0.0.0", 8083))?
         .run()
         .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, App};
+
+    #[actix_rt::test]
+    async fn health_ok() {
+        let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
+        let req = test::TestRequest::get().uri("/health").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
 }

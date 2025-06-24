@@ -1,5 +1,5 @@
 use actix_multipart::Multipart;
-use actix_web::{web, App, Error, HttpResponse, HttpServer};
+use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use actix_web::web::Bytes;
 use futures_util::StreamExt as _;
 use shared::config::Settings;
@@ -48,6 +48,10 @@ async fn upload(
     Ok(HttpResponse::BadRequest().finish())
 }
 
+async fn health() -> impl Responder {
+    "OK"
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
@@ -77,8 +81,23 @@ async fn main() -> std::io::Result<()> {
             .app_data(db.clone())
             .app_data(web::Data::new(producer.clone()))
             .route("/upload", web::post().to(upload))
+            .route("/health", web::get().to(health))
     })
     .bind(("0.0.0.0", 8081))?
     .run()
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use actix_web::{test, web, App};
+
+    #[actix_rt::test]
+    async fn health_ok() {
+        let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
+        let req = test::TestRequest::get().uri("/health").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.status().is_success());
+    }
 }
