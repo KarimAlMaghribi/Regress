@@ -41,7 +41,7 @@ export default function useAnalysisHistory(options: HistoryOptions) {
     try {
       setLoading(true);
       const res = await fetch(
-        `${import.meta.env.REACT_APP_API_URL || ''}/api/analysis?${params.toString()}`
+        `http://localhost:8084/history?${params.toString()}`
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
