@@ -23,7 +23,7 @@ fn extract_text(path: &str) -> Result<String> {
     Ok(text)
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct ExtractRequest {
     path: String,
 }
