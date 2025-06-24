@@ -1,6 +1,8 @@
 use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
 use serde::Deserialize;
-use shared::error::Result;
+use shared::{error::Result, config::Settings, dto::PdfUploaded};
+use rdkafka::{consumer::{StreamConsumer, Consumer}, ClientConfig, Message};
+use tokio_postgres::NoTls;
 use tesseract::Tesseract;
 use tracing::info;
 
@@ -35,17 +37,40 @@ async fn extract(req: web::Json<ExtractRequest>) -> impl Responder {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
-    let args: Vec<String> = std::env::args().collect();
-    if let Some(p) = args.get(1) {
-        let text = extract_text(p).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        info!("extracted text: {}", text);
-        return Ok(());
-    }
-    if let Ok(p) = std::env::var("PDF_PATH") {
-        let text = extract_text(&p).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
-        info!("extracted text: {}", text);
-        return Ok(());
-    }
+    let settings = Settings::new().unwrap();
+    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
+    tokio::spawn(async move { if let Err(e) = connection.await { eprintln!("db error: {e}") } });
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("group.id", "text-extraction")
+        .set("bootstrap.servers", &settings.message_broker_url)
+        .create()
+        .unwrap();
+    consumer.subscribe(&["pdf-uploaded"]).unwrap();
+    let db = web::Data::new(db_client);
+    let cons = consumer.clone();
+    tokio::spawn(async move {
+        let db = db.clone();
+        loop {
+            match cons.recv().await {
+                Err(e) => eprintln!("kafka error: {e}"),
+                Ok(m) => {
+                    if let Some(payload) = m.payload_view::<str>().unwrap() {
+                        if let Ok(event) = serde_json::from_str::<PdfUploaded>(payload) {
+                            let stmt = db.prepare("SELECT data FROM pdfs WHERE id = $1").await.unwrap();
+                            if let Ok(row) = db.query_one(&stmt, &[&event.id]).await {
+                                let data: Vec<u8> = row.get(0);
+                                let path = format!("/tmp/pdf_{}.pdf", event.id);
+                                tokio::fs::write(&path, &data).await.unwrap();
+                                if let Ok(text) = extract_text(&path) {
+                                    info!("extracted text: {}", text);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
 
     HttpServer::new(|| App::new().service(extract))
         .bind(("0.0.0.0", 8083))?
