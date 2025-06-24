@@ -1,5 +1,6 @@
 use actix_multipart::Multipart;
 use actix_web::{web, App, HttpResponse, HttpServer};
+use actix_cors::Cors;
 use futures_util::StreamExt as _;
 use serde::{Serialize, Deserialize};
 use tracing::{debug, info, error};
@@ -385,6 +386,7 @@ async fn main() -> std::io::Result<()> {
 
     HttpServer::new(move || {
         App::new()
+            .wrap(Cors::permissive())
             .app_data(db.clone())
             .route("/classify", web::post().to(classify))
             .route("/history", web::get().to(history))
