@@ -47,9 +47,9 @@ async fn main() -> std::io::Result<()> {
         .unwrap();
     consumer.subscribe(&["pdf-uploaded"]).unwrap();
     let db = web::Data::new(db_client);
-    let cons = consumer.clone();
     tokio::spawn(async move {
         let db = db.clone();
+        let cons = consumer;
         loop {
             match cons.recv().await {
                 Err(e) => eprintln!("kafka error: {e}"),
