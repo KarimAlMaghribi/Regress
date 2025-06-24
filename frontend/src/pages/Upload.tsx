@@ -42,10 +42,20 @@ export default function Upload() {
     form.append('prompts', texts);
     const backend = import.meta.env.VITE_CLASSIFIER_URL || 'http://localhost:8084';
     fetch(`${backend}/classify`, { method: 'POST', body: form })
-      .then(r => r.json())
+      .then(async r => {
+        if (!r.ok) {
+          const text = await r.text();
+          throw new Error(text || `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
       .then(d => {
         console.log('Classification result', d);
         setResult(d.regress ? 'Regressfall' : 'Kein Regressfall');
+      })
+      .catch(err => {
+        console.error('Classification error', err);
+        setResult(`Error: ${(err as Error).message}`);
       });
   };
 
