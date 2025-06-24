@@ -6,6 +6,6 @@ COPY shared ./shared
 COPY services ./services
 RUN cargo build --release --package classifier --manifest-path services/classifier/Cargo.toml
 
-FROM debian:buster-slim
+FROM debian:bookworm-slim
 COPY --from=builder /app/target/release/classifier /usr/local/bin/classifier
 CMD ["classifier"]
