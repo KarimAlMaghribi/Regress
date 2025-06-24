@@ -1,4 +1,4 @@
-use axum::{routing::{get, post, put, delete}, Router, Json, extract::{State, Path}};
+use axum::{routing::{get, put}, Router, Json, extract::{State, Path}};
 use tower_http::cors::CorsLayer;
 use sea_orm::{Database, DatabaseConnection, EntityTrait, ConnectionTrait, ActiveModelTrait, Set};
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,10 @@ async fn list_prompts(State(db): State<DatabaseConnection>) -> Result<Json<Vec<P
         .all(&db)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    let texts = items.into_iter().map(|p| PromptData { id: p.id, text: p.text }).collect();
+    let texts: Vec<PromptData> = items
+        .into_iter()
+        .map(|p| PromptData { id: p.id, text: p.text })
+        .collect();
     info!("loaded {} prompts", texts.len());
     Ok(Json(texts))
 }
