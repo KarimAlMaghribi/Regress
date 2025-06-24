@@ -44,6 +44,8 @@ services:
     build:
       context: .
       dockerfile: services/classifier/Dockerfile
+    environment:
+      OPENAI_API_KEY: "sk-proj-tUvEXQuoFPPstEtXdpQN7E2TETKlsLSzjqXn-9pKto3wUlON2lYCTRNV_XZEx0D8UzstlNS8hPT3BlbkFJAxFPCiMLCUziTETVR0GPHiDQXp9li7FG37nmrdMi9T7-3bF5E8t19e8Jj-yk_TsFC-rWSD15oAs"
     ports:
       - "8084:8084"
   kafka:
@@ -65,7 +67,7 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
     ports:
-      - "3000:80"
+      - "3001:80"
 
 volumes:
   db_data:

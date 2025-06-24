@@ -7,6 +7,10 @@ use tokio_postgres::NoTls;
 use shared::config::Settings;
 use chrono::{DateTime, Utc};
 
+// OpenAI-Imports
+use openai::Credentials;
+use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
+
 #[derive(Serialize)]
 struct Classification {
     regress: bool,
@@ -57,6 +61,7 @@ pub async fn history(
     );
     let mut clauses: Vec<String> = Vec::new();
     let mut values: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = Vec::new();
+
     if let Some(ref p) = params.prompt {
         clauses.push(format!("prompts ILIKE ${}", values.len() + 1));
         values.push(Box::new(format!("%{}%", p)));
@@ -81,7 +86,7 @@ pub async fn history(
     let rows = db
         .query(&query, &values.iter().map(|v| &**v).collect::<Vec<_>>())
         .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     let items: Vec<HistoryItem> = rows
         .into_iter()
@@ -122,7 +127,7 @@ pub async fn classify(
             data.extend_from_slice(&chunk?);
         }
         if name == "file" {
-            debug!("received pdf data: {} bytes", data.len());
+            info!("received pdf data: {} bytes", data.len());
             file_name = field.content_disposition().get_filename().map(|s| s.to_string());
             pdf_data = data;
         } else if name == "prompts" {
@@ -132,7 +137,7 @@ pub async fn classify(
     }
 
     let text = String::from_utf8_lossy(&pdf_data).to_lowercase();
-    debug!("prompts used: {:?}", prompts);
+    info!("prompts used: {:?}", prompts);
     let is_regress = if prompts.is_empty() {
         text.contains("regress")
     } else {
@@ -151,11 +156,10 @@ pub async fn classify(
     let stmt = db
         .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)")
         .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
-    db
-        .execute(&stmt, &[&fname, &prompts_str, &is_regress, &metrics, &responses])
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    db.execute(&stmt, &[&fname, &prompts_str, &is_regress, &metrics, &responses])
         .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(Classification { regress: is_regress }))
 }
@@ -177,36 +181,39 @@ pub async fn run_prompt(
     let stmt = db
         .prepare("SELECT text, name FROM prompts WHERE id = $1")
         .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+        .map_err(actix_web::error::ErrorInternalServerError)?;
     let row = db
         .query_opt(&stmt, &[&query.prompt_id])
         .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+        .map_err(actix_web::error::ErrorInternalServerError)?;
     let Some(row) = row else {
         return Err(actix_web::error::ErrorNotFound("prompt"));
     };
     let prompt_text: String = row.get(0);
     let prompt_name: String = row.get(1);
 
-    let api_key = std::env::var("OPENAI_API_KEY")
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
-    openai::set_key(api_key);
+    // API-Key + Base-URL übergeben
+    let creds = Credentials::new(
+        std::env::var("OPENAI_API_KEY")
+            .map_err(actix_web::error::ErrorInternalServerError)?,
+        "https://api.openai.com",
+    );
+
     info!(prompt_name, prompt_text, "sending prompt to OpenAI");
-    let completion = openai::chat::ChatCompletion::builder(
-        "gpt-4-turbo",
-        vec![openai::chat::ChatCompletionMessage {
-            role: openai::chat::Role::User,
-            content: Some(prompt_text.clone()),
-            name: None,
-            function_call: None,
-            tool_call_id: None,
-            tool_calls: None,
-        }],
-    )
-    .create()
-    .await
-    .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
-    let response_text = completion
+    let message = ChatCompletionMessage {
+        role: ChatCompletionMessageRole::User,
+        content: Some(prompt_text.clone()),
+        name: None,
+        function_call: None,
+    };
+
+    let chat = ChatCompletion::builder("gpt-4-turbo", vec![message])
+        .credentials(creds)
+        .create()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let response_text = chat
         .choices
         .get(0)
         .and_then(|c| c.message.content.clone())
@@ -215,17 +222,17 @@ pub async fn run_prompt(
 
     let stmt = db
         .prepare(
-            "INSERT INTO api_logs (prompt_id, prompt_name, prompt_text, response_text, run_time) VALUES ($1, $2, $3, $4, now())",
+            "INSERT INTO api_logs (prompt_id, prompt_name, prompt_text, response_text, run_time) \
+             VALUES ($1, $2, $3, $4, now())",
         )
         .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
-    db
-        .execute(
-            &stmt,
-            &[&query.prompt_id, &prompt_name, &prompt_text, &response_text],
-        )
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    db.execute(
+        &stmt,
+        &[&query.prompt_id, &prompt_name, &prompt_text, &response_text],
+    )
         .await
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     Ok(HttpResponse::Ok().json(CompletionResponse { result: response_text }))
 }
@@ -239,13 +246,11 @@ mod tests {
     async fn store_and_fetch() {
         let db_url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/regress".into());
-        let (client, connection) = match tokio_postgres::connect(&db_url, NoTls).await {
-            Ok(c) => c,
-            Err(_) => {
+        let (client, connection) =
+            tokio_postgres::connect(&db_url, NoTls).await.unwrap_or_else(|_| {
                 eprintln!("Database not available, skipping test");
-                return;
-            }
-        };
+                std::process::exit(0)
+            });
         tokio::spawn(async move { let _ = connection.await; });
         client
             .execute(
@@ -269,7 +274,7 @@ mod tests {
                 .route("/classify", web::post().to(classify))
                 .route("/history", web::get().to(history)),
         )
-        .await;
+            .await;
 
         let req = test::TestRequest::post().uri("/classify").to_request();
         let resp = test::call_service(&app, req).await;
@@ -290,7 +295,8 @@ async fn main() -> std::io::Result<()> {
         database_url: "postgres://postgres:postgres@db:5432/regress".into(),
         message_broker_url: String::new(),
     });
-    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
+    let (db_client, connection) =
+        tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
     tokio::spawn(async move {
         if let Err(e) = connection.await {
             eprintln!("db error: {e}");
@@ -318,8 +324,9 @@ async fn main() -> std::io::Result<()> {
             .app_data(db.clone())
             .route("/classify", web::post().to(classify))
             .route("/history", web::get().to(history))
+            .route("/run_prompt", web::get().to(run_prompt))
     })
-    .bind(("0.0.0.0", 8084))?
-    .run()
-    .await
+        .bind(("0.0.0.0", 8084))?
+        .run()
+        .await
 }
