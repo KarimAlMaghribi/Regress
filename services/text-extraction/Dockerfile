@@ -16,7 +16,7 @@ COPY shared ./shared
 COPY services ./services
 RUN cargo build --release --package text-extraction --manifest-path services/text-extraction/Cargo.toml
 
-FROM debian:buster-slim
+FROM debian:bookworm-slim
 # Runtime dependencies for the built binary
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

@@ -6,6 +6,6 @@ COPY shared ./shared
 COPY services ./services
 RUN cargo build --release --package prompt-manager --manifest-path services/prompt-manager/Cargo.toml
 
-FROM debian:buster-slim
+FROM debian:bookworm-slim
 COPY --from=builder /app/target/release/prompt-manager /usr/local/bin/prompt-manager
 CMD ["prompt-manager"]
