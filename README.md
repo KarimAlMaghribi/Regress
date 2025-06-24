@@ -25,14 +25,14 @@ The CI workflow installs these packages automatically.
 
 ## Usage
 
-`text-extraction` expects the path to a PDF either as the first command line
-argument or via the `PDF_PATH` environment variable. The `classifier` expects
-an `OPENAI_API_KEY` environment variable.
+`text-extraction` starts an HTTP service on port `8083`. Send a `POST` request
+to `/extract` with a JSON body `{ "path": "<pdf path>" }` to receive the
+extracted text. The `classifier` expects an `OPENAI_API_KEY` environment
+variable.
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
-Without this variable it falls back to a local SQLite file `prompts.db`. When
-running via Docker Compose, a `postgres:15` container is started and the service
-connects to it using `postgres://postgres:postgres@db:5432/regress`.
+If the variable is not supplied it defaults to
+`postgres://postgres:postgres@db:5432/regress`.
 `/prompts` exposes all stored prompts and the table is created automatically if
 it does not exist.
 

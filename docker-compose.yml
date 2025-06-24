@@ -24,6 +24,8 @@ services:
     build:
       context: .
       dockerfile: services/text-extraction/Dockerfile
+    ports:
+      - "8083:8083"
   prompt-manager:
     build:
       context: .
