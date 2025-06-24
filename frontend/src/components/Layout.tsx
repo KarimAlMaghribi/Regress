@@ -66,6 +66,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {[
             { text: 'Upload', to: '/upload' },
             { text: 'Prompts', to: '/prompts' },
+            { text: 'Analysis', to: '/analysis' },
           ].map(({ text, to }) => (
             <ListItemButton
               key={text}
