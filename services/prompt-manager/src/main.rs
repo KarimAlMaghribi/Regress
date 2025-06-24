@@ -1,4 +1,5 @@
 use axum::{routing::{get, post, put, delete}, Router, Json, extract::{State, Path}};
+use tower_http::cors::CorsLayer;
 use sea_orm::{Database, DatabaseConnection, EntityTrait, ConnectionTrait, ActiveModelTrait, Set};
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
@@ -76,7 +77,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/prompts", get(list_prompts).post(create_prompt))
         .route("/prompts/:id", put(update_prompt).delete(delete_prompt))
-        .with_state(db.clone());
+        .with_state(db.clone())
+        .layer(CorsLayer::permissive());
     info!("starting prompt-manager");
     axum::Server::bind(&"0.0.0.0:8082".parse::<std::net::SocketAddr>()?)
         .serve(app.into_make_service())
