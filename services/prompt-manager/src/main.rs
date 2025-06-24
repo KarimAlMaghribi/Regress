@@ -76,6 +76,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Settings::new().unwrap_or_else(|_| Settings {
         database_url: "postgres://postgres:postgres@db:5432/regress".into(),
         message_broker_url: String::new(),
+        openai_api_key: String::new(),
+        class_prompt_id: 0,
     });
     let db: DatabaseConnection = Database::connect(&settings.database_url).await?;
     // create table if not exists
