@@ -1,9 +1,7 @@
-use actix_multipart::Multipart;
 use actix_web::{web, App, HttpResponse, HttpServer};
 use actix_cors::Cors;
-use futures_util::StreamExt as _;
 use serde::{Serialize, Deserialize};
-use tracing::{debug, info, error};
+use tracing::{info, error};
 use tokio_postgres::NoTls;
 use shared::config::Settings;
 use shared::dto::{TextExtracted, ClassificationResult};
@@ -59,6 +57,13 @@ pub struct HistoryParams {
     end: Option<DateTime<Utc>>,
     #[serde(default, rename = "promptId")]
     prompt: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct ClassifyRequest {
+    pdf_id: i32,
+    #[serde(rename = "promptId")]
+    prompt_id: i32,
 }
 
 pub async fn history(
@@ -120,57 +125,90 @@ pub async fn history(
 }
 
 pub async fn classify(
-    mut payload: Multipart,
+    req: web::Json<ClassifyRequest>,
     db: web::Data<tokio_postgres::Client>,
 ) -> actix_web::Result<HttpResponse> {
-    debug!("classification request received");
-    let mut pdf_data = Vec::new();
-    let mut file_name: Option<String> = None;
-    let mut prompts: Vec<String> = Vec::new();
+    info!(pdf_id = req.pdf_id, prompt_id = req.prompt_id, "classification request");
 
-    while let Some(item) = payload.next().await {
-        let mut field = item?;
-        let name = field.name().to_string();
-        let mut data = Vec::new();
-        while let Some(chunk) = field.next().await {
-            data.extend_from_slice(&chunk?);
-        }
-        if name == "file" {
-            info!("received pdf data: {} bytes", data.len());
-            file_name = field.content_disposition().get_filename().map(|s| s.to_string());
-            pdf_data = data;
-        } else if name == "prompts" {
-            let s = String::from_utf8_lossy(&data);
-            prompts = s.split(',').map(|p| p.trim().to_lowercase()).collect();
-        }
-    }
-
-    let text = String::from_utf8_lossy(&pdf_data).to_lowercase();
-    info!("prompts used: {:?}", prompts);
-    let is_regress = if prompts.is_empty() {
-        text.contains("regress")
-    } else {
-        prompts.iter().any(|p| text.contains(p))
+    let stmt = db
+        .prepare("SELECT text FROM pdf_texts WHERE pdf_id = $1")
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let row = db
+        .query_opt(&stmt, &[&req.pdf_id])
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let Some(row) = row else {
+        return Err(actix_web::error::ErrorNotFound("pdf text"));
     };
-    info!("classification result: {}", is_regress);
+    let extracted_text: String = row.get(0);
 
-    let prompts_str = prompts.join(",");
-    let fname = file_name.unwrap_or_else(|| "upload".into());
-    let metrics = serde_json::json!({
-        "accuracy": if is_regress { 1.0 } else { 0.0 },
-        "cost": (pdf_data.len() as f64) / 1000.0,
+    let stmt = db
+        .prepare("SELECT text FROM prompts WHERE id = $1")
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let row = db
+        .query_opt(&stmt, &[&req.prompt_id])
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let Some(row) = row else {
+        return Err(actix_web::error::ErrorNotFound("prompt"));
+    };
+    let prompt_template: String = row.get(0);
+
+    let user_content = format!(
+        "{}\n\n=== BEGIN OCR TEXT ===\n{}\n=== END OCR TEXT ===",
+        prompt_template,
+        extracted_text
+    );
+    let creds = Credentials::new(
+        std::env::var("OPENAI_API_KEY").map_err(actix_web::error::ErrorInternalServerError)?,
+        "https://api.openai.com",
+    );
+    let message = ChatCompletionMessage {
+        role: ChatCompletionMessageRole::User,
+        content: Some(user_content),
+        ..Default::default()
+    };
+    info!("sending request to openai");
+    let chat = ChatCompletion::builder("gpt-4-turbo", vec![message])
+        .credentials(creds)
+        .create()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let answer = chat
+        .choices
+        .get(0)
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_default();
+    info!(response = answer, "openai response");
+    let is_regress = answer.to_lowercase().contains("true");
+    info!(is_regress, "classification result");
+
+    let metrics = json!({
+        "accuracy": 0.0,
+        "cost": (extracted_text.len() as f64) / 1000.0,
         "hallucinationRate": 0.0
     });
-    let responses = serde_json::json!([format!("result={}", is_regress)]);
+    let responses = json!([answer]);
     let stmt = db
         .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)")
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
-    db.execute(&stmt, &[&fname, &prompts_str, &is_regress, &metrics, &responses])
-        .await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    db.execute(
+        &stmt,
+        &[
+            &req.pdf_id.to_string(),
+            &req.prompt_id.to_string(),
+            &is_regress,
+            &metrics,
+            &responses,
+        ],
+    )
+    .await
+    .map_err(actix_web::error::ErrorInternalServerError)?;
 
-    Ok(HttpResponse::Ok().json(Classification { regress: is_regress }))
+    Ok(HttpResponse::Ok().json(json!({"is_regress": is_regress})))
 }
 
 #[derive(Deserialize)]
@@ -342,6 +380,11 @@ async fn main() -> std::io::Result<()> {
     let db_clone = db.clone();
     let cons = consumer;
     let prod = producer;
+    let prompt_id: i32 = std::env::var("CLASS_PROMPT_ID")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let openai_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
     tokio::spawn(async move {
         info!("starting kafka consume loop");
         loop {
@@ -351,20 +394,63 @@ async fn main() -> std::io::Result<()> {
                     if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Ok(event) = serde_json::from_str::<TextExtracted>(payload) {
                             info!(id = event.id, "received text-extracted event");
-                            let text = event.text.to_lowercase();
-                            let is_regress = text.contains("regress");
+                            let stmt = db_clone
+                                .prepare("SELECT text FROM prompts WHERE id = $1")
+                                .await
+                                .unwrap();
+                            let row = match db_clone.query_opt(&stmt, &[&prompt_id]).await {
+                                Ok(r) => r,
+                                Err(e) => {
+                                    error!(%e, "failed to load prompt");
+                                    continue;
+                                }
+                            };
+                            let Some(row) = row else { continue };
+                            let prompt_template: String = row.get(0);
+                            let user_content = format!(
+                                "{}\n\n=== BEGIN OCR TEXT ===\n{}\n=== END OCR TEXT ===",
+                                prompt_template,
+                                event.text
+                            );
+                            let message = ChatCompletionMessage {
+                                role: ChatCompletionMessageRole::User,
+                                content: Some(user_content),
+                                ..Default::default()
+                            };
+                            let creds = Credentials::new(openai_key.clone(), "https://api.openai.com");
+                            let chat = match ChatCompletion::builder("gpt-4-turbo", vec![message])
+                                .credentials(creds)
+                                .create()
+                                .await
+                            {
+                                Ok(c) => c,
+                                Err(e) => {
+                                    error!(%e, id = event.id, "openai error");
+                                    continue;
+                                }
+                            };
+                            let answer = chat
+                                .choices
+                                .get(0)
+                                .and_then(|c| c.message.content.clone())
+                                .unwrap_or_default();
+                            let is_regress = answer.to_lowercase().contains("true");
+                            info!(id = event.id, is_regress, "openai classification done");
                             let metrics = serde_json::json!({
-                                "accuracy": if is_regress { 1.0 } else { 0.0 },
-                                "cost": (text.len() as f64) / 1000.0,
+                                "accuracy": 0.0,
+                                "cost": (event.text.len() as f64) / 1000.0,
                                 "hallucinationRate": 0.0
                             });
-                            let responses = serde_json::json!([]);
+                            let responses = serde_json::json!([answer]);
                             let stmt = db_clone
                                 .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)")
                                 .await
                                 .unwrap();
                             let _ = db_clone
-                                .execute(&stmt, &[&"kafka", &"", &is_regress, &metrics, &responses])
+                                .execute(
+                                    &stmt,
+                                    &[&event.id.to_string(), &prompt_id.to_string(), &is_regress, &metrics, &responses],
+                                )
                                 .await;
                             let result = ClassificationResult { id: event.id, regress: is_regress };
                             let payload = serde_json::to_string(&result).unwrap();
