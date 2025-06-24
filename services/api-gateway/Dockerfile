@@ -1,4 +1,4 @@
-FROM rust:1.70-slim as builder
+FROM rustlang/rust:nightly-slim as builder
 WORKDIR /app
 # Copy workspace files and only the api-gateway crate
 COPY Cargo.toml ./Cargo.toml

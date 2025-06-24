@@ -1,4 +1,4 @@
-FROM rust:1.70-slim AS builder
+FROM rustlang/rust:nightly-slim AS builder
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential pkg-config clang libssl-dev ca-certificates tesseract-ocr \
