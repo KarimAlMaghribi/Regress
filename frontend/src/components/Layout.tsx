@@ -10,7 +10,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <AppBar position="fixed" sx={{ zIndex: 1201 }}>
         <Toolbar>
           <Typography variant="h6" noWrap component="div">
-            Regress Dashboard
+            Regress
           </Typography>
         </Toolbar>
       </AppBar>
@@ -20,9 +20,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       >
         <Toolbar />
         <List>
-          <ListItem button component={Link} to="/">
-            <ListItemText primary="Dashboard" />
-          </ListItem>
           <ListItem button component={Link} to="/upload">
             <ListItemText primary="Upload" />
           </ListItem>
