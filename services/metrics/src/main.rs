@@ -3,7 +3,7 @@ use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
-use tracing::{debug, info};
+use tracing::info;
 
 #[derive(Serialize)]
 struct Metric {
@@ -18,8 +18,8 @@ async fn health() -> impl Responder {
 
 #[derive(Default, Deserialize)]
 struct Query {
-    start: Option<DateTime<Utc>>, 
-    end: Option<DateTime<Utc>>, 
+    start: Option<DateTime<Utc>>,
+    end: Option<DateTime<Utc>>,
     limit: Option<i64>,
 }
 
@@ -27,8 +27,10 @@ async fn metrics(
     db: web::Data<tokio_postgres::Client>,
     query: web::Query<Query>,
 ) -> actix_web::Result<HttpResponse> {
-    debug!("loading metrics");
-    let mut sql = String::from("SELECT run_time, metrics->>'accuracy', metrics->>'cost' FROM classifications");
+    info!("loading metrics");
+    let mut sql = String::from(
+        "SELECT run_time, metrics->>'accuracy', metrics->>'cost' FROM classifications",
+    );
     let mut values: Vec<Box<dyn tokio_postgres::types::ToSql + Sync>> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
     if let Some(start) = query.start {
@@ -55,8 +57,14 @@ async fn metrics(
         .into_iter()
         .map(|r| Metric {
             timestamp: r.get(0),
-            accuracy: r.get::<_, Option<String>>(1).and_then(|v| v.parse().ok()).unwrap_or(0.0),
-            cost: r.get::<_, Option<String>>(2).and_then(|v| v.parse().ok()).unwrap_or(0.0),
+            accuracy: r
+                .get::<_, Option<String>>(1)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0),
+            cost: r
+                .get::<_, Option<String>>(2)
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0.0),
         })
         .collect();
     Ok(HttpResponse::Ok().json(items))
@@ -67,8 +75,13 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting metrics service");
     let settings = Settings::new().unwrap();
-    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, tokio_postgres::NoTls).await.unwrap();
-    tokio::spawn(async move { let _ = connection.await; });
+    let (db_client, connection) =
+        tokio_postgres::connect(&settings.database_url, tokio_postgres::NoTls)
+            .await
+            .unwrap();
+    tokio::spawn(async move {
+        let _ = connection.await;
+    });
     db_client
         .execute(
             "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN NOT NULL, metrics JSONB NOT NULL, responses JSONB NOT NULL)",

@@ -1,14 +1,17 @@
-use actix_multipart::Multipart;
-use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use actix_cors::Cors;
+use actix_multipart::Multipart;
 use actix_web::web::Bytes;
+use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use futures_util::StreamExt as _;
+use rdkafka::{
+    producer::{FutureProducer, FutureRecord},
+    ClientConfig,
+};
 use shared::config::Settings;
-use shared::dto::{UploadResponse, PdfUploaded};
-use rdkafka::{producer::{FutureProducer, FutureRecord}, ClientConfig};
-use tokio_postgres::NoTls;
+use shared::dto::{PdfUploaded, UploadResponse};
 use std::time::Duration;
-use tracing::{debug, info};
+use tokio_postgres::NoTls;
+use tracing::info;
 
 async fn upload(
     mut payload: Multipart,
@@ -26,7 +29,7 @@ async fn upload(
             let bytes: Bytes = chunk?;
             data.extend_from_slice(&bytes);
         }
-        debug!("storing pdf with {} bytes", data.len());
+        info!(bytes = data.len(), "storing pdf");
         let stmt = db
             .prepare("INSERT INTO pdfs (data) VALUES ($1) RETURNING id")
             .await
@@ -40,9 +43,7 @@ async fn upload(
         let payload = serde_json::to_string(&PdfUploaded { id }).unwrap();
         let _ = producer
             .send(
-                FutureRecord::to("pdf-uploaded")
-                    .payload(&payload)
-                    .key(&()),
+                FutureRecord::to("pdf-uploaded").payload(&payload).key(&()),
                 Duration::from_secs(0),
             )
             .await;
@@ -61,11 +62,16 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting pdf-ingest service");
     let settings = Settings::new().unwrap();
-    let (db_client, connection) =
-        tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
+    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls)
+        .await
+        .unwrap();
     let db_client = web::Data::new(db_client);
     info!("connected to database");
-    tokio::spawn(async move { if let Err(e) = connection.await { eprintln!("db error: {e}") } });
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("db error: {e}")
+        }
+    });
     db_client
         .execute(
             "CREATE TABLE IF NOT EXISTS pdfs (id SERIAL PRIMARY KEY, data BYTEA NOT NULL)",
