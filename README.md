@@ -66,8 +66,9 @@ docker compose up --build
 
 After the build completes, open <http://localhost:3000> in your browser to use the application.
 
-The frontend expects two base URLs:
-`VITE_INGEST_URL` for the upload service (defaults to `http://localhost:8081`)
-and `VITE_CLASSIFIER_URL` for the classifier service (defaults to
-`http://localhost:8084`).
+The frontend expects three environment variables:
+`VITE_INGEST_URL` for the upload service (defaults to `http://localhost:8081`),
+`VITE_CLASSIFIER_URL` for the classifier service (defaults to
+`http://localhost:8084`), and `VITE_HISTORY_WS` for the history WebSocket
+(defaults to `ws://localhost:8090`).
 
