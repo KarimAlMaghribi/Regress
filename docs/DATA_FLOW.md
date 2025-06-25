@@ -31,10 +31,11 @@ A result can be polled via `GET /results/{id}` from the classifier service.
 - **text** (`string`): managed in the Prompts page and persisted by the
   `prompt-manager` service in table `prompts(id SERIAL, text TEXT)`.
 
-## Frontend Hooks
-- `useAnalysisHistory` loads records from the classifier service using the
-  base URL defined by `VITE_CLASSIFIER_URL` (defaults to
-  `http://localhost:8084`) and exposes them to the `AnalysisHistory` page.
+## Frontend Integration
+- The ingestion service base URL is read from `VITE_INGEST_URL` and defaults to
+  `http://localhost:8081`.
+- The classifier service base URL is configured via `VITE_CLASSIFIER_URL` and
+  defaults to `http://localhost:8084`.
 
 ## Example Request
 ```

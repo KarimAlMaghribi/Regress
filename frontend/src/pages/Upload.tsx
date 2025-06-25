@@ -15,6 +15,7 @@ export default function Upload() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [selected, setSelected] = useState<number[]>([]);
   const [result, setResult] = useState<string>('');
+  const [uploadId, setUploadId] = useState<string>('');
 
   useEffect(() => {
     console.log('Loading prompts ...');
@@ -38,10 +39,14 @@ export default function Upload() {
     console.log('Analyzing file', file.name);
     const form = new FormData();
     form.append('file', file);
-    const texts = prompts.filter(p => selected.includes(p.id)).map(p => p.text).join(',');
+    const texts = prompts
+      .filter(p => selected.includes(p.id))
+      .map(p => p.text)
+      .join(',');
     form.append('prompts', texts);
-    const backend = import.meta.env.VITE_CLASSIFIER_URL || 'http://localhost:8084';
-    fetch(`${backend}/classify`, { method: 'POST', body: form })
+    const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+    const classifier = import.meta.env.VITE_CLASSIFIER_URL || 'http://localhost:8084';
+    fetch(`${ingest}/upload`, { method: 'POST', body: form })
       .then(async r => {
         if (!r.ok) {
           const text = await r.text();
@@ -50,13 +55,38 @@ export default function Upload() {
         return r.json();
       })
       .then(d => {
-        console.log('Classification result', d);
-        setResult(d.regress ? 'Regressfall' : 'Kein Regressfall');
+        console.log('Upload result', d);
+        setUploadId(d.id);
+        setResult('Processing...');
+        pollResult(classifier, d.id);
       })
       .catch(err => {
-        console.error('Classification error', err);
+        console.error('Upload error', err);
         setResult(`Error: ${(err as Error).message}`);
       });
+  };
+
+  const pollResult = async (classifier: string, id: string) => {
+    while (true) {
+      try {
+        const res = await fetch(`${classifier}/results/${id}`);
+        if (res.status === 404) {
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+        const d = await res.json();
+        setResult(d.regress ? 'Regressfall' : 'Kein Regressfall');
+        break;
+      } catch (err) {
+        console.error('Polling error', err);
+        setResult(`Error: ${(err as Error).message}`);
+        break;
+      }
+    }
   };
 
   const dropStyles = {
@@ -124,9 +154,10 @@ export default function Upload() {
       >
         Analyze
       </Button>
-      {result && (
+      {(uploadId || result) && (
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <Typography sx={{ mt: 2 }}>Result: {result}</Typography>
+          {uploadId && <Typography sx={{ mt: 2 }}>ID: {uploadId}</Typography>}
+          {result && <Typography sx={{ mt: 1 }}>Result: {result}</Typography>}
         </motion.div>
       )}
     </Box>
