@@ -18,6 +18,9 @@ async fn upload(
     info!("handling upload request");
     while let Some(item) = payload.next().await {
         let mut field = item?;
+        if field.name() != "file" {
+            continue;
+        }
         let mut data = Vec::new();
         while let Some(chunk) = field.next().await {
             let bytes: Bytes = chunk?;
@@ -95,7 +98,7 @@ mod tests {
     use super::*;
     use actix_web::{test, web, App};
 
-    #[actix_rt::test]
+    #[actix_web::test]
     async fn health_ok() {
         let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
         let req = test::TestRequest::get().uri("/health").to_request();

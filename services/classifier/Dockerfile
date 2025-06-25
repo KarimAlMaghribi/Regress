@@ -11,16 +11,12 @@ RUN apt-get update \
         clang \
         libssl-dev \
         ca-certificates \
-        tesseract-ocr \
-        libtesseract-dev \
-        libleptonica-dev \
     && rm -rf /var/lib/apt/lists/* \
     && cargo build --release --package classifier --manifest-path services/classifier/Cargo.toml
 
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        tesseract-ocr \
         libssl3 \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*

@@ -94,7 +94,7 @@ mod tests {
     use super::*;
     use actix_web::{test, App};
 
-    #[actix_rt::test]
+    #[actix_web::test]
     async fn health_ok() {
         let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
         let req = test::TestRequest::get().uri("/health").to_request();

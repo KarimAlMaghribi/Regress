@@ -5,17 +5,13 @@ edition.workspace = true
 
 [dependencies]
 actix-web = "4"
-actix-multipart = "0.6"
-futures-util = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 serde.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tokio-postgres.workspace = true
 serde_json.workspace = true
-chrono = { version = "0.4", features = ["serde"] }
 shared = { path = "../../shared" }
 openai.workspace = true
 rdkafka.workspace = true
 actix-cors = "0.6"
-tesseract = "0.15.2"
