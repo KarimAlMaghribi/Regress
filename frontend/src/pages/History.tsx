@@ -14,7 +14,8 @@ export default function History() {
   const [selected, setSelected] = useState<HistoryEntry | null>(null);
 
   useEffect(() => {
-    const socket = new WebSocket(`ws://${location.host}`);
+    const url = import.meta.env.VITE_HISTORY_WS || 'ws://localhost:8090';
+    const socket = new WebSocket(url);
     socket.addEventListener('message', ev => {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'history') {
