@@ -1,18 +1,32 @@
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use actix_cors::Cors;
-use shared::{config::Settings, dto::{TextExtracted, ClassificationResult}};
-use rdkafka::{consumer::{Consumer, StreamConsumer}, producer::{FutureProducer, FutureRecord}, ClientConfig, Message};
-use openai::{Credentials, chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole}};
-use tokio_postgres::NoTls;
-use tracing::{info, error};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use openai::{
+    chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
+    Credentials,
+};
+use rdkafka::{
+    consumer::{Consumer, StreamConsumer},
+    producer::{FutureProducer, FutureRecord},
+    ClientConfig, Message,
+};
+use shared::{
+    config::Settings,
+    dto::{ClassificationResult, TextExtracted},
+};
 use std::time::Duration;
+use tokio_postgres::NoTls;
+use tracing::{error, info};
 
 async fn health() -> impl Responder {
     "OK"
 }
 
-async fn get_result(path: web::Path<i32>, db: web::Data<tokio_postgres::Client>) -> actix_web::Result<HttpResponse> {
+async fn get_result(
+    path: web::Path<i32>,
+    db: web::Data<tokio_postgres::Client>,
+) -> actix_web::Result<HttpResponse> {
     let id = path.into_inner();
+    info!(id, "fetching classification result");
     let stmt = db
         .prepare("SELECT regress, metrics, responses FROM classifications WHERE file_name = $1")
         .await
@@ -41,9 +55,15 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting classifier service");
     let settings = Settings::new().unwrap();
-    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
+    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls)
+        .await
+        .unwrap();
     let db_client = web::Data::new(db_client);
-    tokio::spawn(async move { if let Err(e) = connection.await { eprintln!("db error: {e}") } });
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            eprintln!("db error: {e}")
+        }
+    });
     db_client.execute(
         "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN NOT NULL, metrics JSONB NOT NULL, responses JSONB NOT NULL)",
         &[]
@@ -69,6 +89,7 @@ async fn main() -> std::io::Result<()> {
     let prompt_id = settings.class_prompt_id;
     let worker_db = db.clone();
     tokio::spawn(async move {
+        info!("starting kafka consume loop");
         let cons = consumer;
         let prod = producer;
         let db = worker_db;
@@ -79,27 +100,40 @@ async fn main() -> std::io::Result<()> {
                     if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Ok(evt) = serde_json::from_str::<TextExtracted>(payload) {
                             info!(id = evt.id, "received text-extracted event");
-                            let stmt = db.prepare("SELECT text, name FROM prompts WHERE id = $1").await.unwrap();
+                            let stmt = db
+                                .prepare("SELECT text, name FROM prompts WHERE id = $1")
+                                .await
+                                .unwrap();
                             let row_opt = db.query_opt(&stmt, &[&prompt_id]).await.unwrap();
                             let Some(row) = row_opt else {
                                 error!(prompt_id, "prompt not found");
                                 continue;
                             };
+                            info!(prompt_id, "loaded classification prompt");
                             let prompt_template: String = row.get(0);
                             let user_content = format!(
                                 "{}\n\n=== BEGIN OCR TEXT ===\n{}\n=== END OCR TEXT ===",
-                                prompt_template,
-                                evt.text
+                                prompt_template, evt.text
                             );
                             let message = ChatCompletionMessage {
                                 role: ChatCompletionMessageRole::User,
                                 content: Some(user_content),
                                 ..Default::default()
                             };
-                            let creds = Credentials::new(openai_key.clone(), "https://api.openai.com");
-                            match ChatCompletion::builder("gpt-4-turbo", vec![message]).credentials(creds).create().await {
+                            let creds =
+                                Credentials::new(openai_key.clone(), "https://api.openai.com");
+                            info!(id = evt.id, "sending request to openai");
+                            match ChatCompletion::builder("gpt-4-turbo", vec![message])
+                                .credentials(creds)
+                                .create()
+                                .await
+                            {
                                 Ok(chat) => {
-                                    let answer = chat.choices.get(0).and_then(|c| c.message.content.clone()).unwrap_or_default();
+                                    let answer = chat
+                                        .choices
+                                        .get(0)
+                                        .and_then(|c| c.message.content.clone())
+                                        .unwrap_or_default();
                                     let is_regress = answer.to_lowercase().contains("true");
                                     info!(id = evt.id, is_regress, "openai classification done");
                                     let metrics = serde_json::json!({
@@ -109,10 +143,34 @@ async fn main() -> std::io::Result<()> {
                                     });
                                     let responses = serde_json::json!([answer]);
                                     let stmt = db.prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)").await.unwrap();
-                                    let _ = db.execute(&stmt, &[&evt.id.to_string(), &prompt_id.to_string(), &is_regress, &metrics, &responses]).await;
-                                    let result = ClassificationResult { id: evt.id, regress: is_regress };
+                                    info!(id = evt.id, "storing classification result");
+                                    let _ = db
+                                        .execute(
+                                            &stmt,
+                                            &[
+                                                &evt.id.to_string(),
+                                                &prompt_id.to_string(),
+                                                &is_regress,
+                                                &metrics,
+                                                &responses,
+                                            ],
+                                        )
+                                        .await;
+                                    info!(id = evt.id, "classification result stored");
+                                    let result = ClassificationResult {
+                                        id: evt.id,
+                                        regress: is_regress,
+                                    };
                                     let payload = serde_json::to_string(&result).unwrap();
-                                    let _ = prod.send(FutureRecord::to("classification-result").payload(&payload).key(&()), Duration::from_secs(0)).await;
+                                    info!(id = evt.id, "publishing classification-result event");
+                                    let _ = prod
+                                        .send(
+                                            FutureRecord::to("classification-result")
+                                                .payload(&payload)
+                                                .key(&()),
+                                            Duration::from_secs(0),
+                                        )
+                                        .await;
                                     info!(id = evt.id, "classification-result published");
                                 }
                                 Err(e) => error!(%e, id = evt.id, "openai error"),

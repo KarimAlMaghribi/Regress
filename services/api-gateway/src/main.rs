@@ -3,10 +3,10 @@ use actix_web::web::Payload;
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer, Responder};
 use awc::Client;
 use futures_util::future;
-use tracing::{debug, info};
+use tracing::info;
 
 async fn health() -> impl Responder {
-    debug!("health check request");
+    info!("health check request");
     let client = Client::default();
     let urls = [
         "http://pdf-ingest:8081/health",
@@ -70,10 +70,12 @@ async fn prompts(req: HttpRequest, body: Payload) -> impl Responder {
             format!("/{}", tail)
         }
     );
+    info!(%url, "forwarding prompt-manager request");
     proxy(req, body, url).await
 }
 
 async fn classify(req: HttpRequest, body: Payload) -> impl Responder {
+    info!("forwarding classify request");
     proxy(req, body, "http://classifier:8084/classify".into()).await
 }
 
