@@ -70,7 +70,7 @@ export default function Upload() {
     while (true) {
       try {
         const res = await fetch(`${classifier}/results/${id}`);
-        if (res.status === 404) {
+        if (res.status === 404 || res.status === 202) {
           await new Promise(r => setTimeout(r, 2000));
           continue;
         }

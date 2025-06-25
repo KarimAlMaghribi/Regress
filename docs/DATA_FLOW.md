@@ -26,6 +26,8 @@ The `classifications` table contains:
 | `metrics`    | JSONB     | analysis metrics                |
 
 A result can be polled via `GET /results/{id}` from the classifier service.
+While processing, the endpoint responds with HTTP `202 Accepted` so callers
+should retry until a `200 OK` payload is returned.
 
 ## Prompts
 - **text** (`string`): managed in the Prompts page and persisted by the
@@ -54,3 +56,4 @@ Poll result:
 ```
 GET /results/42
 ```
+The request returns `202 Accepted` until the classification record exists.
