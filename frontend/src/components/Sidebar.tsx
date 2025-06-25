@@ -16,6 +16,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import BarChartIcon from '@mui/icons-material/BarChart';
+import HistoryIcon from '@mui/icons-material/History';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import SettingsIcon from '@mui/icons-material/Settings';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
@@ -27,15 +28,13 @@ export interface SidebarProps {
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
-  isMobile?: boolean;
   hasNewPrompts?: boolean;
 }
 
 const collapsedWidth = 80;
 const expandedWidth = 240;
-const APP_BAR_HEIGHT = 64;
 
-export default function Sidebar({ open, onToggle, onClose, isMobile, hasNewPrompts }: SidebarProps) {
+export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: SidebarProps) {
   const { toggle } = useContext(ColorModeContext);
   const location = useLocation();
   const ref = useRef<HTMLDivElement>(null);
@@ -55,6 +54,7 @@ export default function Sidebar({ open, onToggle, onClose, isMobile, hasNewPromp
     { text: 'Dashboard', to: '/', icon: <DashboardIcon /> },
     { text: 'Upload', to: '/upload', icon: <CloudUploadIcon /> },
     { text: 'Analysis', to: '/analysis', icon: <BarChartIcon /> },
+    { text: 'History', to: '/history', icon: <HistoryIcon /> },
   ];
   const secondary = [
     { text: 'Prompts', to: '/prompts', icon: <ListAltIcon />, badge: hasNewPrompts },
@@ -120,10 +120,10 @@ export default function Sidebar({ open, onToggle, onClose, isMobile, hasNewPromp
       ref={ref}
       sx={{
         position: 'fixed',
-        top: APP_BAR_HEIGHT,
+        top: 0,
         left: 0,
-        height: `calc(100% - ${APP_BAR_HEIGHT}px)`,
-        width: isMobile ? (open ? expandedWidth : 0) : open ? expandedWidth : collapsedWidth,
+        height: '100%',
+        width: open ? expandedWidth : collapsedWidth,
         transition: 'width 0.2s',
         borderRight: 1,
         borderColor: 'divider',
