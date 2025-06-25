@@ -9,3 +9,6 @@ serde_json.workspace = true
 config.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+awc = "3"
+openai.workspace = true
+actix-web = "4"
