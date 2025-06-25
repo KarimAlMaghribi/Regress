@@ -56,6 +56,16 @@ services:
       DATABASE_URL: postgres://postgres:postgres@db:5432/regress
     ports:
       - "8085:8085"
+  history-service:
+    build:
+      context: .
+      dockerfile: services/history-service/Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/regress
+      MESSAGE_BROKER_URL: kafka:9092
+      SERVER_PORT: 8090
+    ports:
+      - "8090:8090"
   kafka:
     image: bitnami/kafka:latest
     environment:
