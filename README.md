@@ -63,6 +63,7 @@ docker compose up --build
 2. Run `docker compose up --build` to build all images and start the services.
 3. Access the frontend at <http://localhost:3000>.
 4. Metrics are available at <http://localhost:8085/metrics>.
+5. History service runs at <http://localhost:8090>.
 
 After the build completes, open <http://localhost:3000> in your browser to use the application.
 
