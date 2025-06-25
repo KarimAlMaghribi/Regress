@@ -28,11 +28,11 @@ async fn get_result(
     let id = path.into_inner();
     info!(id, "fetching classification result");
     let stmt = db
-        .prepare("SELECT regress, metrics, responses FROM classifications WHERE file_name = $1")
+        .prepare("SELECT regress, metrics, responses FROM classifications WHERE id = $1")
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let row = db
-        .query_opt(&stmt, &[&id.to_string()])
+        .query_opt(&stmt, &[&id])
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     if let Some(row) = row {
