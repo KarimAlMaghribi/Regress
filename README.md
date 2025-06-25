@@ -30,6 +30,8 @@ All services read the database connection string from the `DATABASE_URL` environ
 Kafka connection is read from `MESSAGE_BROKER_URL`.
 If either variable is omitted, the code falls back to `postgres://postgres:postgres@db:5432/regress` and `kafka:9092` respectively.
 The classifier additionally requires `OPENAI_API_KEY` and uses `CLASS_PROMPT_ID` to select a prompt.
+If the id is zero or the row is missing, the service falls back to a built-in
+prompt so classification still works.
 Defaults are provided in `docker-compose.yml`. The metrics service reads from the same database.
 
 ## Usage

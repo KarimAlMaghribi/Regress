@@ -87,6 +87,8 @@ async fn main() -> std::io::Result<()> {
         .create()
         .unwrap();
 
+    const DEFAULT_PROMPT: &str = "Is the following text describing a regression? Answer true or false.";
+
     let db = db_client.clone();
     let openai_key = settings.openai_api_key.clone();
     let prompt_id = settings.class_prompt_id;
@@ -108,12 +110,16 @@ async fn main() -> std::io::Result<()> {
                                 .await
                                 .unwrap();
                             let row_opt = db.query_opt(&stmt, &[&prompt_id]).await.unwrap();
-                            let Some(row) = row_opt else {
+                            let prompt_template: String = if let Some(row) = row_opt {
+                                info!(prompt_id, "loaded classification prompt");
+                                row.get(0)
+                            } else if prompt_id == 0 {
+                                info!("using built-in default classification prompt");
+                                DEFAULT_PROMPT.to_string()
+                            } else {
                                 error!(prompt_id, "prompt not found");
                                 continue;
                             };
-                            info!(prompt_id, "loaded classification prompt");
-                            let prompt_template: String = row.get(0);
                             let user_content = format!(
                                 "{}\n\n=== BEGIN OCR TEXT ===\n{}\n=== END OCR TEXT ===",
                                 prompt_template, evt.text
