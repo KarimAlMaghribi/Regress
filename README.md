@@ -1,6 +1,8 @@
 # Regress
 
 Microservice system for PDF classification using Rust.
+For a German overview, see [docs/PROJECT_DOC_DE.md](docs/PROJECT_DOC_DE.md).
+
 
 ```mermaid
 graph TD;
