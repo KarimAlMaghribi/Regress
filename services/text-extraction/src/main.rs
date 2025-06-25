@@ -1,6 +1,5 @@
-use actix_web::{post, web, App, HttpResponse, HttpServer, Responder};
+use actix_web::{web, App, HttpServer, Responder};
 use actix_cors::Cors;
-use serde::Deserialize;
 use shared::{
     config::Settings,
     dto::{PdfUploaded, TextExtracted},
@@ -14,7 +13,7 @@ use rdkafka::{
 use std::time::Duration;
 use tokio_postgres::NoTls;
 use tesseract::Tesseract;
-use tracing::{debug, error, info};
+use tracing::{error, info};
 use std::path::Path;
 use pdf_extract::extract_text_from_mem;
 
@@ -46,22 +45,6 @@ fn extract_text(path: &str) -> Result<String> {
     Ok(text)
 }
 
-#[derive(Debug, Deserialize)]
-struct ExtractRequest {
-    path: String,
-}
-
-#[post("/extract")]
-async fn extract(req: web::Json<ExtractRequest>) -> impl Responder {
-    info!(?req, "extract endpoint called");
-    match extract_text(&req.path) {
-        Ok(text) => HttpResponse::Ok().body(text),
-        Err(e) => {
-            error!(%e, "text extraction failed");
-            HttpResponse::InternalServerError().body(format!("error: {}", e))
-        }
-    }
-}
 
 async fn health() -> impl Responder {
     "OK"
@@ -152,7 +135,6 @@ async fn main() -> std::io::Result<()> {
     HttpServer::new(|| {
         App::new()
             .wrap(Cors::permissive())
-            .service(extract)
             .route("/health", web::get().to(health))
     })
         .bind(("0.0.0.0", 8083))?
@@ -165,7 +147,7 @@ mod tests {
     use super::*;
     use actix_web::{test, App};
 
-    #[actix_rt::test]
+    #[actix_web::test]
     async fn health_ok() {
         let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
         let req = test::TestRequest::get().uri("/health").to_request();

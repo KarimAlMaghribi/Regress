@@ -5,21 +5,27 @@ processed by backend services and where they are stored.
 
 ## Upload
 - **file** (`File`): selected PDF uploaded from the browser.
-- **prompts** (`string[]`): list of prompt texts applied during classification.
 
-These fields are sent to the `classifier` service at `/classify` which now
-stores the following columns in the `classifications` table:
+The file is sent to the `pdf-ingest` service at `/upload`. It stores the bytes
+and publishes a `pdf-uploaded` event. The other services react on this event:
+
+1. `text-extraction` retrieves the PDF, performs OCR and publishes a
+   `text-extracted` message.
+2. `classifier` consumes that message, calls OpenAI and writes to the
+   `classifications` table before emitting `classification-result`.
+
+The `classifications` table contains:
 
 | column       | type      | description                     |
 |--------------|-----------|---------------------------------|
 | `id`         | SERIAL    | primary key                     |
 | `run_time`   | TIMESTAMPTZ | time of classification        |
 | `file_name`  | TEXT      | original file name              |
-| `prompts`    | TEXT      | comma separated prompt texts    |
+| `prompts`    | TEXT      | comma separated prompt ids      |
 | `regress`    | BOOLEAN   | classification result           |
 | `metrics`    | JSONB     | analysis metrics                |
 
-A list of stored records can be fetched via `GET /history`.
+A result can be polled via `GET /results/{id}` from the classifier service.
 
 ## Prompts
 - **text** (`string`): managed in the Prompts page and persisted by the
@@ -32,31 +38,18 @@ A list of stored records can be fetched via `GET /history`.
 
 ## Example Request
 ```
-POST /classify
+POST /upload
 Content-Type: multipart/form-data
 
-file=<pdf data>
-prompts=fraud,duplicate
+file=<pdf bytes>
 ```
 
 Example response:
 ```
-{ "regress": true }
+{ "id": "42" }
 ```
 
-Fetching history:
+Poll result:
 ```
-GET /history
-```
-Response:
-```
-[
-  {
-    "id": 1,
-    "promptId": "fraud,duplicate",
-    "pdfFilenames": ["claim.pdf"],
-    "runTime": "2024-06-24T12:00:00Z",
-    "metrics": { "accuracy": 1.0, "cost": 0.0, "hallucinationRate": 0.0 }
-  }
-]
+GET /results/42
 ```

@@ -33,10 +33,13 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
 
 ## Usage
 
-`text-extraction` starts an HTTP service on port `8083`. Send a `POST` request
-to `/extract` with a JSON body `{ "path": "<pdf path>" }` to receive the
-extracted text. The `classifier` expects an `OPENAI_API_KEY` environment
-variable.
+1. Upload a PDF via `POST http://localhost:8081/upload` with a multipart field
+   named `file`. The response contains the generated id.
+2. The `text-extraction` service processes the file asynchronously and publishes
+   a `text-extracted` event.
+3. The `classifier` consumes that event, calls OpenAI and stores the result in
+   the `classifications` table. Poll `GET http://localhost:8084/results/{id}`
+   until data is returned.
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to
