@@ -15,4 +15,4 @@ shared = { path = "../../shared" }
 openai.workspace = true
 rdkafka.workspace = true
 actix-cors = "0.6"
-awc = "3"
+awc = { version = "3", features = ["rustls"] }
