@@ -32,7 +32,7 @@ async fn get_result(path: web::Path<i32>, db: web::Data<tokio_postgres::Client>)
         });
         Ok(HttpResponse::Ok().json(body))
     } else {
-        Err(actix_web::error::ErrorNotFound("result"))
+        Ok(HttpResponse::Accepted().finish())
     }
 }
 
