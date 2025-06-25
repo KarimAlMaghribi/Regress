@@ -27,13 +27,15 @@ export interface SidebarProps {
   open: boolean;
   onToggle: () => void;
   onClose: () => void;
+  isMobile?: boolean;
   hasNewPrompts?: boolean;
 }
 
 const collapsedWidth = 80;
 const expandedWidth = 240;
+const APP_BAR_HEIGHT = 64;
 
-export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: SidebarProps) {
+export default function Sidebar({ open, onToggle, onClose, isMobile, hasNewPrompts }: SidebarProps) {
   const { toggle } = useContext(ColorModeContext);
   const location = useLocation();
   const ref = useRef<HTMLDivElement>(null);
@@ -117,14 +119,19 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
     <Box
       ref={ref}
       sx={{
-        width: open ? expandedWidth : collapsedWidth,
+        position: 'fixed',
+        top: APP_BAR_HEIGHT,
+        left: 0,
+        height: `calc(100% - ${APP_BAR_HEIGHT}px)`,
+        width: isMobile ? (open ? expandedWidth : 0) : open ? expandedWidth : collapsedWidth,
         transition: 'width 0.2s',
-        height: '100%',
         borderRight: 1,
         borderColor: 'divider',
         bgcolor: 'background.paper',
         display: 'flex',
         flexDirection: 'column',
+        zIndex: 1100,
+        overflowX: 'hidden',
       }}
     >
       <Box sx={{ display: 'flex', justifyContent: open ? 'flex-end' : 'center', p: 1 }}>

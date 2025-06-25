@@ -13,6 +13,7 @@ import MenuIcon from '@mui/icons-material/Menu';
 import DarkModeRoundedIcon from '@mui/icons-material/DarkModeRounded';
 import Sidebar from './Sidebar';
 
+const APP_BAR_HEIGHT = 64;
 const expandedWidth = 240;
 const collapsedWidth = 80;
 
@@ -30,16 +31,16 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   };
 
   const handleColorMode = () => {
-    console.log('Toggle color mode');
     toggle();
   };
 
   return (
-    <Box>
+    <Box sx={{ display: 'flex' }}>
       <AppBar
         elevation={0}
         position="fixed"
         sx={{
+          height: APP_BAR_HEIGHT,
           backdropFilter: 'blur(16px)',
           background:
             'linear-gradient(135deg, rgba(108,93,211,0.8), rgba(58,134,255,0.8))',
@@ -63,18 +64,24 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </Toolbar>
       </AppBar>
 
+      <Sidebar
+        open={open}
+        onToggle={handleToggle}
+        onClose={() => setOpen(false)}
+        isMobile={isMobile}
+      />
+
       <Box
+        component="main"
         sx={{
-          display: 'grid',
-          gridTemplateColumns: `${open ? `repeat(2, ${expandedWidth / 2}px)` : `repeat(2, ${collapsedWidth / 2}px)`} repeat(10, 1fr)`,
-          minHeight: '100vh',
-          mt: 8,
+          mt: `${APP_BAR_HEIGHT}px`,
+          ml: isMobile ? 0 : open ? `${expandedWidth}px` : `${collapsedWidth}px`,
+          p: 3,
+          flexGrow: 1,
+          transition: 'margin-left 0.2s',
         }}
       >
-        <Sidebar open={open} onToggle={handleToggle} onClose={() => setOpen(false)} />
-        <Box component="main" sx={{ gridColumn: 'span 10', p: 3 }}>
-          {children}
-        </Box>
+        {children}
       </Box>
     </Box>
   );
