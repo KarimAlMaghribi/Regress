@@ -1,0 +1,16 @@
+{
+  "name": "history-service",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.17.0",
+    "kafkajs": "^2.2.4",
+    "pg": "^8.11.5",
+    "dotenv": "^16.3.1"
+  }
+}
