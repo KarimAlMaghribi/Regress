@@ -16,10 +16,15 @@ export async function startKafka() {
   await consumer.run({
     eachMessage: async ({ message }) => {
       try {
-        const payload = JSON.parse(message.value.toString());
-        // expecting { id, prompt, result, pdfUrl, timestamp }
-        await insert(payload);
-        broadcast(payload);
+        const data = JSON.parse(message.value.toString());
+        const entry = {
+          id: data.id,
+          result: { regress: data.regress },
+          pdfUrl: `http://pdf-ingest:8081/pdf/${data.id}`,
+          timestamp: new Date().toISOString()
+        };
+        await insert(entry);
+        broadcast(entry);
       } catch (e) {
         console.error('Kafka message error', e);
       }
