@@ -68,10 +68,13 @@ async fn main() -> std::io::Result<()> {
         "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN NOT NULL, metrics JSONB NOT NULL, responses JSONB NOT NULL)",
         &[]
     ).await.unwrap();
-    db_client.execute(
-        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, name TEXT)",
-        &[]
-    ).await.unwrap();
+    db_client
+        .execute(
+            "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL)",
+            &[],
+        )
+        .await
+        .unwrap();
 
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "classifier")
@@ -101,7 +104,7 @@ async fn main() -> std::io::Result<()> {
                         if let Ok(evt) = serde_json::from_str::<TextExtracted>(payload) {
                             info!(id = evt.id, "received text-extracted event");
                             let stmt = db
-                                .prepare("SELECT text, name FROM prompts WHERE id = $1")
+                                .prepare("SELECT text FROM prompts WHERE id = $1")
                                 .await
                                 .unwrap();
                             let row_opt = db.query_opt(&stmt, &[&prompt_id]).await.unwrap();
