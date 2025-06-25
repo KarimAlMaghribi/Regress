@@ -1,9 +1,8 @@
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use openai::{
-    chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole},
-    Credentials,
-};
+use actix_web::http::header;
+use awc::Client;
+use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     producer::{FutureProducer, FutureRecord},
@@ -13,6 +12,7 @@ use shared::{
     config::Settings,
     dto::{ClassificationResult, TextExtracted},
 };
+use shared::openai_client::call_openai_chat;
 use std::time::Duration;
 use tokio_postgres::NoTls;
 use tracing::{error, info};
@@ -63,7 +63,7 @@ async fn main() -> std::io::Result<()> {
         .await
         .unwrap();
     let db_client = web::Data::new(db_client);
-    tokio::spawn(async move {
+    actix_web::rt::spawn(async move {
         if let Err(e) = connection.await {
             eprintln!("db error: {e}")
         }
@@ -94,14 +94,17 @@ async fn main() -> std::io::Result<()> {
     const DEFAULT_PROMPT: &str = "Is the following text describing a regression? Answer true or false.";
 
     let db = db_client.clone();
-    let openai_key = settings.openai_api_key.clone();
     let prompt_id = settings.class_prompt_id;
     let worker_db = db.clone();
-    tokio::spawn(async move {
+    actix_web::rt::spawn(async move {
         info!("starting kafka consume loop");
         let cons = consumer;
         let prod = producer;
         let db = worker_db;
+        let awc_client = Client::builder()
+            .add_default_header((header::ACCEPT_ENCODING, "br, gzip, deflate"))
+            .timeout(Duration::from_secs(30))
+            .finish();
         loop {
             match cons.recv().await {
                 Err(e) => error!(%e, "kafka error"),
@@ -133,20 +136,9 @@ async fn main() -> std::io::Result<()> {
                                 content: Some(user_content),
                                 ..Default::default()
                             };
-                            let creds =
-                                Credentials::new(openai_key.clone(), "https://api.openai.com");
                             info!(id = evt.id, "sending request to openai");
-                            match ChatCompletion::builder("gpt-4-turbo", vec![message])
-                                .credentials(creds)
-                                .create()
-                                .await
-                            {
-                                Ok(chat) => {
-                                    let answer = chat
-                                        .choices
-                                        .get(0)
-                                        .and_then(|c| c.message.content.clone())
-                                        .unwrap_or_default();
+                            match call_openai_chat(&awc_client, "gpt-4-turbo", vec![message]).await {
+                                Ok(answer) => {
                                     let is_regress = answer.to_lowercase().contains("true");
                                     info!(id = evt.id, is_regress, "openai classification done");
                                     let metrics = serde_json::json!({
