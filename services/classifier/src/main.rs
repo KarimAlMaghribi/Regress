@@ -55,6 +55,10 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting classifier service");
     let settings = Settings::new().unwrap();
+    if settings.openai_api_key.is_empty() {
+        error!("OPENAI_API_KEY environment variable is required");
+        panic!("OPENAI_API_KEY environment variable is required");
+    }
     let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls)
         .await
         .unwrap();
