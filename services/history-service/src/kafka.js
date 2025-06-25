@@ -6,6 +6,7 @@ import { broadcast } from './websocket.js';
 dotenv.config({ path: process.env.CONFIG || undefined });
 
 const broker = process.env.MESSAGE_BROKER_URL || 'localhost:9092';
+const pdfBase = process.env.PDF_INGEST_URL || 'http://localhost:8081';
 
 const kafka = new Kafka({ brokers: [broker] });
 const consumer = kafka.consumer({ groupId: 'history-service' });
@@ -19,8 +20,9 @@ export async function startKafka() {
         const data = JSON.parse(message.value.toString());
         const entry = {
           id: data.id,
+          prompt: data.prompt,
           result: { regress: data.regress },
-          pdfUrl: `http://pdf-ingest:8081/pdf/${data.id}`,
+          pdfUrl: `${pdfBase}/pdf/${data.id}`,
           timestamp: new Date().toISOString()
         };
         await insert(entry);

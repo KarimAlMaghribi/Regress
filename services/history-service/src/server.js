@@ -1,6 +1,7 @@
 import express from 'express';
 import http from 'http';
 import dotenv from 'dotenv';
+import cors from 'cors';
 import { init, latest } from './db.js';
 import { initWSS } from './websocket.js';
 import { startKafka } from './kafka.js';
@@ -8,6 +9,7 @@ import { startKafka } from './kafka.js';
 dotenv.config({ path: process.env.CONFIG || undefined });
 
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 app.get('/classifications', async (req, res) => {

@@ -20,16 +20,23 @@ async fn upload(
     producer: web::Data<FutureProducer>,
 ) -> Result<HttpResponse, Error> {
     info!("handling upload request");
+    let mut data = Vec::new();
+    let mut prompt = String::new();
     while let Some(item) = payload.next().await {
         let mut field = item?;
-        if field.name() != "file" {
-            continue;
+        if field.name() == "file" {
+            while let Some(chunk) = field.next().await {
+                let bytes: Bytes = chunk?;
+                data.extend_from_slice(&bytes);
+            }
+        } else if field.name() == "prompts" {
+            while let Some(chunk) = field.next().await {
+                let bytes: Bytes = chunk?;
+                prompt.push_str(std::str::from_utf8(&bytes).unwrap_or_default());
+            }
         }
-        let mut data = Vec::new();
-        while let Some(chunk) = field.next().await {
-            let bytes: Bytes = chunk?;
-            data.extend_from_slice(&bytes);
-        }
+    }
+    if !data.is_empty() {
         info!(bytes = data.len(), "storing pdf");
         let stmt = db
             .prepare("INSERT INTO pdfs (data) VALUES ($1) RETURNING id")
@@ -41,7 +48,7 @@ async fn upload(
             .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
         let id: i32 = row.get(0);
         info!(id, "pdf stored in database");
-        let payload = serde_json::to_string(&PdfUploaded { id }).unwrap();
+        let payload = serde_json::to_string(&PdfUploaded { id, prompt: prompt.clone() }).unwrap();
         let _ = producer
             .send(
                 FutureRecord::to("pdf-uploaded").payload(&payload).key(&()),

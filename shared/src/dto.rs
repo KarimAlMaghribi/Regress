@@ -13,16 +13,19 @@ pub struct UploadResponse {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PdfUploaded {
     pub id: i32,
+    pub prompt: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TextExtracted {
     pub id: i32,
     pub text: String,
+    pub prompt: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ClassificationResult {
     pub id: i32,
     pub regress: bool,
+    pub prompt: String,
 }
