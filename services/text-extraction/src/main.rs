@@ -15,12 +15,25 @@ use std::time::Duration;
 use tokio_postgres::NoTls;
 use tesseract::Tesseract;
 use tracing::{debug, error, info};
+use std::path::Path;
+use pdf_extract::extract_text_from_mem;
 
 fn extract_text(path: &str) -> Result<String> {
-    info!(?path, "starting ocr");
-    // Specify the language as an `Option<&str>` as required by `Tesseract::new`
-    // `Tesseract::set_image` takes ownership of `self` and returns it again, so
-    // reassign the returned value to preserve the instance for subsequent calls.
+    info!(?path, "starting text extraction");
+    if Path::new(path).extension().map(|e| e == "pdf").unwrap_or(false) {
+        if let Ok(data) = std::fs::read(path) {
+            match extract_text_from_mem(&data) {
+                Ok(text) => {
+                    info!(len = text.len(), "pdf text extracted");
+                    return Ok(text);
+                }
+                Err(e) => {
+                    error!(%e, "pdf extraction failed, falling back to ocr");
+                }
+            }
+        }
+    }
+
     let mut tess = Tesseract::new(None, Some("eng"))
         .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
     tess = tess
