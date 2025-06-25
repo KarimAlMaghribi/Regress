@@ -2,5 +2,6 @@
   "DATABASE_URL": "postgres://postgres:postgres@localhost:5432/regress",
   "MESSAGE_BROKER_URL": "localhost:9092",
   "SERVER_HOST": "0.0.0.0",
-  "SERVER_PORT": 8090
+  "SERVER_PORT": 8090,
+  "PDF_INGEST_URL": "http://localhost:8081"
 }

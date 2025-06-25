@@ -22,7 +22,11 @@ export async function insert(entry) {
   await pool.query(
     `INSERT INTO classification_history(id, prompt, result, pdf_url, timestamp)
      VALUES ($1,$2,$3,$4,$5)
-     ON CONFLICT (id) DO NOTHING`,
+     ON CONFLICT (id) DO UPDATE SET
+       prompt = EXCLUDED.prompt,
+       result = EXCLUDED.result,
+       pdf_url = EXCLUDED.pdf_url,
+       timestamp = EXCLUDED.timestamp`,
     [id, prompt, result, pdfUrl, timestamp]
   );
 }

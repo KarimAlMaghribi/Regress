@@ -154,7 +154,7 @@ async fn main() -> std::io::Result<()> {
                                             &stmt,
                                             &[
                                                 &evt.id.to_string(),
-                                                &prompt_id.to_string(),
+                                                &evt.prompt,
                                                 &is_regress,
                                                 &metrics,
                                                 &responses,
@@ -165,6 +165,7 @@ async fn main() -> std::io::Result<()> {
                                     let result = ClassificationResult {
                                         id: evt.id,
                                         regress: is_regress,
+                                        prompt: evt.prompt.clone(),
                                     };
                                     let payload = serde_json::to_string(&result).unwrap();
                                     info!(id = evt.id, "publishing classification-result event");

@@ -110,7 +110,7 @@ async fn main() -> std::io::Result<()> {
                                         continue;
                                     }
                                     info!(id = event.id, "stored ocr text");
-                                    let evt = TextExtracted { id: event.id, text };
+                                    let evt = TextExtracted { id: event.id, text, prompt: event.prompt.clone() };
                                     let payload = serde_json::to_string(&evt).unwrap();
                                     let _ = prod
                                         .send(
