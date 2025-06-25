@@ -5,7 +5,15 @@ COPY shared ./shared
 # Copy all service crates so the workspace is complete
 COPY services ./services
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential pkg-config clang libssl-dev ca-certificates tesseract-ocr \
+    && apt-get install -y --no-install-recommends \
+        build-essential \
+        pkg-config \
+        clang \
+        libssl-dev \
+        ca-certificates \
+        tesseract-ocr \
+        libtesseract-dev \
+        libleptonica-dev \
     && rm -rf /var/lib/apt/lists/* \
     && cargo build --release --package classifier --manifest-path services/classifier/Cargo.toml
 
