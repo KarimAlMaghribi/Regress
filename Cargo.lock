@@ -831,16 +831,13 @@ name = "classifier"
 version = "0.1.0"
 dependencies = [
  "actix-cors",
- "actix-multipart",
  "actix-web",
- "chrono",
- "futures-util",
+ "awc",
  "openai",
  "rdkafka",
  "serde",
  "serde_json",
  "shared",
- "tesseract",
  "tokio",
  "tokio-postgres",
  "tracing",
@@ -3488,7 +3485,10 @@ dependencies = [
 name = "shared"
 version = "0.1.0"
 dependencies = [
+ "actix-web",
+ "awc",
  "config",
+ "openai",
  "serde",
  "serde_json",
  "thiserror 2.0.12",
