@@ -4,7 +4,6 @@ import Layout from './components/Layout';
 import Upload from './pages/Upload';
 import Prompts from './pages/Prompts';
 import PromptAnalysis from './pages/PromptAnalysis';
-import AnalysisHistory from './pages/AnalysisHistory';
 import Dashboard from './pages/Dashboard';
 import ColorModeProvider from './ColorModeContext';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -33,7 +32,6 @@ function AnimatedRoutes() {
         <Route path="/upload" element={<PageFade><Upload /></PageFade>} />
         <Route path="/prompts" element={<PageFade><Prompts /></PageFade>} />
         <Route path="/analysis" element={<PageFade><PromptAnalysis /></PageFade>} />
-        <Route path="/history" element={<PageFade><AnalysisHistory /></PageFade>} />
         <Route path="*" element={<PageFade><Dashboard /></PageFade>} />
       </Routes>
     </AnimatePresence>

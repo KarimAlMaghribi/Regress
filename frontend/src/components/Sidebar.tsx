@@ -53,7 +53,6 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
     { text: 'Dashboard', to: '/', icon: <DashboardIcon /> },
     { text: 'Upload', to: '/upload', icon: <CloudUploadIcon /> },
     { text: 'Analysis', to: '/analysis', icon: <BarChartIcon /> },
-    { text: 'History', to: '/history', icon: <ListAltIcon /> },
   ];
   const secondary = [
     { text: 'Prompts', to: '/prompts', icon: <ListAltIcon />, badge: hasNewPrompts },
