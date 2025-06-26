@@ -21,7 +21,7 @@ export async function startKafka() {
         const entry = {
           id: data.id,
           prompt: data.prompt,
-          result: { regress: data.regress },
+          result: { regress: data.regress, answer: data.answer },
           pdfUrl: `${pdfBase}/pdf/${data.id}`,
           timestamp: new Date().toISOString()
         };

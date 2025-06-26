@@ -4,7 +4,7 @@ import PageHeader from '../components/PageHeader';
 
 interface HistoryEntry {
   timestamp: string;
-  result: any;
+  result: { regress: boolean; answer?: string };
   pdfUrl: string;
   prompt?: string | null;
   [key: string]: any;

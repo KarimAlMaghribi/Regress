@@ -146,7 +146,7 @@ async fn main() -> std::io::Result<()> {
                                         "cost": (evt.text.len() as f64) / 1000.0,
                                         "hallucinationRate": 0.0
                                     });
-                                    let responses = serde_json::json!([answer]);
+                                    let responses = serde_json::json!([answer.clone()]);
                                     let stmt = db.prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)").await.unwrap();
                                     info!(id = evt.id, "storing classification result");
                                     let _ = db
@@ -166,6 +166,7 @@ async fn main() -> std::io::Result<()> {
                                         id: evt.id,
                                         regress: is_regress,
                                         prompt: evt.prompt.clone(),
+                                        answer: answer.clone(),
                                     };
                                     let payload = serde_json::to_string(&result).unwrap();
                                     info!(id = evt.id, "publishing classification-result event");

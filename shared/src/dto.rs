@@ -28,4 +28,6 @@ pub struct ClassificationResult {
     pub id: i32,
     pub regress: bool,
     pub prompt: String,
+    /// Raw answer returned by the OpenAI API
+    pub answer: String,
 }
