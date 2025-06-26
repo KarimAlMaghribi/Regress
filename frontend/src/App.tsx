@@ -7,16 +7,19 @@ import PromptAnalysis from './pages/PromptAnalysis';
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import ColorModeProvider from './ColorModeContext';
+import { PromptNotificationProvider } from './context/PromptNotifications';
 import { AnimatePresence, motion } from 'framer-motion';
 
 export default function App() {
   return (
     <ColorModeProvider>
-      <Router>
-        <Layout>
-          <AnimatedRoutes />
-        </Layout>
-      </Router>
+      <PromptNotificationProvider>
+        <Router>
+          <Layout>
+            <AnimatedRoutes />
+          </Layout>
+        </Router>
+      </PromptNotificationProvider>
     </ColorModeProvider>
   );
 }
