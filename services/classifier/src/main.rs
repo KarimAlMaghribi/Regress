@@ -1,6 +1,6 @@
 use actix_cors::Cors;
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use actix_web::http::header;
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use awc::Client;
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
 use rdkafka::{
@@ -8,11 +8,11 @@ use rdkafka::{
     producer::{FutureProducer, FutureRecord},
     ClientConfig, Message,
 };
+use shared::openai_client::call_openai_chat;
 use shared::{
     config::Settings,
     dto::{ClassificationResult, TextExtracted},
 };
-use shared::openai_client::call_openai_chat;
 use std::time::Duration;
 use tokio_postgres::NoTls;
 use tracing::{error, info};
@@ -28,7 +28,7 @@ async fn get_result(
     let id = path.into_inner();
     info!(id, "fetching classification result");
     let stmt = db
-        .prepare("SELECT regress, metrics, responses FROM classifications WHERE id = $1")
+        .prepare("SELECT regress, metrics, responses, error FROM classifications WHERE id = $1")
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let row = db
@@ -36,15 +36,21 @@ async fn get_result(
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     if let Some(row) = row {
-        let regress: bool = row.get(0);
+        let regress: Option<bool> = row.get(0);
         let metrics: serde_json::Value = row.get(1);
         let responses: serde_json::Value = row.get(2);
+        let error_msg: Option<String> = row.get(3);
         let body = serde_json::json!({
             "regress": regress,
             "metrics": metrics,
             "responses": responses,
+            "error": error_msg,
         });
-        Ok(HttpResponse::Ok().json(body))
+        if error_msg.is_some() {
+            Ok(HttpResponse::InternalServerError().json(body))
+        } else {
+            Ok(HttpResponse::Ok().json(body))
+        }
     } else {
         Ok(HttpResponse::Accepted().finish())
     }
@@ -69,7 +75,7 @@ async fn main() -> std::io::Result<()> {
         }
     });
     db_client.execute(
-        "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN NOT NULL, metrics JSONB NOT NULL, responses JSONB NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN, metrics JSONB NOT NULL, responses JSONB NOT NULL, error TEXT)",
         &[]
     ).await.unwrap();
     db_client
@@ -91,7 +97,8 @@ async fn main() -> std::io::Result<()> {
         .create()
         .unwrap();
 
-    const DEFAULT_PROMPT: &str = "Is the following text describing a regression? Answer true or false.";
+    const DEFAULT_PROMPT: &str =
+        "Is the following text describing a regression? Answer true or false.";
 
     let db = db_client.clone();
     let prompt_id = settings.class_prompt_id;
@@ -137,7 +144,8 @@ async fn main() -> std::io::Result<()> {
                                 ..Default::default()
                             };
                             info!(id = evt.id, "sending request to openai");
-                            match call_openai_chat(&awc_client, "gpt-4-turbo", vec![message]).await {
+                            match call_openai_chat(&awc_client, "gpt-4-turbo", vec![message]).await
+                            {
                                 Ok(answer) => {
                                     let is_regress = answer.to_lowercase().contains("true");
                                     info!(id = evt.id, is_regress, "openai classification done");
@@ -147,7 +155,7 @@ async fn main() -> std::io::Result<()> {
                                         "hallucinationRate": 0.0
                                     });
                                     let responses = serde_json::json!([answer.clone()]);
-                                    let stmt = db.prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)").await.unwrap();
+                                    let stmt = db.prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses, error) VALUES ($1, $2, $3, $4, $5, $6)").await.unwrap();
                                     info!(id = evt.id, "storing classification result");
                                     let _ = db
                                         .execute(
@@ -158,6 +166,7 @@ async fn main() -> std::io::Result<()> {
                                                 &is_regress,
                                                 &metrics,
                                                 &responses,
+                                                &Option::<String>::None,
                                             ],
                                         )
                                         .await;
@@ -180,7 +189,26 @@ async fn main() -> std::io::Result<()> {
                                         .await;
                                     info!(id = evt.id, "classification-result published");
                                 }
-                                Err(e) => error!(%e, id = evt.id, "openai error"),
+                                Err(e) => {
+                                    error!(%e, id = evt.id, "openai error");
+                                    let metrics = serde_json::json!({});
+                                    let responses = serde_json::json!([]);
+                                    let err_msg = e.to_string();
+                                    let stmt = db.prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses, error) VALUES ($1, $2, $3, $4, $5, $6)").await.unwrap();
+                                    let _ = db
+                                        .execute(
+                                            &stmt,
+                                            &[
+                                                &evt.id.to_string(),
+                                                &evt.prompt,
+                                                &Option::<bool>::None,
+                                                &metrics,
+                                                &responses,
+                                                &err_msg,
+                                            ],
+                                        )
+                                        .await;
+                                }
                             }
                         }
                     }

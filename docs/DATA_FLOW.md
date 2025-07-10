@@ -24,10 +24,13 @@ The `classifications` table contains:
 | `prompts`    | TEXT      | comma separated prompt ids      |
 | `regress`    | BOOLEAN   | classification result           |
 | `metrics`    | JSONB     | analysis metrics                |
+| `error`      | TEXT      | error message if classification failed |
 
 A result can be polled via `GET /results/{id}` from the classifier service.
 While processing, the endpoint responds with HTTP `202 Accepted` so callers
-should retry until a `200 OK` payload is returned.
+should retry until a `200 OK` payload is returned. If an error occurs during
+classification the endpoint responds with `500` and includes an `error`
+field in the JSON body.
 
 ## Prompts
 - **text** (`string`): managed in the Prompts page and persisted by the
