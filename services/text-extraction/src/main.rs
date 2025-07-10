@@ -1,4 +1,4 @@
-use actix_web::{web, App, HttpServer, Responder};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use actix_cors::Cors;
 use shared::{
     config::Settings,
@@ -48,6 +48,63 @@ fn extract_text(path: &str) -> Result<String> {
 
 async fn health() -> impl Responder {
     "OK"
+}
+
+#[derive(serde::Serialize)]
+struct TextEntry {
+    id: i32,
+}
+
+#[derive(serde::Deserialize)]
+struct AnalysisReq {
+    ids: Vec<i32>,
+    prompt: String,
+}
+
+async fn list_texts(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<HttpResponse> {
+    let stmt = db
+        .prepare("SELECT pdf_id FROM pdf_texts ORDER BY pdf_id DESC")
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let rows = db
+        .query(&stmt, &[])
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let items: Vec<TextEntry> = rows.into_iter().map(|r| TextEntry { id: r.get(0) }).collect();
+    Ok(HttpResponse::Ok().json(items))
+}
+
+async fn start_analysis(
+    db: web::Data<tokio_postgres::Client>,
+    prod: web::Data<FutureProducer>,
+    web::Json(req): web::Json<AnalysisReq>,
+) -> actix_web::Result<HttpResponse> {
+    for id in req.ids {
+        let stmt = db
+            .prepare("SELECT text FROM pdf_texts WHERE pdf_id = $1")
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?;
+        if let Ok(row) = db.query_one(&stmt, &[&id]).await {
+            let text: String = row.get(0);
+            let up = PdfUploaded { id, prompt: req.prompt.clone() };
+            let up_payload = serde_json::to_string(&up).unwrap();
+            let _ = prod
+                .send(
+                    FutureRecord::to("pdf-uploaded").payload(&up_payload).key(&()),
+                    Duration::from_secs(0),
+                )
+                .await;
+            let evt = TextExtracted { id, text, prompt: req.prompt.clone() };
+            let payload = serde_json::to_string(&evt).unwrap();
+            let _ = prod
+                .send(
+                    FutureRecord::to("text-extracted").payload(&payload).key(&()),
+                    Duration::from_secs(0),
+                )
+                .await;
+        }
+    }
+    Ok(HttpResponse::Ok().finish())
 }
 
 #[actix_web::main]
@@ -132,10 +189,16 @@ async fn main() -> std::io::Result<()> {
     });
 
     info!("starting http server on port 8083");
-    HttpServer::new(|| {
+    let producer_data = web::Data::new(producer.clone());
+    let db_data = db.clone();
+    HttpServer::new(move || {
         App::new()
             .wrap(Cors::permissive())
+            .app_data(db_data.clone())
+            .app_data(producer_data.clone())
             .route("/health", web::get().to(health))
+            .route("/texts", web::get().to(list_texts))
+            .route("/analyze", web::post().to(start_analysis))
     })
         .bind(("0.0.0.0", 8083))?
         .run()

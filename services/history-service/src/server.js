@@ -2,7 +2,7 @@ import express from 'express';
 import http from 'http';
 import dotenv from 'dotenv';
 import cors from 'cors';
-import { init, latest } from './db.js';
+import { init, latest, listByStatus } from './db.js';
 import { initWSS } from './websocket.js';
 import { startKafka } from './kafka.js';
 
@@ -15,6 +15,12 @@ app.use(express.json());
 app.get('/classifications', async (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
   const data = await latest(limit);
+  res.json(data);
+});
+
+app.get('/analyses', async (req, res) => {
+  const status = req.query.status;
+  const data = await listByStatus(status);
   res.json(data);
 });
 

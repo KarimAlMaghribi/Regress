@@ -1,6 +1,6 @@
 import { Kafka } from 'kafkajs';
 import dotenv from 'dotenv';
-import { insert } from './db.js';
+import { markPending, insertResult } from './db.js';
 import { broadcast } from './websocket.js';
 
 dotenv.config({ path: process.env.CONFIG || undefined });
@@ -13,20 +13,32 @@ const consumer = kafka.consumer({ groupId: 'history-service' });
 
 export async function startKafka() {
   await consumer.connect();
+  await consumer.subscribe({ topic: 'pdf-uploaded', fromBeginning: false });
   await consumer.subscribe({ topic: 'classification-result', fromBeginning: false });
   await consumer.run({
-    eachMessage: async ({ message }) => {
+    eachMessage: async ({ topic, message }) => {
       try {
         const data = JSON.parse(message.value.toString());
-        const entry = {
-          id: data.id,
-          prompt: data.prompt,
-          result: { regress: data.regress, answer: data.answer },
-          pdfUrl: `${pdfBase}/pdf/${data.id}`,
-          timestamp: new Date().toISOString()
-        };
-        await insert(entry);
-        broadcast(entry);
+        if (topic === 'pdf-uploaded') {
+          const entry = {
+            id: data.id,
+            prompt: data.prompt,
+            pdfUrl: `${pdfBase}/pdf/${data.id}`,
+            timestamp: new Date().toISOString()
+          };
+          await markPending(entry);
+          broadcast({ ...entry, status: 'running', result: null });
+        } else if (topic === 'classification-result') {
+          const entry = {
+            id: data.id,
+            prompt: data.prompt,
+            result: { regress: data.regress, answer: data.answer },
+            pdfUrl: `${pdfBase}/pdf/${data.id}`,
+            timestamp: new Date().toISOString()
+          };
+          await insertResult(entry);
+          broadcast({ ...entry, status: 'completed' });
+        }
       } catch (e) {
         console.error('Kafka message error', e);
       }
