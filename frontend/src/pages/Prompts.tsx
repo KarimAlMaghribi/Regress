@@ -45,7 +45,8 @@ export default function Prompts() {
         const data = d.map(p => ({ ...p, tags: JSON.parse(localStorage.getItem(`promptTags_${p.id}`) || '[]') }));
         setPrompts(data);
         markAllRead(d.map(p => p.id));
-      });
+      })
+      .catch(e => console.error('load prompts', e));
   };
 
   useEffect(() => {
@@ -57,7 +58,8 @@ export default function Prompts() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: newText })
-    }).then(() => { setNewText(''); load(); });
+    }).then(() => { setNewText(''); load(); })
+      .catch(e => console.error('create prompt', e));
   };
 
   const update = (id: number, text: string, tags: string[]) => {
@@ -68,7 +70,7 @@ export default function Prompts() {
     }).then(() => {
       localStorage.setItem(`promptTags_${id}`, JSON.stringify(tags));
       load();
-    });
+    }).catch(e => console.error('update prompt', e));
   };
 
   const remove = (id: number) => {
@@ -76,7 +78,7 @@ export default function Prompts() {
       localStorage.removeItem(`promptTags_${id}`);
       setFavorites(f => f.filter(v => v !== id));
       load();
-    });
+    }).catch(e => console.error('remove prompt', e));
   };
 
   const toggleFav = (id: number) => {

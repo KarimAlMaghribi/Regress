@@ -48,6 +48,9 @@ export default function History() {
   useEffect(() => {
     const url = import.meta.env.VITE_HISTORY_WS || 'ws://localhost:8090';
     const socket = new WebSocket(url);
+    socket.addEventListener('error', e => {
+      console.error('history ws', e);
+    });
     socket.addEventListener('message', ev => {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'history') {

@@ -16,10 +16,12 @@ export default function Analyses() {
   const load = () => {
     fetch('http://localhost:8090/analyses?status=running')
       .then(r => r.json())
-      .then(setRunning);
+      .then(setRunning)
+      .catch(e => console.error('running analyses', e));
     fetch('http://localhost:8090/analyses?status=completed')
       .then(r => r.json())
-      .then(setDone);
+      .then(setDone)
+      .catch(e => console.error('completed analyses', e));
   };
 
   useEffect(load, []);
