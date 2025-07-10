@@ -135,10 +135,12 @@ async fn main() -> std::io::Result<()> {
         .create()
         .unwrap();
     let db = web::Data::new(db_client);
+    let db_consumer = db.clone();
+    let producer_consumer = producer.clone();
     tokio::spawn(async move {
-        let db = db.clone();
+        let db = db_consumer;
         let cons = consumer;
-        let prod = producer;
+        let prod = producer_consumer;
         info!("starting kafka consume loop");
         loop {
             match cons.recv().await {
