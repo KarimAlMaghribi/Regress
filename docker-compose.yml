@@ -85,9 +85,10 @@ services:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        VITE_CLASSIFIER_URL: http://classifier:8084
-        VITE_INGEST_URL: http://pdf-ingest:8081
-        VITE_HISTORY_WS: ws://history-service:8090
+        # Use host ports so the browser can reach the services directly
+        VITE_CLASSIFIER_URL: http://localhost:8084
+        VITE_INGEST_URL: http://localhost:8081
+        VITE_HISTORY_WS: ws://localhost:8090
     ports:
       - "3001:80"
 
