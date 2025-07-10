@@ -96,6 +96,13 @@ async fn main() -> std::io::Result<()> {
         )
         .await
         .unwrap();
+    db_client
+        .execute(
+            "ALTER TABLE classifications ALTER COLUMN regress DROP NOT NULL",
+            &[],
+        )
+        .await
+        .unwrap();
     let db = web::Data::new(db_client);
     HttpServer::new(move || {
         App::new()
