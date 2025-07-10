@@ -1,6 +1,6 @@
 use actix_cors::Cors;
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use actix_web::http::header;
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use awc::Client;
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
 use rdkafka::{
@@ -8,11 +8,11 @@ use rdkafka::{
     producer::{FutureProducer, FutureRecord},
     ClientConfig, Message,
 };
+use shared::openai_client::call_openai_chat;
 use shared::{
     config::Settings,
     dto::{ClassificationResult, TextExtracted},
 };
-use shared::openai_client::call_openai_chat;
 use std::time::Duration;
 use tokio_postgres::NoTls;
 use tracing::{error, info};
@@ -59,9 +59,15 @@ async fn main() -> std::io::Result<()> {
         error!("OPENAI_API_KEY environment variable is required");
         panic!("OPENAI_API_KEY environment variable is required");
     }
-    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls)
-        .await
-        .unwrap();
+    let (db_client, connection) = loop {
+        match tokio_postgres::connect(&settings.database_url, NoTls).await {
+            Ok(conn) => break conn,
+            Err(e) => {
+                info!(%e, "database connection failed, retrying in 1s");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    };
     let db_client = web::Data::new(db_client);
     actix_web::rt::spawn(async move {
         if let Err(e) = connection.await {
@@ -91,7 +97,8 @@ async fn main() -> std::io::Result<()> {
         .create()
         .unwrap();
 
-    const DEFAULT_PROMPT: &str = "Is the following text describing a regression? Answer true or false.";
+    const DEFAULT_PROMPT: &str =
+        "Is the following text describing a regression? Answer true or false.";
 
     let db = db_client.clone();
     let prompt_id = settings.class_prompt_id;
@@ -137,7 +144,8 @@ async fn main() -> std::io::Result<()> {
                                 ..Default::default()
                             };
                             info!(id = evt.id, "sending request to openai");
-                            match call_openai_chat(&awc_client, "gpt-4-turbo", vec![message]).await {
+                            match call_openai_chat(&awc_client, "gpt-4-turbo", vec![message]).await
+                            {
                                 Ok(answer) => {
                                     let is_regress = answer.to_lowercase().contains("true");
                                     info!(id = evt.id, is_regress, "openai classification done");
