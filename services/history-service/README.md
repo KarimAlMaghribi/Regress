@@ -1,13 +1,13 @@
 # History Service
 
-Consumes `classification-result` Kafka topic, stores entries in `classification_history` table, and exposes REST and WebSocket APIs.
+Consumes Kafka events and stores classification history in PostgreSQL. Provides a REST API and WebSocket for retrieving history updates.
 
 ## Usage
 
-1. Copy `config.example.json` to `.env` or specify via `CONFIG` env variable.
-2. Run `npm install` inside this directory.
-3. Start service with `npm start`.
+1. Build the workspace with `cargo build --release` or use Docker.
+2. Start the service with `cargo run -p history-service` or the container image.
 
-The server exposes:
+The service exposes:
 - `GET /classifications?limit=50` – list recent classifications.
-- WebSocket at the same host – sends the last 50 entries on connect and pushes new ones in real time.
+- `GET /analyses?status=running` – list analyses by status.
+- WebSocket on `/` – sends the last 50 entries on connect and pushes new ones in real time.
