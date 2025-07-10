@@ -86,6 +86,13 @@ async fn main() -> std::io::Result<()> {
     ).await.unwrap();
     db_client
         .execute(
+            "ALTER TABLE classifications ADD COLUMN IF NOT EXISTS error TEXT",
+            &[],
+        )
+        .await
+        .unwrap();
+    db_client
+        .execute(
             "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL)",
             &[],
         )
