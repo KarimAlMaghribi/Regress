@@ -93,6 +93,13 @@ async fn main() -> std::io::Result<()> {
         .unwrap();
     db_client
         .execute(
+            "ALTER TABLE classifications ALTER COLUMN regress DROP NOT NULL",
+            &[],
+        )
+        .await
+        .unwrap();
+    db_client
+        .execute(
             "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL)",
             &[],
         )
