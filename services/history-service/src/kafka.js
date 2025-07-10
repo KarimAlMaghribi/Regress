@@ -12,9 +12,12 @@ const kafka = new Kafka({ brokers: [broker] });
 const consumer = kafka.consumer({ groupId: 'history-service' });
 
 export async function startKafka() {
+  console.log('connecting to kafka broker', broker);
   await consumer.connect();
+  console.log('kafka consumer connected');
   await consumer.subscribe({ topic: 'pdf-uploaded', fromBeginning: false });
   await consumer.subscribe({ topic: 'classification-result', fromBeginning: false });
+  console.log('kafka subscriptions active');
   await consumer.run({
     eachMessage: async ({ topic, message }) => {
       try {

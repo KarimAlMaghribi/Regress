@@ -31,7 +31,12 @@ initWSS(server);
 const PORT = process.env.SERVER_PORT || 8090;
 const HOST = process.env.SERVER_HOST || '0.0.0.0';
 
-await init();
+try {
+  await init();
+} catch (e) {
+  console.error('database init failed', e);
+  process.exit(1);
+}
 startKafka().catch(e => console.error('Kafka start failed', e));
 
 server.listen(PORT, HOST, () => {
