@@ -16,6 +16,9 @@ export async function init() {
     timestamp TIMESTAMPTZ,
     status TEXT DEFAULT 'running'
   )`);
+  await pool.query(
+    `ALTER TABLE classification_history ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'running'`
+  );
 }
 
 export async function markPending({ id, prompt, pdfUrl, timestamp }) {

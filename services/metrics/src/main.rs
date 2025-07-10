@@ -89,6 +89,13 @@ async fn main() -> std::io::Result<()> {
         )
         .await
         .unwrap();
+    db_client
+        .execute(
+            "ALTER TABLE classifications ADD COLUMN IF NOT EXISTS error TEXT",
+            &[],
+        )
+        .await
+        .unwrap();
     let db = web::Data::new(db_client);
     HttpServer::new(move || {
         App::new()
