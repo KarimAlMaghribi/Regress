@@ -84,7 +84,7 @@ async fn main() -> std::io::Result<()> {
     });
     db_client
         .execute(
-            "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN NOT NULL, metrics JSONB NOT NULL, responses JSONB NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN, metrics JSONB NOT NULL, responses JSONB NOT NULL, error TEXT)",
             &[],
         )
         .await

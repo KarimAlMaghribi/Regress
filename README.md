@@ -45,7 +45,8 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
 3. The `classifier` consumes that event, calls OpenAI and stores the result in
    the `classifications` table. Poll `GET http://localhost:8084/results/{id}`
    until data is returned. The endpoint returns `202 Accepted` while the
-   classification is still pending.
+   classification is still pending. If the OpenAI request fails the endpoint
+   returns `500` with an `error` field describing the problem.
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to
@@ -69,9 +70,10 @@ docker compose up --build
 
 After the build completes, open <http://localhost:3000> in your browser to use the application.
 
-The frontend expects three environment variables:
+The frontend expects the following environment variables:
 `VITE_INGEST_URL` for the upload service (defaults to `http://localhost:8081`),
 `VITE_CLASSIFIER_URL` for the classifier service (defaults to
-`http://localhost:8084`), and `VITE_HISTORY_WS` for the history WebSocket
+`http://localhost:8084`), `VITE_TEXT_URL` for the OCR text service (defaults to
+`http://localhost:8083`), and `VITE_HISTORY_WS` for the history WebSocket
 (defaults to `ws://localhost:8090`).
 

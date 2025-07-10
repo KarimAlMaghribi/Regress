@@ -1,6 +1,6 @@
 use actix_cors::Cors;
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use actix_web::http::header;
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use awc::Client;
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
 use rdkafka::{
@@ -8,11 +8,12 @@ use rdkafka::{
     producer::{FutureProducer, FutureRecord},
     ClientConfig, Message,
 };
+use serde::{Deserialize, Serialize};
+use shared::openai_client::call_openai_chat;
 use shared::{
     config::Settings,
     dto::{ClassificationResult, TextExtracted},
 };
-use shared::openai_client::call_openai_chat;
 use std::time::Duration;
 use tokio_postgres::NoTls;
 use tracing::{error, info};
@@ -28,7 +29,7 @@ async fn get_result(
     let id = path.into_inner();
     info!(id, "fetching classification result");
     let stmt = db
-        .prepare("SELECT regress, metrics, responses FROM classifications WHERE id = $1")
+        .prepare("SELECT regress, metrics, responses, error FROM classifications WHERE id = $1")
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let row = db
@@ -36,18 +37,135 @@ async fn get_result(
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     if let Some(row) = row {
-        let regress: bool = row.get(0);
+        let regress: Option<bool> = row.get(0);
         let metrics: serde_json::Value = row.get(1);
         let responses: serde_json::Value = row.get(2);
+        let error_msg: Option<String> = row.get(3);
         let body = serde_json::json!({
             "regress": regress,
             "metrics": metrics,
             "responses": responses,
+            "error": error_msg,
         });
-        Ok(HttpResponse::Ok().json(body))
+        if error_msg.is_some() {
+            Ok(HttpResponse::InternalServerError().json(body))
+        } else {
+            Ok(HttpResponse::Ok().json(body))
+        }
     } else {
         Ok(HttpResponse::Accepted().finish())
     }
+}
+
+#[derive(Deserialize)]
+struct ClassifyRequest {
+    id: i32,
+    prompt: String,
+}
+
+#[derive(Serialize)]
+struct ClassifyResponse {
+    id: i32,
+}
+
+async fn classify_req(
+    req: web::Json<ClassifyRequest>,
+    db: web::Data<tokio_postgres::Client>,
+    producer: web::Data<FutureProducer>,
+    settings: web::Data<Settings>,
+) -> actix_web::Result<HttpResponse> {
+    let id = req.id;
+    let prompt = req.prompt.clone();
+    let db_clone = db.clone();
+    let prod = producer.get_ref().clone();
+    let api_key_missing = settings.openai_api_key.is_empty();
+
+    actix_web::rt::spawn(async move {
+        if api_key_missing {
+            error!("OPENAI_API_KEY missing");
+            return;
+        }
+        let stmt = db_clone
+            .prepare("SELECT text FROM pdf_texts WHERE pdf_id=$1")
+            .await
+            .unwrap();
+        if let Ok(row) = db_clone.query_one(&stmt, &[&id]).await {
+            let text: String = row.get(0);
+            let awc_client = Client::builder()
+                .add_default_header((header::ACCEPT_ENCODING, "br, gzip, deflate"))
+                .timeout(Duration::from_secs(30))
+                .finish();
+            let user_content = format!(
+                "{}\n\n=== BEGIN OCR TEXT ===\n{}\n=== END OCR TEXT ===",
+                prompt, text
+            );
+            let message = ChatCompletionMessage {
+                role: ChatCompletionMessageRole::User,
+                content: Some(user_content),
+                ..Default::default()
+            };
+            match call_openai_chat(&awc_client, "gpt-4-turbo", vec![message]).await {
+                Ok(answer) => {
+                    let is_regress = answer.to_lowercase().contains("true");
+                    let metrics = serde_json::json!({
+                        "accuracy": 0.0,
+                        "cost": (text.len() as f64) / 1000.0,
+                        "hallucinationRate": 0.0
+                    });
+                    let responses = serde_json::json!([answer.clone()]);
+                    let stmt = db_clone
+                        .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses, error) VALUES ($1,$2,$3,$4,$5,$6)")
+                        .await
+                        .unwrap();
+                    let _ = db_clone
+                        .execute(
+                            &stmt,
+                            &[&id.to_string(), &prompt, &is_regress, &metrics, &responses, &Option::<String>::None],
+                        )
+                        .await;
+                    let result = ClassificationResult {
+                        id,
+                        regress: is_regress,
+                        prompt: prompt.clone(),
+                        answer,
+                    };
+                    let payload = serde_json::to_string(&result).unwrap();
+                    let _ = prod
+                        .send(
+                            FutureRecord::to("classification-result")
+                                .payload(&payload)
+                                .key(&()),
+                            Duration::from_secs(0),
+                        )
+                        .await;
+                }
+                Err(e) => {
+                    error!(%e, id, "openai error");
+                    let metrics = serde_json::json!({});
+                    let responses = serde_json::json!([]);
+                    let stmt = db_clone
+                        .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses, error) VALUES ($1,$2,$3,$4,$5,$6)")
+                        .await
+                        .unwrap();
+                    let _ = db_clone
+                        .execute(
+                            &stmt,
+                            &[
+                                &id.to_string(),
+                                &prompt,
+                                &Option::<bool>::None,
+                                &metrics,
+                                &responses,
+                                &e.to_string(),
+                            ],
+                        )
+                        .await;
+                }
+            }
+        }
+    });
+
+    Ok(HttpResponse::Accepted().json(ClassifyResponse { id }))
 }
 
 #[actix_web::main]
@@ -59,9 +177,16 @@ async fn main() -> std::io::Result<()> {
         error!("OPENAI_API_KEY environment variable is required");
         panic!("OPENAI_API_KEY environment variable is required");
     }
-    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls)
-        .await
-        .unwrap();
+    let settings_data = web::Data::new(settings.clone());
+    let (db_client, connection) = loop {
+        match tokio_postgres::connect(&settings.database_url, NoTls).await {
+            Ok(conn) => break conn,
+            Err(e) => {
+                info!(%e, "database connection failed, retrying in 1s");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    };
     let db_client = web::Data::new(db_client);
     actix_web::rt::spawn(async move {
         if let Err(e) = connection.await {
@@ -69,7 +194,7 @@ async fn main() -> std::io::Result<()> {
         }
     });
     db_client.execute(
-        "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN NOT NULL, metrics JSONB NOT NULL, responses JSONB NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN, metrics JSONB NOT NULL, responses JSONB NOT NULL, error TEXT)",
         &[]
     ).await.unwrap();
     db_client
@@ -90,8 +215,10 @@ async fn main() -> std::io::Result<()> {
         .set("bootstrap.servers", &settings.message_broker_url)
         .create()
         .unwrap();
+    let http_producer = producer.clone();
 
-    const DEFAULT_PROMPT: &str = "Is the following text describing a regression? Answer true or false.";
+    const DEFAULT_PROMPT: &str =
+        "Is the following text describing a regression? Answer true or false.";
 
     let db = db_client.clone();
     let prompt_id = settings.class_prompt_id;
@@ -137,7 +264,8 @@ async fn main() -> std::io::Result<()> {
                                 ..Default::default()
                             };
                             info!(id = evt.id, "sending request to openai");
-                            match call_openai_chat(&awc_client, "gpt-4-turbo", vec![message]).await {
+                            match call_openai_chat(&awc_client, "gpt-4-turbo", vec![message]).await
+                            {
                                 Ok(answer) => {
                                     let is_regress = answer.to_lowercase().contains("true");
                                     info!(id = evt.id, is_regress, "openai classification done");
@@ -147,7 +275,7 @@ async fn main() -> std::io::Result<()> {
                                         "hallucinationRate": 0.0
                                     });
                                     let responses = serde_json::json!([answer.clone()]);
-                                    let stmt = db.prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses) VALUES ($1, $2, $3, $4, $5)").await.unwrap();
+                                    let stmt = db.prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses, error) VALUES ($1, $2, $3, $4, $5, $6)").await.unwrap();
                                     info!(id = evt.id, "storing classification result");
                                     let _ = db
                                         .execute(
@@ -157,10 +285,11 @@ async fn main() -> std::io::Result<()> {
                                                 &evt.prompt,
                                                 &is_regress,
                                                 &metrics,
-                                                &responses,
-                                            ],
-                                        )
-                                        .await;
+                                            &responses,
+                                            &Option::<String>::None,
+                                        ],
+                                    )
+                                    .await;
                                     info!(id = evt.id, "classification result stored");
                                     let result = ClassificationResult {
                                         id: evt.id,
@@ -180,7 +309,25 @@ async fn main() -> std::io::Result<()> {
                                         .await;
                                     info!(id = evt.id, "classification-result published");
                                 }
-                                Err(e) => error!(%e, id = evt.id, "openai error"),
+                                Err(e) => {
+                                    error!(%e, id = evt.id, "openai error");
+                                    let metrics = serde_json::json!({});
+                                    let responses = serde_json::json!([]);
+                                    let stmt = db.prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses, error) VALUES ($1, $2, $3, $4, $5, $6)").await.unwrap();
+                                    let _ = db
+                                        .execute(
+                                            &stmt,
+                                            &[
+                                                &evt.id.to_string(),
+                                                &evt.prompt,
+                                                &Option::<bool>::None,
+                                                &metrics,
+                                                &responses,
+                                                &e.to_string(),
+                                            ],
+                                        )
+                                        .await;
+                                }
                             }
                         }
                     }
@@ -193,7 +340,10 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .wrap(Cors::permissive())
             .app_data(db.clone())
+            .app_data(web::Data::new(http_producer.clone()))
+            .app_data(settings_data.clone())
             .route("/results/{id}", web::get().to(get_result))
+            .route("/classify", web::post().to(classify_req))
             .route("/health", web::get().to(health))
     })
     .bind(("0.0.0.0", 8084))?
@@ -205,6 +355,7 @@ async fn main() -> std::io::Result<()> {
 mod tests {
     use super::*;
     use actix_web::{test, web, App};
+    use rdkafka::{producer::FutureProducer, ClientConfig};
 
     #[actix_web::test]
     async fn health_ok() {
@@ -212,5 +363,49 @@ mod tests {
         let req = test::TestRequest::get().uri("/health").to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
+    }
+
+    #[actix_web::test]
+    async fn classify_accepted() {
+        let db_url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/postgres".into());
+        if let Ok((client, connection)) = tokio_postgres::connect(&db_url, NoTls).await {
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            client.execute("CREATE TABLE IF NOT EXISTS pdf_texts (pdf_id INTEGER PRIMARY KEY, text TEXT NOT NULL)", &[]).await.unwrap();
+            client
+                .execute(
+                    "INSERT INTO pdf_texts (pdf_id, text) VALUES (1, 'test')",
+                    &[],
+                )
+                .await
+                .unwrap();
+            client.execute("CREATE TABLE IF NOT EXISTS classifications (id SERIAL PRIMARY KEY, run_time TIMESTAMPTZ DEFAULT now(), file_name TEXT, prompts TEXT, regress BOOLEAN, metrics JSONB NOT NULL, responses JSONB NOT NULL, error TEXT)", &[]).await.unwrap();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(client))
+                    .app_data(web::Data::new(
+                        ClientConfig::new().create::<FutureProducer>().unwrap(),
+                    ))
+                    .app_data(web::Data::new(Settings {
+                        database_url: String::new(),
+                        message_broker_url: String::new(),
+                        openai_api_key: String::new(),
+                        class_prompt_id: 0,
+                    }))
+                    .route("/classify", web::post().to(classify_req)),
+            )
+            .await;
+            let req = test::TestRequest::post()
+                .uri("/classify")
+                .set_json(&ClassifyRequest {
+                    id: 1,
+                    prompt: "p".into(),
+                })
+                .to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), 202);
+        }
     }
 }
