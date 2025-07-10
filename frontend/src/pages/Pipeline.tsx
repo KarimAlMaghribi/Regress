@@ -18,10 +18,12 @@ export default function Pipeline() {
   const load = () => {
     fetch('http://localhost:8083/texts')
       .then(r => r.json())
-      .then(setPdfs);
+      .then(setPdfs)
+      .catch(e => setSnack(`Fehler: ${e}`));
     fetch('http://localhost:8082/prompts')
       .then(r => r.json())
-      .then(setPrompts);
+      .then(setPrompts)
+      .catch(e => setSnack(`Fehler: ${e}`));
   };
 
   useEffect(load, []);
