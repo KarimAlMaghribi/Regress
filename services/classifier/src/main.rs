@@ -161,7 +161,7 @@ async fn main() -> std::io::Result<()> {
                             {
                                 Ok(answer) => {
                                     let is_regress = answer.to_lowercase().contains("true");
-                                    info!(id = evt.id, is_regress, "openai classification done");
+                                    info!(id = evt.id, is_regress, %answer, "openai classification done");
                                     let metrics = serde_json::json!({
                                         "accuracy": 0.0,
                                         "cost": (evt.text.len() as f64) / 1000.0,
@@ -183,7 +183,7 @@ async fn main() -> std::io::Result<()> {
                                             ],
                                         )
                                         .await;
-                                    info!(id = evt.id, "classification result stored");
+                                    info!(id = evt.id, is_regress, %answer, "classification result stored");
                                     let result = ClassificationResult {
                                         id: evt.id,
                                         regress: is_regress,
@@ -191,7 +191,7 @@ async fn main() -> std::io::Result<()> {
                                         answer: answer.clone(),
                                     };
                                     let payload = serde_json::to_string(&result).unwrap();
-                                    info!(id = evt.id, "publishing classification-result event");
+                                    info!(id = evt.id, is_regress, %answer, "publishing classification-result event");
                                     let _ = prod
                                         .send(
                                             FutureRecord::to("classification-result")
@@ -200,7 +200,7 @@ async fn main() -> std::io::Result<()> {
                                             Duration::from_secs(0),
                                         )
                                         .await;
-                                    info!(id = evt.id, "classification-result published");
+                                    info!(id = evt.id, is_regress, "classification-result published");
                                 }
                                 Err(e) => {
                                     error!(%e, id = evt.id, "openai error");

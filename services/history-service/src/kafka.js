@@ -19,6 +19,7 @@ export async function startKafka() {
     eachMessage: async ({ topic, message }) => {
       try {
         const data = JSON.parse(message.value.toString());
+        console.log('kafka message received', topic, data.id);
         if (topic === 'pdf-uploaded') {
           const entry = {
             id: data.id,
@@ -27,6 +28,7 @@ export async function startKafka() {
             timestamp: new Date().toISOString()
           };
           await markPending(entry);
+          console.log('marked pending', entry.id);
           broadcast({ ...entry, status: 'running', result: null });
         } else if (topic === 'classification-result') {
           const entry = {
@@ -37,6 +39,7 @@ export async function startKafka() {
             timestamp: new Date().toISOString()
           };
           await insertResult(entry);
+          console.log('stored result', entry.id, entry.result);
           broadcast({ ...entry, status: 'completed' });
         }
       } catch (e) {
