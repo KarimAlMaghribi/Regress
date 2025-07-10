@@ -45,7 +45,8 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
 3. The `classifier` consumes that event, calls OpenAI and stores the result in
    the `classifications` table. Poll `GET http://localhost:8084/results/{id}`
    until data is returned. The endpoint returns `202 Accepted` while the
-   classification is still pending.
+   classification is still pending. If the OpenAI request fails the endpoint
+   returns `500` with an `error` field describing the problem.
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to
