@@ -20,6 +20,7 @@ app.get('/classifications', async (req, res) => {
 
 app.get('/analyses', async (req, res) => {
   const status = req.query.status;
+  console.log('list analyses', status);
   const data = await listByStatus(status);
   res.json(data);
 });
