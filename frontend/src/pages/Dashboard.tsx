@@ -4,6 +4,8 @@ import PageHeader from '../components/PageHeader';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import InsightsIcon from '@mui/icons-material/Insights';
+import HistoryIcon from '@mui/icons-material/History';
+import BuildIcon from '@mui/icons-material/Build';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
 
@@ -21,10 +23,22 @@ const cards = [
     to: '/prompts',
   },
   {
+    icon: <BuildIcon fontSize="large" />,
+    title: 'Pipeline',
+    desc: 'Analysen starten',
+    to: '/pipeline',
+  },
+  {
     icon: <InsightsIcon fontSize="large" />,
     title: 'Analysis',
     desc: 'Metriken und Auswertungen',
     to: '/analysis',
+  },
+  {
+    icon: <HistoryIcon fontSize="large" />,
+    title: 'Analysen',
+    desc: 'Laufende und fertige Analysen',
+    to: '/analyses',
   },
 ];
 
