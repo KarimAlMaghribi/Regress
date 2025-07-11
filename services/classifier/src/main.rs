@@ -93,7 +93,7 @@ async fn handle_openai(
     let schema = serde_json::json!({
         "type": "object",
         "properties": {
-            "answer": { "type": "string", "description": "Die menschenlesbare Erkl\u00e4rung" },
+            "answer": { "type": "string", "description": "Die menschenlesbare Erklärung" },
             "result": { "type": "boolean", "description": "Das Hauptergebnis" },
             "source": { "type": "string", "description": "Die Textstelle, aus der das Ergebnis extrahiert wurde" }
         },
