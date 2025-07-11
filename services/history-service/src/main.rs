@@ -275,6 +275,8 @@ async fn start_kafka(
                                     pdf_url: format!("{}/pdf/{}", pdf_base, data.id),
                                     timestamp: Utc::now(),
                                     status: "running".into(),
+                                    score: None,
+                                    result_label: None,
                                 };
                                 mark_pending(&db, &entry).await;
                                 let _ = tx.send(entry.clone());
