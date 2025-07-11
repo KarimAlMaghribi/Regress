@@ -56,7 +56,12 @@ export default function Pipeline() {
       const id = selected[0];
       if (id) {
         fetch(`http://localhost:8084/results/${id}`)
-          .then(r => r.json())
+          .then(async r => {
+            if (r.status === 202) {
+              throw new Error('Analyse läuft noch');
+            }
+            return r.json();
+          })
           .then(setAnalysis)
           .catch(e => setSnack(`Fehler: ${e}`));
       }
