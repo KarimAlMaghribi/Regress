@@ -223,8 +223,13 @@ export default function AnalysisHistory() {
                 {selected.responses?.map((r, i) => (
                   <Paper key={i} sx={{ p: 1, mb: 1 }}>
                     <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
-                      {r}
+                      {r.answer}
                     </Typography>
+                    {r.source && (
+                      <Typography variant="caption" sx={{ whiteSpace: 'pre-wrap', display:'block' }}>
+                        Source: {r.source}
+                      </Typography>
+                    )}
                   </Paper>
                 )) || (
                   <Typography variant="body2">No responses</Typography>

@@ -270,7 +270,12 @@ export default function PromptAnalysis() {
             <Typography variant="subtitle2" gutterBottom>Response</Typography>
             {selectedPoint.responses?.map((r, i) => (
               <Paper key={i} sx={{ p: 1, mb: 1 }}>
-                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{r}</Typography>
+                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{r.answer}</Typography>
+                {r.source && (
+                  <Typography variant="caption" sx={{ whiteSpace: 'pre-wrap', display: 'block' }}>
+                    Source: {r.source}
+                  </Typography>
+                )}
               </Paper>
             ))}
             <Typography variant="subtitle2" gutterBottom>Evaluation</Typography>

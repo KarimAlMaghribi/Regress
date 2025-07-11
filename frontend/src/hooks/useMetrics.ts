@@ -22,7 +22,7 @@ export const MetricRecordSchema = z.object({
   cost: z.number(),
   prompt: z.string().optional(),
   input: z.string().optional(),
-  responses: z.array(z.string()).optional(),
+  responses: z.array(z.object({ answer: z.string(), source: z.string().optional() })).optional(),
 });
 
 export type MetricRecord = z.infer<typeof MetricRecordSchema>;
