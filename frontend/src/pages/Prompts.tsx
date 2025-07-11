@@ -25,11 +25,13 @@ interface Prompt {
   id: number;
   text: string;
   tags: string[];
+  weight: number;
 }
 
 export default function Prompts() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [newText, setNewText] = useState('');
+  const [newWeight, setNewWeight] = useState(1);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<string | null>(null);
   const [edit, setEdit] = useState<Prompt | null>(null);
@@ -57,16 +59,16 @@ export default function Prompts() {
     fetch('http://localhost:8082/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: newText })
-    }).then(() => { setNewText(''); load(); })
+      body: JSON.stringify({ text: newText, weight: newWeight })
+    }).then(() => { setNewText(''); setNewWeight(1); load(); })
       .catch(e => console.error('create prompt', e));
   };
 
-  const update = (id: number, text: string, tags: string[]) => {
+  const update = (id: number, text: string, tags: string[], weight: number) => {
     fetch(`http://localhost:8082/prompts/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text, tags, weight })
     }).then(() => {
       localStorage.setItem(`promptTags_${id}`, JSON.stringify(tags));
       load();
@@ -135,6 +137,14 @@ export default function Prompts() {
       <PageHeader title="Prompts" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Prompts' }]} />
       <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
         <TextField size="small" value={newText} onChange={e => setNewText(e.target.value)} label="New prompt" />
+        <TextField
+          size="small"
+          label="Weight"
+          type="number"
+          inputProps={{ min: 1, max: 10 }}
+          value={newWeight}
+          onChange={e => setNewWeight(Math.max(1, Math.min(10, +e.target.value)))}
+        />
         <Button variant="contained" onClick={create} component={motion.button} whileHover={{ y: -2 }}>Add</Button>
         <Box sx={{ flexGrow: 1 }} />
         <TextField size="small" value={search} onChange={e => setSearch(e.target.value)} label="Search" />
@@ -186,11 +196,19 @@ export default function Prompts() {
               onChange={e => setEdit({ ...edit, tags: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
               sx={{ mb: 1 }}
             />
+            <TextField
+              label="Gewichtung"
+              type="number"
+              inputProps={{ min: 1, max: 10 }}
+              value={edit.weight}
+              onChange={e => setEdit({ ...edit, weight: Math.max(1, Math.min(10, +e.target.value)) })}
+              sx={{ mb: 1 }}
+            />
             <Box sx={{ display: 'flex', justifyContent: 'flex-end', gap: 1 }}>
               <IconButton onClick={() => edit && remove(edit.id)}>
                 <DeleteIcon />
               </IconButton>
-              <Button variant="contained" onClick={() => edit && update(edit.id, edit.text, edit.tags)}>Save</Button>
+              <Button variant="contained" onClick={() => edit && update(edit.id, edit.text, edit.tags, edit.weight)}>Save</Button>
             </Box>
           </Box>
         )}
