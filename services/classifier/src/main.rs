@@ -93,7 +93,7 @@ async fn get_result(
         .map_err(actix_web::error::ErrorInternalServerError)?;
     if let Some(row) = row {
         let regress: Option<bool> = row.get(0);
-        let mut metrics: serde_json::Value = row.get(1);
+        let metrics: serde_json::Value = row.get(1);
         let responses: serde_json::Value = row.get(2);
         let error_msg: Option<String> = row.get(3);
         // metrics already contain rule results
@@ -177,32 +177,14 @@ async fn main() -> std::io::Result<()> {
         .create()
         .unwrap();
 
-    const DEFAULT_PROMPT: &str =
-        "Is the following text describing a regression? Answer true or false.";
-
     let db = db_client.clone();
-    let prompt_id = settings.class_prompt_id;
     let worker_db = db.clone();
     async fn handle_event(
         client: &Client,
         db: &tokio_postgres::Client,
         prod: &FutureProducer,
-        prompt_id: i32,
         evt: TextExtracted,
     ) {
-        let stmt = db
-            .prepare("SELECT text FROM prompts WHERE id = $1")
-            .await
-            .unwrap();
-        let row_opt = db.query_opt(&stmt, &[&prompt_id]).await.unwrap();
-        let prompt_template: String = if let Some(row) = row_opt {
-            row.get(0)
-        } else if prompt_id == 0 {
-            DEFAULT_PROMPT.to_string()
-        } else {
-            error!(prompt_id, "prompt not found");
-            return;
-        };
         let prompts: Vec<PromptCfg> = serde_json::from_str(&evt.prompt).unwrap_or_else(|_| {
             vec![PromptCfg {
                 text: evt.prompt.clone(),
@@ -294,7 +276,7 @@ async fn main() -> std::io::Result<()> {
                 Ok(m) => {
                     if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Ok(evt) = serde_json::from_str::<TextExtracted>(payload) {
-                            handle_event(&client, &db, &prod, prompt_id, evt).await;
+                            handle_event(&client, &db, &prod, evt).await;
                         }
                     }
                 }
