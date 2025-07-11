@@ -30,4 +30,6 @@ pub struct ClassificationResult {
     pub prompt: String,
     /// Raw answer returned by the OpenAI API
     pub answer: String,
+    pub score: f64,
+    pub result_label: String,
 }
