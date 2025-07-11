@@ -19,7 +19,7 @@ import { useTheme } from '@mui/material/styles';
 interface HistoryEntry {
   id: number;
   timestamp: string;
-  result: { regress: boolean; answer?: string };
+  result: { regress?: boolean; answer?: string } | null;
   pdfUrl: string;
   prompt?: string | null;
   score?: number;
@@ -99,13 +99,13 @@ export default function History() {
       field: 'regress',
       headerName: 'Regress',
       width: 90,
-      valueGetter: p => (p.row.result.regress ? 'Ja' : 'Nein'),
+      valueGetter: p => (p.row.result?.regress ? 'Ja' : 'Nein'),
     },
     {
       field: 'answer',
       headerName: 'Antwort',
       flex: 1,
-      valueGetter: p => p.row.result.answer || '',
+      valueGetter: p => p.row.result?.answer || '',
       hide: isMobile,
     },
     { field: 'score', headerName: 'Score', width: 90, valueGetter: p => (p.row.score ?? 0).toFixed(2) },
