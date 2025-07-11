@@ -74,6 +74,10 @@ async fn list_texts(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<
     Ok(HttpResponse::Ok().json(items))
 }
 
+/// Publish `text-extracted` events for existing texts.
+///
+/// The endpoint does not run OCR again. It simply forwards the stored text so
+/// classification can be repeated with a different prompt.
 async fn start_analysis(
     db: web::Data<tokio_postgres::Client>,
     prod: web::Data<FutureProducer>,
@@ -86,14 +90,6 @@ async fn start_analysis(
             .map_err(actix_web::error::ErrorInternalServerError)?;
         if let Ok(row) = db.query_one(&stmt, &[&id]).await {
             let text: String = row.get(0);
-            let up = PdfUploaded { id, prompt: req.prompt.clone() };
-            let up_payload = serde_json::to_string(&up).unwrap();
-            let _ = prod
-                .send(
-                    FutureRecord::to("pdf-uploaded").payload(&up_payload).key(&()),
-                    Duration::from_secs(0),
-                )
-                .await;
             let evt = TextExtracted { id, text, prompt: req.prompt.clone() };
             let payload = serde_json::to_string(&evt).unwrap();
             let _ = prod
