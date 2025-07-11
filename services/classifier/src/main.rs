@@ -8,6 +8,7 @@ use rdkafka::{
     producer::{FutureProducer, FutureRecord},
     ClientConfig, Message,
 };
+use serde::Serialize;
 use shared::openai_client::call_openai_chat;
 use shared::{
     config::Settings,
@@ -16,7 +17,6 @@ use shared::{
 use std::time::Duration;
 use tokio_postgres::NoTls;
 use tracing::{error, info};
-use serde::Serialize;
 
 async fn health() -> impl Responder {
     "OK"
@@ -39,7 +39,9 @@ struct PromptCfg {
     weight: f64,
 }
 
-fn default_weight() -> f64 { 1.0 }
+fn default_weight() -> f64 {
+    1.0
+}
 
 #[derive(serde::Deserialize)]
 struct AiAnswer {
@@ -55,7 +57,11 @@ fn compute_score(metrics: &serde_json::Value) -> f64 {
             rules.iter().fold(0.0, |acc, r| {
                 let weight = r.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
                 let res = r.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
-                if res { acc + weight } else { acc }
+                if res {
+                    acc + weight
+                } else {
+                    acc
+                }
             })
         })
         .unwrap_or(0.0)
@@ -184,7 +190,10 @@ async fn main() -> std::io::Result<()> {
         prompt_id: i32,
         evt: TextExtracted,
     ) {
-        let stmt = db.prepare("SELECT text FROM prompts WHERE id = $1").await.unwrap();
+        let stmt = db
+            .prepare("SELECT text FROM prompts WHERE id = $1")
+            .await
+            .unwrap();
         let row_opt = db.query_opt(&stmt, &[&prompt_id]).await.unwrap();
         let prompt_template: String = if let Some(row) = row_opt {
             row.get(0)
@@ -194,16 +203,19 @@ async fn main() -> std::io::Result<()> {
             error!(prompt_id, "prompt not found");
             return;
         };
-        let prompts: Vec<PromptCfg> = serde_json::from_str(&evt.prompt)
-            .unwrap_or_else(|_| vec![PromptCfg { text: evt.prompt.clone(), weight: 1.0 }]);
+        let prompts: Vec<PromptCfg> = serde_json::from_str(&evt.prompt).unwrap_or_else(|_| {
+            vec![PromptCfg {
+                text: evt.prompt.clone(),
+                weight: 1.0,
+            }]
+        });
         let mut rules = Vec::new();
         let mut answers = Vec::new();
         let mut score = 0.0;
         for p in &prompts {
             let user_content = format!(
                 "{}\n\n=== BEGIN OCR TEXT ===\n{}\n=== END OCR TEXT ===",
-                p.text,
-                evt.text
+                p.text, evt.text
             );
             let message = ChatCompletionMessage {
                 role: ChatCompletionMessageRole::User,
@@ -217,8 +229,12 @@ async fn main() -> std::io::Result<()> {
                         Ok(v) => (v.answer, v.result),
                         Err(_) => (ans.clone(), ans.to_lowercase().contains("true")),
                     };
-                    if res { score += p.weight; }
-                    rules.push(serde_json::json!({"prompt": p.text, "weight": p.weight, "result": res}));
+                    if res {
+                        score += p.weight;
+                    }
+                    rules.push(
+                        serde_json::json!({"prompt": p.text, "weight": p.weight, "result": res}),
+                    );
                     answers.push(answer);
                 }
                 Err(e) => error!(%e, id = evt.id, "openai error"),
@@ -249,6 +265,8 @@ async fn main() -> std::io::Result<()> {
             regress,
             prompt: evt.prompt.clone(),
             answer: serde_json::to_string(&responses).unwrap(),
+            score,
+            result_label: label_for_score(score),
         };
         let payload = serde_json::to_string(&result).unwrap();
         let _ = prod
