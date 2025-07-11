@@ -47,6 +47,11 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
    until data is returned. The endpoint returns `202 Accepted` while the
    classification is still pending. If the OpenAI request fails the endpoint
    returns `500` with an `error` field describing the problem.
+4. To re-run classification on already extracted texts, first fetch available
+   ids via `GET http://localhost:8083/texts` and then submit them to
+   `POST http://localhost:8083/analyze` together with a prompt. The endpoint does
+   not repeat OCR but simply republishes a `text-extracted` event to start
+   classification again.
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to
