@@ -22,6 +22,8 @@ interface HistoryEntry {
   result: { regress: boolean; answer?: string };
   pdfUrl: string;
   prompt?: string | null;
+  score?: number;
+  result_label?: string;
   [key: string]: any;
 }
 
@@ -33,6 +35,8 @@ function normalizeEntry(e: any): HistoryEntry {
     timestamp: e.timestamp,
     result: e.result,
     prompt: e.prompt ?? null,
+    score: e.score,
+    result_label: e.result_label,
   };
 }
 
@@ -104,6 +108,8 @@ export default function History() {
       valueGetter: p => p.row.result.answer || '',
       hide: isMobile,
     },
+    { field: 'score', headerName: 'Score', width: 90, valueGetter: p => (p.row.score ?? 0).toFixed(2) },
+    { field: 'result_label', headerName: 'Label', flex: 0.8, valueGetter: p => p.row.result_label || '' },
     {
       field: 'actions',
       headerName: '',
@@ -157,6 +163,11 @@ export default function History() {
             <Typography variant="body2" gutterBottom>
               {dayjs(selected.timestamp).format('LLL')}
             </Typography>
+            {typeof selected.score === 'number' && (
+              <Typography variant="body2" gutterBottom>
+                Score: {selected.score.toFixed(2)} - {selected.result_label}
+              </Typography>
+            )}
             <Box component="pre" sx={{ whiteSpace: 'pre-wrap', fontSize: 12, mb: 2 }}>
               {JSON.stringify(selected.result, null, 2)}
             </Box>
