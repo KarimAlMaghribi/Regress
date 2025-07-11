@@ -1,19 +1,28 @@
 import React, { useEffect, useState } from 'react';
 import {
   Box, Paper, Typography, Checkbox, FormControlLabel, Button,
-  FormControl, InputLabel, Select, MenuItem, Snackbar, Alert
+  FormControl, InputLabel, Select, MenuItem, Snackbar, Alert, Chip,
+  ListItemText
 } from '@mui/material';
 import PageHeader from '../components/PageHeader';
 
-interface Prompt { id: number; text: string }
+interface Prompt { id: number; text: string; weight?: number }
 interface TextEntry { id: number }
+interface Rule { prompt: string; weight: number; result: boolean }
+interface AnalysisData {
+  score: number;
+  result_label: string;
+  metrics: { rules?: Rule[] };
+  [k: string]: any;
+}
 
 export default function Pipeline() {
   const [pdfs, setPdfs] = useState<TextEntry[]>([]);
   const [selected, setSelected] = useState<number[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [promptId, setPromptId] = useState<number | ''>('');
+  const [promptIds, setPromptIds] = useState<number[]>([]);
   const [snack, setSnack] = useState('');
+  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
 
   const load = () => {
     fetch('http://localhost:8083/texts')
@@ -33,8 +42,10 @@ export default function Pipeline() {
   };
 
   const start = () => {
-    const prompt = prompts.find(p => p.id === promptId)?.text;
-    if (!prompt || selected.length === 0) return;
+    const chosen = promptIds.map(id => prompts.find(p => p.id === id)).filter(Boolean) as Prompt[];
+    if (chosen.length === 0 || selected.length === 0) return;
+    const payloadPrompts = chosen.map(p => ({ text: p.text, weight: p.weight ?? 1 }));
+    const prompt = JSON.stringify(payloadPrompts);
     fetch('http://localhost:8083/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -42,6 +53,13 @@ export default function Pipeline() {
     }).then(() => {
       setSnack('Analyse gestartet');
       setSelected([]);
+      const id = selected[0];
+      if (id) {
+        fetch(`http://localhost:8084/results/${id}`)
+          .then(r => r.json())
+          .then(setAnalysis)
+          .catch(e => setSnack(`Fehler: ${e}`));
+      }
     }).catch(e => setSnack(`Fehler: ${e}`));
   };
 
@@ -56,15 +74,36 @@ export default function Pipeline() {
         {pdfs.length === 0 && <Typography>Keine PDFs vorhanden</Typography>}
       </Paper>
       <FormControl size="small" sx={{ minWidth: 220, mb:2 }}>
-        <InputLabel id="prompt-label">Prompt</InputLabel>
-        <Select labelId="prompt-label" value={promptId} label="Prompt" onChange={e => setPromptId(e.target.value as number)}>
-          <MenuItem value=""><em>Prompt wählen</em></MenuItem>
+        <InputLabel id="prompt-label">Prompts</InputLabel>
+        <Select
+          labelId="prompt-label"
+          multiple
+          value={promptIds}
+          onChange={e => setPromptIds(typeof e.target.value === 'string' ? e.target.value.split(',').map(Number) : e.target.value as number[])}
+          renderValue={sel => (sel as number[]).map(id => prompts.find(p => p.id === id)?.text).join(', ')}
+        >
           {prompts.map(p => (
-            <MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>
+            <MenuItem key={p.id} value={p.id}>
+              <Checkbox checked={promptIds.indexOf(p.id) > -1} />
+              <ListItemText primary={`${p.text} (${p.weight ?? 1})`} />
+            </MenuItem>
           ))}
         </Select>
       </FormControl>
-      <Button variant="contained" disabled={!selected.length || promptId === ''} onClick={start}>Analyse starten</Button>
+      <Button variant="contained" disabled={!selected.length || promptIds.length===0} onClick={start}>Analyse starten</Button>
+      {analysis && (
+        <Paper sx={{ p:2, mt:2 }}>
+          <Typography variant="h6" gutterBottom>
+            Score: {analysis.score.toFixed(3)}
+          </Typography>
+          <Chip label={analysis.result_label} color="primary" sx={{ mb:2 }} />
+          {analysis.metrics?.rules?.map((r,i)=>(
+            <Typography key={i} variant="body2">
+              {r.prompt}: {r.result ? 'true' : 'false'} (w={r.weight})
+            </Typography>
+          ))}
+        </Paper>
+      )}
       <Snackbar open={!!snack} autoHideDuration={4000} onClose={() => setSnack('')}>
         <Alert onClose={() => setSnack('')} severity="info">{snack}</Alert>
       </Snackbar>
