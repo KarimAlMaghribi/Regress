@@ -14,7 +14,7 @@ export const AnalysisResultSchema = z.object({
   pdfFilenames: z.array(z.string()),
   runTime: z.string(),
   metrics: MetricsSchema,
-  responses: z.array(z.string()).optional(),
+  responses: z.array(z.object({ answer: z.string(), source: z.string().optional() })).optional(),
 });
 
 export type AnalysisResult = z.infer<typeof AnalysisResultSchema>;

@@ -286,11 +286,12 @@ async fn start_kafka(
                             if let Ok(data) =
                                 serde_json::from_str::<shared::dto::ClassificationResult>(payload)
                             {
+                                let parsed = serde_json::from_str(&data.answer).unwrap_or_else(|_| serde_json::json!(data.answer));
                                 let entry = HistoryEntry {
                                     id: data.id.to_string(),
                                     prompt: Some(data.prompt.clone()),
                                     result: Some(
-                                        serde_json::json!({"regress": data.regress, "answer": data.answer }),
+                                        serde_json::json!({"regress": data.regress, "answers": parsed }),
                                     ),
                                     pdf_url: format!("{}/pdf/{}", pdf_base, data.id),
                                     timestamp: Utc::now(),

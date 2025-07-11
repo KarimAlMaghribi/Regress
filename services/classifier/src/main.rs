@@ -9,7 +9,6 @@ use rdkafka::{
     ClientConfig, Message,
 };
 use serde::Serialize;
-use shared::openai_client::call_openai_chat;
 use shared::{
     config::Settings,
     dto::{ClassificationResult, TextExtracted},
@@ -43,10 +42,14 @@ fn default_weight() -> f64 {
     1.0
 }
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize, Debug)]
 struct AiAnswer {
+    /// Die menschenlesbare Erklärung
     answer: String,
+    /// Das Hauptergebnis
     result: bool,
+    /// Die Textstelle, aus der `result` extrahiert wurde
+    source: String,
 }
 
 fn compute_score(metrics: &serde_json::Value) -> f64 {
@@ -75,6 +78,72 @@ fn label_for_score(score: f64) -> String {
     } else {
         "SICHER_REGRESS".into()
     }
+}
+
+async fn handle_openai(
+    messages: Vec<ChatCompletionMessage>,
+    prompt: &PromptCfg,
+    rules: &mut Vec<serde_json::Value>,
+    answers: &mut Vec<serde_json::Value>,
+    score: &mut f64,
+) -> anyhow::Result<()> {
+    use openai::chat::{ChatCompletion, ChatCompletionFunctionDefinition};
+    use openai::Credentials;
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "properties": {
+            "answer": { "type": "string", "description": "Die menschenlesbare Erkl\u00e4rung" },
+            "result": { "type": "boolean", "description": "Das Hauptergebnis" },
+            "source": { "type": "string", "description": "Die Textstelle, aus der das Ergebnis extrahiert wurde" }
+        },
+        "required": ["answer", "result", "source"]
+    });
+
+    let func = ChatCompletionFunctionDefinition {
+        name: "report_result".to_string(),
+        description: None,
+        parameters: Some(schema),
+    };
+
+    let chat = ChatCompletion::builder("gpt-4-turbo", messages)
+        .functions(vec![func])
+        .function_call(serde_json::json!({ "name": "report_result" }))
+        .credentials(Credentials::from_env())
+        .create()
+        .await?;
+
+    if let Some(choice) = chat.choices.get(0) {
+        if let Some(fcall) = &choice.message.function_call {
+            match serde_json::from_str::<AiAnswer>(&fcall.arguments) {
+                Ok(ai) => {
+                    if ai.result {
+                        *score += prompt.weight;
+                    }
+                    rules.push(serde_json::json!({
+                        "prompt": prompt.text,
+                        "weight": prompt.weight,
+                        "result": ai.result
+                    }));
+                    answers.push(serde_json::json!({ "answer": ai.answer, "source": ai.source }));
+                }
+                Err(e) => log::error!("deserialize AiAnswer: {}", e),
+            }
+        } else if let Some(content) = &choice.message.content {
+            let res = content.trim().to_lowercase().starts_with("ja");
+            if res {
+                *score += prompt.weight;
+            }
+            rules.push(serde_json::json!({
+                "prompt": prompt.text,
+                "weight": prompt.weight,
+                "result": res
+            }));
+            answers.push(serde_json::json!({ "answer": content, "source": "" }));
+        }
+    }
+
+    Ok(())
 }
 
 async fn get_result(
@@ -192,7 +261,7 @@ async fn main() -> std::io::Result<()> {
             }]
         });
         let mut rules = Vec::new();
-        let mut answers = Vec::new();
+        let mut answers: Vec<serde_json::Value> = Vec::new();
         let mut score = 0.0;
         for p in &prompts {
             let user_content = format!(
@@ -204,22 +273,8 @@ async fn main() -> std::io::Result<()> {
                 content: Some(user_content),
                 ..Default::default()
             };
-            match call_openai_chat(client, "gpt-4-turbo", vec![message]).await {
-                Ok(ans) => {
-                    let parsed: Result<AiAnswer, _> = serde_json::from_str(&ans);
-                    let (answer, res) = match parsed {
-                        Ok(v) => (v.answer, v.result),
-                        Err(_) => (ans.clone(), ans.to_lowercase().contains("true")),
-                    };
-                    if res {
-                        score += p.weight;
-                    }
-                    rules.push(
-                        serde_json::json!({"prompt": p.text, "weight": p.weight, "result": res}),
-                    );
-                    answers.push(answer);
-                }
-                Err(e) => error!(%e, id = evt.id, "openai error"),
+            if let Err(e) = handle_openai(vec![message], p, &mut rules, &mut answers, &mut score).await {
+                error!(%e, id = evt.id, "openai error");
             }
         }
         let metrics = serde_json::json!({"rules": rules});

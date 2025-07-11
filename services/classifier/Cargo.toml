@@ -16,3 +16,5 @@ openai.workspace = true
 rdkafka.workspace = true
 actix-cors = "0.6"
 awc = { version = "3", features = ["rustls"] }
+anyhow.workspace = true
+log = "0.4"
