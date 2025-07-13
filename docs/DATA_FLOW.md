@@ -34,7 +34,9 @@ field in the JSON body.
 
 ## Prompts
 - **text** (`string`): managed in the Prompts page and persisted by the
-  `prompt-manager` service in table `prompts(id SERIAL, text TEXT)`.
+  `prompt-manager` service in table `prompts(id SERIAL, text TEXT, weight REAL)`.
+- **weight** (`float`): controls how strongly a prompt influences the overall
+  classification score. Higher values increase the prompt's impact.
 
 ## Frontend Integration
 - The ingestion service base URL is read from `VITE_INGEST_URL` and defaults to
