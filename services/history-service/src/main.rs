@@ -17,7 +17,10 @@ use tracing::{error, info};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HistoryEntry {
-    id: String,
+    /// Unique identifier for this analysis run
+    id: i32,
+    /// ID of the processed PDF
+    pdf_id: i32,
     prompt: Option<String>,
     result: Option<serde_json::Value>,
     pdf_url: String,
@@ -38,7 +41,8 @@ struct AppState {
 async fn init_db(db: &tokio_postgres::Client) {
     db.execute(
         "CREATE TABLE IF NOT EXISTS classification_history (\
-            id TEXT PRIMARY KEY,\
+            id SERIAL PRIMARY KEY,\
+            pdf_id INTEGER NOT NULL,\
             prompt TEXT,\
             result JSONB,\
             pdf_url TEXT,\
@@ -51,63 +55,78 @@ async fn init_db(db: &tokio_postgres::Client) {
     )
     .await
     .unwrap();
-    db.execute(
-        "ALTER TABLE classification_history ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'running'",
-        &[],
-    )
-    .await
-    .unwrap();
-    db.execute(
-        "ALTER TABLE classification_history ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION",
-        &[],
-    )
-    .await
-    .unwrap();
-    db.execute(
-        "ALTER TABLE classification_history ADD COLUMN IF NOT EXISTS result_label TEXT",
-        &[],
-    )
-    .await
-    .unwrap();
     info!("database schema ensured");
 }
 
-async fn mark_pending(db: &tokio_postgres::Client, entry: &HistoryEntry) {
-    let _ = db
-        .execute(
-            "INSERT INTO classification_history (id, prompt, pdf_url, timestamp, status) \
-             VALUES ($1,$2,$3,$4,'running') \
-             ON CONFLICT (id) DO UPDATE SET \
-               prompt=EXCLUDED.prompt, pdf_url=EXCLUDED.pdf_url, timestamp=EXCLUDED.timestamp, status='running'",
-            &[&entry.id, &entry.prompt, &entry.pdf_url, &entry.timestamp],
+async fn mark_pending(
+    db: &tokio_postgres::Client,
+    pdf_id: i32,
+    prompt: &str,
+    pdf_url: &str,
+    timestamp: DateTime<Utc>,
+) -> i32 {
+    let row = db
+        .query_one(
+            "INSERT INTO classification_history (pdf_id, prompt, pdf_url, timestamp, status) \
+             VALUES ($1,$2,$3,$4,'running') RETURNING id",
+            &[&pdf_id, &prompt, &pdf_url, &timestamp],
         )
-        .await;
+        .await
+        .unwrap();
+    row.get(0)
 }
 
-async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) {
-    let _ = db
-        .execute(
-            "INSERT INTO classification_history (id, prompt, result, pdf_url, timestamp, status, score, result_label) \
-             VALUES ($1,$2,$3,$4,$5,'completed',$6,$7) \
-             ON CONFLICT (id) DO UPDATE SET \
-               prompt=EXCLUDED.prompt, result=EXCLUDED.result, pdf_url=EXCLUDED.pdf_url, timestamp=EXCLUDED.timestamp, status='completed', score=EXCLUDED.score, result_label=EXCLUDED.result_label",
-            &[
-                &entry.id,
-                &entry.prompt,
-                &entry.result,
-                &entry.pdf_url,
-                &entry.timestamp,
-                &entry.score,
-                &entry.result_label,
-            ],
+async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) -> i32 {
+    if let Some(row) = db
+        .query_opt(
+            "SELECT id FROM classification_history WHERE pdf_id=$1 AND status='running' ORDER BY timestamp DESC LIMIT 1",
+            &[&entry.pdf_id],
         )
-        .await;
+        .await
+        .unwrap()
+    {
+        let id: i32 = row.get(0);
+        let _ = db
+            .execute(
+                "UPDATE classification_history SET prompt=$2, result=$3, pdf_url=$4, timestamp=$5, status='completed', score=$6, result_label=$7 WHERE id=$1",
+                &[
+                    &id,
+                    &entry.prompt,
+                    &entry.result,
+                    &entry.pdf_url,
+                    &entry.timestamp,
+                    &entry.score,
+                    &entry.result_label,
+                ],
+            )
+            .await
+            .unwrap();
+        id
+    } else {
+        let row = db
+            .query_one(
+                "INSERT INTO classification_history (pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label) \
+                 VALUES ($1,$2,$3,$4,$5,'completed',$6,$7) RETURNING id",
+                &[
+                    &entry.pdf_id,
+                    &entry.prompt,
+                    &entry.result,
+                    &entry.pdf_url,
+                    &entry.timestamp,
+                    &entry.score,
+                    &entry.result_label,
+                ],
+            )
+            .await
+            .unwrap();
+        row.get(0)
+    }
 }
 
 async fn latest(db: &tokio_postgres::Client, limit: i64) -> Vec<HistoryEntry> {
     let stmt = db
         .prepare(
-            "SELECT id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC LIMIT $1",
+            "SELECT id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC LIMIT $1",
         )
         .await
         .unwrap();
@@ -115,13 +134,14 @@ async fn latest(db: &tokio_postgres::Client, limit: i64) -> Vec<HistoryEntry> {
     rows.into_iter()
         .map(|r| HistoryEntry {
             id: r.get(0),
-            prompt: r.get(1),
-            result: r.get(2),
-            pdf_url: r.get(3),
-            timestamp: r.get(4),
-            status: r.get(5),
-            score: r.get(6),
-            result_label: r.get(7),
+            pdf_id: r.get(1),
+            prompt: r.get(2),
+            result: r.get(3),
+            pdf_url: r.get(4),
+            timestamp: r.get(5),
+            status: r.get(6),
+            score: r.get(7),
+            result_label: r.get(8),
         })
         .collect()
 }
@@ -129,7 +149,7 @@ async fn latest(db: &tokio_postgres::Client, limit: i64) -> Vec<HistoryEntry> {
 async fn all_entries(db: &tokio_postgres::Client) -> Vec<HistoryEntry> {
     let stmt = db
         .prepare(
-            "SELECT id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC",
+            "SELECT id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC",
         )
         .await
         .unwrap();
@@ -137,13 +157,14 @@ async fn all_entries(db: &tokio_postgres::Client) -> Vec<HistoryEntry> {
     rows.into_iter()
         .map(|r| HistoryEntry {
             id: r.get(0),
-            prompt: r.get(1),
-            result: r.get(2),
-            pdf_url: r.get(3),
-            timestamp: r.get(4),
-            status: r.get(5),
-            score: r.get(6),
-            result_label: r.get(7),
+            pdf_id: r.get(1),
+            prompt: r.get(2),
+            result: r.get(3),
+            pdf_url: r.get(4),
+            timestamp: r.get(5),
+            status: r.get(6),
+            score: r.get(7),
+            result_label: r.get(8),
         })
         .collect()
 }
@@ -152,22 +173,23 @@ async fn list_by_status(db: &tokio_postgres::Client, status: Option<String>) -> 
     let (sql, params): (&str, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if let Some(s) =
         &status
     {
-        ("SELECT id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history WHERE status = $1 ORDER BY timestamp DESC", vec![s])
+        ("SELECT id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history WHERE status = $1 ORDER BY timestamp DESC", vec![s])
     } else {
-        ("SELECT id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC", vec![])
+        ("SELECT id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC", vec![])
     };
     let stmt = db.prepare(sql).await.unwrap();
     let rows = db.query(&stmt, &params).await.unwrap();
     rows.into_iter()
         .map(|r| HistoryEntry {
             id: r.get(0),
-            prompt: r.get(1),
-            result: r.get(2),
-            pdf_url: r.get(3),
-            timestamp: r.get(4),
-            status: r.get(5),
-            score: r.get(6),
-            result_label: r.get(7),
+            pdf_id: r.get(1),
+            prompt: r.get(2),
+            result: r.get(3),
+            pdf_url: r.get(4),
+            timestamp: r.get(5),
+            status: r.get(6),
+            score: r.get(7),
+            result_label: r.get(8),
         })
         .collect()
 }
@@ -292,17 +314,21 @@ async fn start_kafka(
                             if let Ok(data) =
                                 serde_json::from_str::<shared::dto::PdfUploaded>(payload)
                             {
+                                let ts = Utc::now();
+                                let pdf_url = format!("{}/pdf/{}", pdf_base, data.id);
+                                let id =
+                                    mark_pending(&db, data.id, &data.prompt, &pdf_url, ts).await;
                                 let entry = HistoryEntry {
-                                    id: data.id.to_string(),
+                                    id,
+                                    pdf_id: data.id,
                                     prompt: Some(data.prompt),
                                     result: None,
-                                    pdf_url: format!("{}/pdf/{}", pdf_base, data.id),
-                                    timestamp: Utc::now(),
+                                    pdf_url,
+                                    timestamp: ts,
                                     status: "running".into(),
                                     score: None,
                                     result_label: None,
                                 };
-                                mark_pending(&db, &entry).await;
                                 let _ = tx.send(entry.clone());
                             }
                         }
@@ -310,9 +336,11 @@ async fn start_kafka(
                             if let Ok(data) =
                                 serde_json::from_str::<shared::dto::ClassificationResult>(payload)
                             {
-                                let parsed = serde_json::from_str(&data.answer).unwrap_or_else(|_| serde_json::json!(data.answer));
-                                let entry = HistoryEntry {
-                                    id: data.id.to_string(),
+                                let parsed = serde_json::from_str(&data.answer)
+                                    .unwrap_or_else(|_| serde_json::json!(data.answer));
+                                let mut entry = HistoryEntry {
+                                    id: 0,
+                                    pdf_id: data.id,
                                     prompt: Some(data.prompt.clone()),
                                     result: Some(
                                         serde_json::json!({"regress": data.regress, "answers": parsed }),
@@ -323,7 +351,7 @@ async fn start_kafka(
                                     score: Some(data.score),
                                     result_label: Some(data.result_label),
                                 };
-                                insert_result(&db, &entry).await;
+                                entry.id = insert_result(&db, &entry).await;
                                 let _ = tx.send(entry.clone());
                             }
                         }

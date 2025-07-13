@@ -17,7 +17,8 @@ import dayjs, { Dayjs } from 'dayjs';
 import { useTheme } from '@mui/material/styles';
 
 interface HistoryEntry {
-  id: number;
+  id: number; // unique analysis id
+  pdfId: number;
   timestamp: string;
   result: { regress?: boolean; answer?: string } | null;
   pdfUrl: string;
@@ -31,7 +32,7 @@ interface HistoryEntry {
 function normalizeEntry(e: any): HistoryEntry {
   return {
     id: e.id ?? Date.now() + Math.random(),
-    ...e,
+    pdfId: e.pdf_id ?? e.pdfId ?? e.pdfId,
     pdfUrl: e.pdfUrl ?? e.pdf_url,
     timestamp: e.timestamp,
     result: e.result,
