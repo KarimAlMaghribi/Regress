@@ -44,7 +44,11 @@ export default function Prompts() {
     fetch('http://localhost:8082/prompts')
       .then(r => r.json())
       .then((d: any[]) => {
-        const data = d.map(p => ({ ...p, tags: JSON.parse(localStorage.getItem(`promptTags_${p.id}`) || '[]') }));
+        const data = d.map(p => ({
+          ...p,
+          weight: p.weight ?? 1,
+          tags: JSON.parse(localStorage.getItem(`promptTags_${p.id}`) || '[]')
+        }));
         setPrompts(data);
         markAllRead(d.map(p => p.id));
       })
