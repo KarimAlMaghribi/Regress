@@ -31,6 +31,14 @@ The CI workflow installs these packages automatically.
 All services read the database connection string from the `DATABASE_URL` environment variable.
 Kafka connection is read from `MESSAGE_BROKER_URL`.
 If either variable is omitted, the code falls back to `postgres://postgres:postgres@db:5432/regress` and `kafka:9092` respectively.
+When running the services outside of Docker you must set `DATABASE_URL` to a
+reachable host, e.g.:
+
+```bash
+export DATABASE_URL=postgres://postgres:postgres@localhost:5432/regress
+```
+Failure to connect to the database results in `500 Internal Server Error`
+responses when accessing `/prompts`.
 The classifier additionally requires `OPENAI_API_KEY` and uses `CLASS_PROMPT_ID` to select a prompt.
 If the id is zero or the row is missing, the service falls back to a built-in
 prompt so classification still works.
