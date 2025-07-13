@@ -21,7 +21,8 @@
     ,"@mui/x-date-pickers": "^6.5.0"
     ,"dayjs": "^1.11.9"
     ,"zod": "^3.22.4"
-    ,"openai": "^4.40.0"
+    ,"openai": "^4.40.0",
+    "react-pdf": "^7.0.0"
   },
   "devDependencies": {
     "vite": "^4.0.0",

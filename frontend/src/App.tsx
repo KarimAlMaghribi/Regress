@@ -8,6 +8,7 @@ import Pipeline from './pages/Pipeline';
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import Analyses from './pages/Analyses';
+import Result from './pages/Result';
 import ColorModeProvider from './ColorModeContext';
 import { PromptNotificationProvider } from './context/PromptNotifications';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -40,6 +41,7 @@ function AnimatedRoutes() {
         <Route path="/pipeline" element={<PageFade><Pipeline /></PageFade>} />
         <Route path="/analysis" element={<PageFade><PromptAnalysis /></PageFade>} />
         <Route path="/analyses" element={<PageFade><Analyses /></PageFade>} />
+        <Route path="/result/:id" element={<PageFade><Result /></PageFade>} />
         <Route path="/history" element={<PageFade><History /></PageFade>} />
         <Route path="*" element={<PageFade><Dashboard /></PageFade>} />
       </Routes>
