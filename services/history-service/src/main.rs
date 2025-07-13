@@ -106,10 +106,34 @@ async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) {
 
 async fn latest(db: &tokio_postgres::Client, limit: i64) -> Vec<HistoryEntry> {
     let stmt = db
-        .prepare("SELECT id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC LIMIT $1")
+        .prepare(
+            "SELECT id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC LIMIT $1",
+        )
         .await
         .unwrap();
     let rows = db.query(&stmt, &[&limit]).await.unwrap();
+    rows.into_iter()
+        .map(|r| HistoryEntry {
+            id: r.get(0),
+            prompt: r.get(1),
+            result: r.get(2),
+            pdf_url: r.get(3),
+            timestamp: r.get(4),
+            status: r.get(5),
+            score: r.get(6),
+            result_label: r.get(7),
+        })
+        .collect()
+}
+
+async fn all_entries(db: &tokio_postgres::Client) -> Vec<HistoryEntry> {
+    let stmt = db
+        .prepare(
+            "SELECT id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC",
+        )
+        .await
+        .unwrap();
+    let rows = db.query(&stmt, &[]).await.unwrap();
     rows.into_iter()
         .map(|r| HistoryEntry {
             id: r.get(0),
@@ -183,7 +207,7 @@ impl actix::Actor for WsConn {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         let db = self.db.clone();
-        async move { latest(&db, 50).await }
+        async move { all_entries(&db).await }
             .into_actor(self)
             .map(|entries, _act, ctx| {
                 if let Ok(text) =
