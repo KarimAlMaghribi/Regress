@@ -10,4 +10,4 @@ Consumes Kafka events and stores classification history in PostgreSQL. Provides 
 The service exposes:
 - `GET /classifications?limit=50` – list recent classifications.
 - `GET /analyses?status=running` – list analyses by status.
-- WebSocket on `/` – sends the last 50 entries on connect and pushes new ones in real time.
+- WebSocket on `/` – sends all entries on connect and pushes new ones in real time.
