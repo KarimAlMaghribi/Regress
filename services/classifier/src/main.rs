@@ -52,28 +52,30 @@ struct AiAnswer {
     source: String,
 }
 
-fn compute_score(metrics: &serde_json::Value) -> f64 {
-    metrics
-        .get("rules")
-        .and_then(|v| v.as_array())
-        .map(|rules| {
-            rules.iter().fold(0.0, |acc, r| {
-                let weight = r.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
-                let res = r.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
-                if res {
-                    acc + weight
-                } else {
-                    acc
-                }
-            })
-        })
-        .unwrap_or(0.0)
+#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
+struct RuleResult {
+    prompt: String,
+    #[serde(default = "default_weight")]
+    weight: f64,
+    result: bool,
+}
+
+const LOW_THRESHOLD: f64 = 0.3;
+const HIGH_THRESHOLD: f64 = 0.7;
+
+fn compute_score(rules: &[RuleResult]) -> f64 {
+    let total_weight: f64 = rules.iter().map(|r| r.weight).sum();
+    if total_weight == 0.0 {
+        return 0.0;
+    }
+    let true_weight: f64 = rules.iter().filter(|r| r.result).map(|r| r.weight).sum();
+    true_weight / total_weight
 }
 
 fn label_for_score(score: f64) -> String {
-    if score < 0.3 {
+    if score < LOW_THRESHOLD {
         "KEIN_REGRESS".into()
-    } else if score < 0.7 {
+    } else if score < HIGH_THRESHOLD {
         "MÖGLICHER_REGRESS".into()
     } else {
         "SICHER_REGRESS".into()
@@ -83,9 +85,8 @@ fn label_for_score(score: f64) -> String {
 async fn handle_openai(
     messages: Vec<ChatCompletionMessage>,
     prompt: &PromptCfg,
-    rules: &mut Vec<serde_json::Value>,
+    rules: &mut Vec<RuleResult>,
     answers: &mut Vec<serde_json::Value>,
-    score: &mut f64,
     api_key: &str,
 ) -> anyhow::Result<()> {
     use openai::chat::{ChatCompletion, ChatCompletionFunctionDefinition};
@@ -120,28 +121,22 @@ async fn handle_openai(
         if let Some(fcall) = &choice.message.function_call {
             match serde_json::from_str::<AiAnswer>(&fcall.arguments) {
                 Ok(ai) => {
-                    if ai.result {
-                        *score += prompt.weight;
-                    }
-                    rules.push(serde_json::json!({
-                        "prompt": prompt.text,
-                        "weight": prompt.weight,
-                        "result": ai.result
-                    }));
+                    rules.push(RuleResult {
+                        prompt: prompt.text.clone(),
+                        weight: prompt.weight,
+                        result: ai.result,
+                    });
                     answers.push(serde_json::json!({ "answer": ai.answer, "source": ai.source }));
                 }
                 Err(e) => log::error!("deserialize AiAnswer: {}", e),
             }
         } else if let Some(content) = &choice.message.content {
             let res = content.trim().to_lowercase().starts_with("ja");
-            if res {
-                *score += prompt.weight;
-            }
-            rules.push(serde_json::json!({
-                "prompt": prompt.text,
-                "weight": prompt.weight,
-                "result": res
-            }));
+            rules.push(RuleResult {
+                prompt: prompt.text.clone(),
+                weight: prompt.weight,
+                result: res,
+            });
             answers.push(serde_json::json!({ "answer": content, "source": "" }));
         }
     }
@@ -169,7 +164,11 @@ async fn get_result(
         let responses: serde_json::Value = row.get(2);
         let error_msg: Option<String> = row.get(3);
         // metrics already contain rule results
-        let score = compute_score(&metrics);
+        let rules: Vec<RuleResult> = metrics
+            .get("rules")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
+        let score = compute_score(&rules);
         let body = AnalysisResult {
             regress,
             metrics,
@@ -268,9 +267,8 @@ async fn main() -> std::io::Result<()> {
                 weight: 1.0,
             }]
         });
-        let mut rules = Vec::new();
+        let mut rules: Vec<RuleResult> = Vec::new();
         let mut answers: Vec<serde_json::Value> = Vec::new();
-        let mut score = 0.0;
         for p in &prompts {
             let user_content = format!(
                 "{}\n\n=== BEGIN OCR TEXT ===\n{}\n=== END OCR TEXT ===",
@@ -282,23 +280,17 @@ async fn main() -> std::io::Result<()> {
                 ..Default::default()
             };
             info!(id = evt.id, "calling openai");
-            if let Err(e) = handle_openai(
-                vec![message],
-                p,
-                &mut rules,
-                &mut answers,
-                &mut score,
-                &api_key,
-            )
-            .await
+            if let Err(e) =
+                handle_openai(vec![message], p, &mut rules, &mut answers, &api_key).await
             {
                 error!(%e, id = evt.id, "openai error");
             }
             info!(id = evt.id, "openai call finished");
         }
+        let score = compute_score(&rules);
         let metrics = serde_json::json!({"rules": rules});
         let responses = serde_json::json!(answers);
-        let regress = score >= 0.3;
+        let regress = score >= LOW_THRESHOLD;
         let stmt = db
             .prepare("INSERT INTO classifications (file_name, prompts, regress, metrics, responses, error) VALUES ($1, $2, $3, $4, $5, $6)")
             .await
@@ -376,13 +368,79 @@ async fn main() -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{test, web, App};
+    use actix_web::{test as actix_test, web, App};
 
     #[actix_web::test]
     async fn health_ok() {
-        let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
-        let req = test::TestRequest::get().uri("/health").to_request();
-        let resp = test::call_service(&app, req).await;
+        let app =
+            actix_test::init_service(App::new().route("/health", web::get().to(health))).await;
+        let req = actix_test::TestRequest::get().uri("/health").to_request();
+        let resp = actix_test::call_service(&app, req).await;
         assert!(resp.status().is_success());
+    }
+
+    #[test]
+    fn compute_score_edge_cases() {
+        let all_false = vec![
+            RuleResult {
+                prompt: "a".into(),
+                weight: 1.0,
+                result: false,
+            },
+            RuleResult {
+                prompt: "b".into(),
+                weight: 2.0,
+                result: false,
+            },
+        ];
+        assert_eq!(compute_score(&all_false), 0.0);
+
+        let all_true = vec![
+            RuleResult {
+                prompt: "a".into(),
+                weight: 1.0,
+                result: true,
+            },
+            RuleResult {
+                prompt: "b".into(),
+                weight: 2.0,
+                result: true,
+            },
+        ];
+        assert_eq!(compute_score(&all_true), 1.0);
+
+        let mixed = vec![
+            RuleResult {
+                prompt: "a".into(),
+                weight: 1.0,
+                result: true,
+            },
+            RuleResult {
+                prompt: "b".into(),
+                weight: 2.0,
+                result: false,
+            },
+            RuleResult {
+                prompt: "c".into(),
+                weight: 1.0,
+                result: true,
+            },
+        ];
+        assert!((compute_score(&mixed) - 0.5).abs() < f64::EPSILON);
+
+        let zero_weight = vec![RuleResult {
+            prompt: "a".into(),
+            weight: 0.0,
+            result: true,
+        }];
+        assert_eq!(compute_score(&zero_weight), 0.0);
+    }
+
+    #[test]
+    fn label_for_score_edges() {
+        assert_eq!(label_for_score(0.0), "KEIN_REGRESS");
+        assert_eq!(label_for_score(LOW_THRESHOLD), "MÖGLICHER_REGRESS");
+        assert_eq!(label_for_score(HIGH_THRESHOLD - 0.01), "MÖGLICHER_REGRESS");
+        assert_eq!(label_for_score(HIGH_THRESHOLD), "SICHER_REGRESS");
     }
 }
