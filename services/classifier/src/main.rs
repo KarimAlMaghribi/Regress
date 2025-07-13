@@ -86,6 +86,7 @@ async fn handle_openai(
     rules: &mut Vec<serde_json::Value>,
     answers: &mut Vec<serde_json::Value>,
     score: &mut f64,
+    api_key: &str,
 ) -> anyhow::Result<()> {
     use openai::chat::{ChatCompletion, ChatCompletionFunctionDefinition};
     use openai::Credentials;
@@ -106,10 +107,12 @@ async fn handle_openai(
         parameters: Some(schema),
     };
 
+    let creds = Credentials::new(api_key.to_string());
+
     let chat = ChatCompletion::builder("gpt-4-turbo", messages)
         .functions(vec![func])
         .function_call(serde_json::json!({ "name": "report_result" }))
-        .credentials(Credentials::from_env())
+        .credentials(creds)
         .create()
         .await?;
 
@@ -248,11 +251,13 @@ async fn main() -> std::io::Result<()> {
 
     let db = db_client.clone();
     let worker_db = db.clone();
+    let api_key = settings.openai_api_key.clone();
     async fn handle_event(
         client: &Client,
         db: &tokio_postgres::Client,
         prod: &FutureProducer,
         evt: TextExtracted,
+        api_key: &str,
     ) {
         info!(id = evt.id, "processing text-extracted event");
         let prompts: Vec<PromptCfg> = serde_json::from_str(&evt.prompt).unwrap_or_else(|_| {
@@ -275,8 +280,15 @@ async fn main() -> std::io::Result<()> {
                 ..Default::default()
             };
             info!(id = evt.id, "calling openai");
-            if let Err(e) =
-                handle_openai(vec![message], p, &mut rules, &mut answers, &mut score).await
+            if let Err(e) = handle_openai(
+                vec![message],
+                p,
+                &mut rules,
+                &mut answers,
+                &mut score,
+                &api_key,
+            )
+            .await
             {
                 error!(%e, id = evt.id, "openai error");
             }
@@ -339,7 +351,7 @@ async fn main() -> std::io::Result<()> {
                     if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Ok(evt) = serde_json::from_str::<TextExtracted>(payload) {
                             info!(id = evt.id, "received text-extracted event");
-                            handle_event(&client, &db, &prod, evt).await;
+                            handle_event(&client, &db, &prod, evt, &api_key).await;
                         }
                     }
                 }
