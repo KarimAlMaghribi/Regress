@@ -192,6 +192,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1",
     ))
     .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
+        "UPDATE prompts SET weight = 1 WHERE weight IS NULL",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
+        "ALTER TABLE prompts ALTER COLUMN weight SET NOT NULL",
+    ))
+    .await?;
 
     let app = Router::new()
         .route("/health", get(health))
