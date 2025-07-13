@@ -6,7 +6,7 @@ import {
 } from '@mui/material';
 import PageHeader from '../components/PageHeader';
 
-interface Prompt { id: number; text: string; weight?: number }
+interface Prompt { id: number; text: string; weight: number }
 interface TextEntry { id: number }
 interface Rule { prompt: string; weight: number; result: boolean }
 interface AnalysisData {
@@ -31,7 +31,7 @@ export default function Pipeline() {
       .catch(e => setSnack(`Fehler: ${e}`));
     fetch('http://localhost:8082/prompts')
       .then(r => r.json())
-      .then(setPrompts)
+      .then((d: any[]) => setPrompts(d.map(p => ({ ...p, weight: p.weight ?? 1 }))))
       .catch(e => setSnack(`Fehler: ${e}`));
   };
 
@@ -44,7 +44,7 @@ export default function Pipeline() {
   const start = () => {
     const chosen = promptIds.map(id => prompts.find(p => p.id === id)).filter(Boolean) as Prompt[];
     if (chosen.length === 0 || selected.length === 0) return;
-    const payloadPrompts = chosen.map(p => ({ text: p.text, weight: p.weight ?? 1 }));
+    const payloadPrompts = chosen.map(p => ({ text: p.text, weight: p.weight }));
     const prompt = JSON.stringify(payloadPrompts);
     fetch('http://localhost:8083/analyze', {
       method: 'POST',

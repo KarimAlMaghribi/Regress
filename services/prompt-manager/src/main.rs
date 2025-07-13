@@ -6,6 +6,7 @@ use axum::{
 use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait, Set};
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
+use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
 mod model;
@@ -21,19 +22,26 @@ async fn health() -> &'static str {
 struct PromptData {
     id: i32,
     text: String,
+    weight: f64,
 }
 
 #[derive(Deserialize)]
 struct PromptInput {
     text: String,
+    #[serde(default = "default_weight")]
+    weight: f64,
+}
+
+fn default_weight() -> f64 {
+    1.0
 }
 
 async fn list_prompts(
-    State(db): State<DatabaseConnection>,
+    State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<Json<Vec<PromptData>>, axum::http::StatusCode> {
     info!("listing prompts");
     let items = Prompt::find()
-        .all(&db)
+        .all(&*db)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     let texts: Vec<PromptData> = items
@@ -41,6 +49,7 @@ async fn list_prompts(
         .map(|p| PromptData {
             id: p.id,
             text: p.text,
+            weight: p.weight,
         })
         .collect();
     info!("loaded {} prompts", texts.len());
@@ -48,56 +57,60 @@ async fn list_prompts(
 }
 
 async fn create_prompt(
-    State(db): State<DatabaseConnection>,
+    State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
 ) -> Result<Json<PromptData>, axum::http::StatusCode> {
     info!("creating prompt");
     let mut model: model::ActiveModel = Default::default();
     model.text = Set(input.text);
+    model.weight = Set(input.weight);
     let res = model
-        .insert(&db)
+        .insert(&*db)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     info!(id = res.id, "created prompt");
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
+        weight: res.weight,
     }))
 }
 
 async fn update_prompt(
     Path(id): Path<i32>,
-    State(db): State<DatabaseConnection>,
+    State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
 ) -> Result<Json<PromptData>, axum::http::StatusCode> {
     info!(id, "updating prompt");
     let Some(mut model) = Prompt::find_by_id(id)
-        .one(&db)
+        .one(&*db)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
     else {
         return Err(axum::http::StatusCode::NOT_FOUND);
     };
     model.text = input.text;
+    model.weight = input.weight;
     let active: model::ActiveModel = model.into();
     let res = active
-        .update(&db)
+        .update(&*db)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     info!(id = res.id, "updated prompt");
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
+        weight: res.weight,
     }))
 }
 
 async fn delete_prompt(
     Path(id): Path<i32>,
-    State(db): State<DatabaseConnection>,
+    State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<(), axum::http::StatusCode> {
     info!(id, "deleting prompt");
     let Some(model) = Prompt::find_by_id(id)
-        .one(&db)
+        .one(&*db)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
     else {
@@ -105,7 +118,7 @@ async fn delete_prompt(
     };
     let active: model::ActiveModel = model.into();
     active
-        .delete(&db)
+        .delete(&*db)
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
     info!(id, "deleted prompt");
@@ -121,11 +134,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         openai_api_key: String::new(),
         class_prompt_id: 0,
     });
-    let db: DatabaseConnection = Database::connect(&settings.database_url).await?;
+    let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
     // create table if not exists
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, weight REAL NOT NULL DEFAULT 1)",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
+        "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1",
     ))
     .await?;
 
@@ -146,6 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::*;
     use axum::Router;
+    use sea_orm::{DbBackend, MockDatabase, MockExecResult};
     use tower::ServiceExt; // for `oneshot`
 
     #[tokio::test]
@@ -161,5 +180,54 @@ mod tests {
             .await
             .unwrap();
         assert!(res.status().is_success());
+    }
+
+    #[tokio::test]
+    async fn create_update_weight() {
+        let db = Arc::new(
+            MockDatabase::new(DbBackend::Postgres)
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 1,
+                    rows_affected: 1,
+                }])
+                .append_query_results([[model::Model {
+                    id: 1,
+                    text: "hello".into(),
+                    weight: 2.0,
+                }]])
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                }])
+                .append_query_results([[model::Model {
+                    id: 1,
+                    text: "world".into(),
+                    weight: 3.0,
+                }]])
+                .into_connection(),
+        );
+
+        let res = create_prompt(
+            State(db.clone()),
+            Json(PromptInput {
+                text: "hello".into(),
+                weight: 2.0,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.weight, 2.0);
+
+        let res = update_prompt(
+            Path(1),
+            State(db.clone()),
+            Json(PromptInput {
+                text: "world".into(),
+                weight: 3.0,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.weight, 3.0);
     }
 }
