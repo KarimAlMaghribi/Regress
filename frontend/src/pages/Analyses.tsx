@@ -3,7 +3,8 @@ import { Box, Tabs, Tab, Paper, Button, Typography } from '@mui/material';
 import PageHeader from '../components/PageHeader';
 
 interface Entry {
-  id: string;
+  id: number; // analysis id
+  pdfId: number;
   prompt?: string;
   status: string;
 }
@@ -18,27 +19,33 @@ export default function Analyses() {
       fetch('http://localhost:8090/analyses?status=running').then(r => r.json()),
       fetch('http://localhost:8090/analyses?status=completed').then(r => r.json()),
     ])
-      .then(([runningData, doneData]: [Entry[], Entry[]]) => {
-        setRunning(runningData);
-        setDone(doneData);
+      .then(([runningData, doneData]: [any[], any[]]) => {
+        const map = (d: any): Entry => ({
+          id: d.id,
+          pdfId: d.pdf_id ?? d.pdfId,
+          prompt: d.prompt,
+          status: d.status,
+        });
+        setRunning(runningData.map(map));
+        setDone(doneData.map(map));
       })
       .catch(e => console.error('load analyses', e));
   };
 
   useEffect(load, []);
 
-  const renderList = (items: Entry[], finished: boolean) => (
-    <Paper sx={{ p: 2 }}>
-      {items.map(e => (
-        <Box key={e.id} sx={{ mb: 1, display: 'flex', justifyContent: 'space-between' }}>
-          <Typography>{e.id} - {e.prompt || 'Prompt'}</Typography>
-          {finished && (
-            <Button size="small" href={`http://localhost:8084/results/${e.id}`}>Ergebnis anzeigen</Button>
-          )}
-        </Box>
-      ))}
-      {items.length === 0 && <Typography>Keine Einträge</Typography>}
-    </Paper>
+const renderList = (items: Entry[], finished: boolean) => (
+  <Paper sx={{ p: 2 }}>
+    {items.map(e => (
+      <Box key={e.id} sx={{ mb: 1, display: 'flex', justifyContent: 'space-between' }}>
+        <Typography>{e.pdfId} - {e.prompt || 'Prompt'}</Typography>
+        {finished && (
+          <Button size="small" href={`http://localhost:8084/results/${e.pdfId}`}>Ergebnis anzeigen</Button>
+        )}
+      </Box>
+    ))}
+    {items.length === 0 && <Typography>Keine Einträge</Typography>}
+  </Paper>
   );
 
   return (
