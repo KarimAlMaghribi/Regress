@@ -254,6 +254,7 @@ async fn main() -> std::io::Result<()> {
         prod: &FutureProducer,
         evt: TextExtracted,
     ) {
+        info!(id = evt.id, "processing text-extracted event");
         let prompts: Vec<PromptCfg> = serde_json::from_str(&evt.prompt).unwrap_or_else(|_| {
             vec![PromptCfg {
                 text: evt.prompt.clone(),
@@ -273,9 +274,13 @@ async fn main() -> std::io::Result<()> {
                 content: Some(user_content),
                 ..Default::default()
             };
-            if let Err(e) = handle_openai(vec![message], p, &mut rules, &mut answers, &mut score).await {
+            info!(id = evt.id, "calling openai");
+            if let Err(e) =
+                handle_openai(vec![message], p, &mut rules, &mut answers, &mut score).await
+            {
                 error!(%e, id = evt.id, "openai error");
             }
+            info!(id = evt.id, "openai call finished");
         }
         let metrics = serde_json::json!({"rules": rules});
         let responses = serde_json::json!(answers);
@@ -297,6 +302,7 @@ async fn main() -> std::io::Result<()> {
                 ],
             )
             .await;
+        info!(id = evt.id, "stored classification result in database");
         let result = ClassificationResult {
             id: evt.id,
             regress,
@@ -314,6 +320,7 @@ async fn main() -> std::io::Result<()> {
                 Duration::from_secs(0),
             )
             .await;
+        info!(id = evt.id, "published classification-result event");
     }
 
     actix_web::rt::spawn(async move {
@@ -331,6 +338,7 @@ async fn main() -> std::io::Result<()> {
                 Ok(m) => {
                     if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Ok(evt) = serde_json::from_str::<TextExtracted>(payload) {
+                            info!(id = evt.id, "received text-extracted event");
                             handle_event(&client, &db, &prod, evt).await;
                         }
                     }

@@ -1,8 +1,8 @@
 use actix_cors::Cors;
 use actix_multipart::Multipart;
+use actix_web::http::header;
 use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
-use actix_web::http::header;
 use futures_util::StreamExt as _;
 use rdkafka::{
     producer::{FutureProducer, FutureRecord},
@@ -48,7 +48,11 @@ async fn upload(
             .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
         let id: i32 = row.get(0);
         info!(id, "pdf stored in database");
-        let payload = serde_json::to_string(&PdfUploaded { id, prompt: prompt.clone() }).unwrap();
+        let payload = serde_json::to_string(&PdfUploaded {
+            id,
+            prompt: prompt.clone(),
+        })
+        .unwrap();
         let _ = producer
             .send(
                 FutureRecord::to("pdf-uploaded").payload(&payload).key(&()),
@@ -143,19 +147,35 @@ mod tests {
 
     #[actix_web::test]
     async fn get_pdf_ok() {
-        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://postgres:postgres@localhost/postgres".into());
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/postgres".into());
         if let Ok((client, connection)) = tokio_postgres::connect(&url, NoTls).await {
-            tokio::spawn(async move { let _ = connection.await; });
-            client.execute("CREATE TABLE IF NOT EXISTS pdfs (id SERIAL PRIMARY KEY, data BYTEA NOT NULL)", &[]).await.unwrap();
-            client.execute("INSERT INTO pdfs (data) VALUES ($1)", &[&b"test".as_slice()]).await.unwrap();
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            client
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS pdfs (id SERIAL PRIMARY KEY, data BYTEA NOT NULL)",
+                    &[],
+                )
+                .await
+                .unwrap();
+            client
+                .execute(
+                    "INSERT INTO pdfs (data) VALUES ($1)",
+                    &[&b"test".as_slice()],
+                )
+                .await
+                .unwrap();
             let app = test::init_service(
                 App::new()
                     .app_data(web::Data::new(client))
-                    .route("/pdf/{id}", web::get().to(get_pdf))
-            ).await;
+                    .route("/pdf/{id}", web::get().to(get_pdf)),
+            )
+            .await;
             let req = test::TestRequest::get().uri("/pdf/1").to_request();
             let resp = test::call_and_read_body(&app, req).await;
-            assert_eq!(&resp, b"test");
+            assert_eq!(&resp[..], b"test");
         }
     }
 }
