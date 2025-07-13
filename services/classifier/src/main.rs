@@ -107,7 +107,7 @@ async fn handle_openai(
         parameters: Some(schema),
     };
 
-    let creds = Credentials::new(api_key.to_string());
+    let creds = Credentials::new(api_key.to_string(), "");
 
     let chat = ChatCompletion::builder("gpt-4-turbo", messages)
         .functions(vec![func])
@@ -197,6 +197,8 @@ async fn main() -> std::io::Result<()> {
         error!("OPENAI_API_KEY environment variable is required");
         panic!("OPENAI_API_KEY environment variable is required");
     }
+    std::env::set_var("OPENAI_API_KEY", &settings.openai_api_key);
+    std::env::set_var("OPENAI_KEY", &settings.openai_api_key);
     let (db_client, connection) = loop {
         match tokio_postgres::connect(&settings.database_url, NoTls).await {
             Ok(conn) => break conn,
