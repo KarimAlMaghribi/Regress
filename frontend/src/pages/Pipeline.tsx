@@ -1,20 +1,23 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Box, Paper, Typography, Checkbox, FormControlLabel, Button,
-  FormControl, InputLabel, Select, MenuItem, Snackbar, Alert, Chip,
-  ListItemText
+  Box,
+  Paper,
+  Typography,
+  Checkbox,
+  FormControlLabel,
+  Button,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  Snackbar,
+  Alert,
+  ListItemText,
 } from '@mui/material';
 import PageHeader from '../components/PageHeader';
 
 interface Prompt { id: number; text: string; weight: number }
 interface TextEntry { id: number }
-interface Rule { prompt: string; weight: number; result: boolean }
-interface AnalysisData {
-  score: number;
-  result_label: string;
-  metrics: { rules?: Rule[] };
-  [k: string]: any;
-}
 
 export default function Pipeline() {
   const [pdfs, setPdfs] = useState<TextEntry[]>([]);
@@ -22,8 +25,9 @@ export default function Pipeline() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [promptIds, setPromptIds] = useState<number[]>([]);
   const [snack, setSnack] = useState('');
-  const [analysis, setAnalysis] = useState<AnalysisData | null>(null);
-
+  // Results are displayed in the history section, not directly in the pipeline
+  // view. Therefore we only keep a snackbar for feedback here.
+  
   const load = () => {
     fetch('http://localhost:8083/texts')
       .then(r => r.json())
@@ -46,7 +50,9 @@ export default function Pipeline() {
   };
 
   const start = () => {
-    const chosen = promptIds.map(id => prompts.find(p => p.id === id)).filter(Boolean) as Prompt[];
+    const chosen = promptIds
+      .map(id => prompts.find(p => p.id === id))
+      .filter(Boolean) as Prompt[];
     if (chosen.length === 0 || selected.length === 0) return;
     const payloadPrompts = chosen.map(p => ({ text: p.text, weight: p.weight }));
     const prompt = JSON.stringify(payloadPrompts);
@@ -54,22 +60,12 @@ export default function Pipeline() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ids: selected, prompt })
-    }).then(() => {
-      setSnack('Analyse gestartet');
-      setSelected([]);
-      const id = selected[0];
-      if (id) {
-        fetch(`http://localhost:8084/results/${id}`)
-          .then(async r => {
-            if (r.status === 202) {
-              throw new Error('Analyse läuft noch');
-            }
-            return r.json();
-          })
-          .then(setAnalysis)
-          .catch(e => setSnack(`Fehler: ${e}`));
-      }
-    }).catch(e => setSnack(`Fehler: ${e}`));
+    })
+      .then(() => {
+        setSnack('Analyse gestartet');
+        setSelected([]);
+      })
+      .catch(e => setSnack(`Fehler: ${e}`));
   };
 
   return (
@@ -99,20 +95,13 @@ export default function Pipeline() {
           ))}
         </Select>
       </FormControl>
-      <Button variant="contained" disabled={!selected.length || promptIds.length===0} onClick={start}>Analyse starten</Button>
-      {analysis && (
-        <Paper sx={{ p:2, mt:2 }}>
-          <Typography variant="h6" gutterBottom>
-            Score: {analysis.score.toFixed(3)}
-          </Typography>
-          <Chip label={analysis.result_label} color="primary" sx={{ mb:2 }} />
-          {analysis.metrics?.rules?.map((r,i)=>(
-            <Typography key={i} variant="body2">
-              {r.prompt}: {r.result ? 'true' : 'false'} (w={r.weight})
-            </Typography>
-          ))}
-        </Paper>
-      )}
+      <Button
+        variant="contained"
+        disabled={!selected.length || promptIds.length === 0}
+        onClick={start}
+      >
+        Analyse starten
+      </Button>
       <Snackbar open={!!snack} autoHideDuration={4000} onClose={() => setSnack('')}>
         <Alert onClose={() => setSnack('')} severity="info">{snack}</Alert>
       </Snackbar>
