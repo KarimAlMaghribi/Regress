@@ -184,12 +184,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // create table if not exists
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, weight REAL NOT NULL DEFAULT 1)",
+        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, weight DOUBLE PRECISION NOT NULL DEFAULT 1)",
     ))
     .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS weight REAL DEFAULT 1",
+        "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS weight DOUBLE PRECISION DEFAULT 1",
     ))
     .await?;
     db.execute(sea_orm::Statement::from_string(
