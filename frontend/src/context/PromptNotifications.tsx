@@ -18,9 +18,10 @@ export function PromptNotificationProvider({ children }: { children: React.React
   const fetchData = async () => {
     try {
       const res = await fetch('http://localhost:8082/prompts');
-      const json: { id: number }[] = await res.json();
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || res.statusText);
       const seen = JSON.parse(localStorage.getItem('seenPromptIds') || '[]') as number[];
-      const unseen = json.map(p => p.id).filter(id => !seen.includes(id));
+      const unseen = (json as { id: number }[]).map(p => p.id).filter(id => !seen.includes(id));
       setUnread(unseen.length);
     } catch (err) {
       console.error('load prompts', err);

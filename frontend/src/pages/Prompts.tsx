@@ -42,7 +42,11 @@ export default function Prompts() {
 
   const load = () => {
     fetch('http://localhost:8082/prompts')
-      .then(r => r.json())
+      .then(async r => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error || r.statusText);
+        return json as any[];
+      })
       .then((d: any[]) => {
         const data = d.map(p => ({
           ...p,
@@ -64,8 +68,15 @@ export default function Prompts() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text: newText, weight: newWeight })
-    }).then(() => { setNewText(''); setNewWeight(1); load(); })
-      .catch(e => console.error('create prompt', e));
+    }).then(async r => {
+      if (!r.ok) {
+        const j = await r.json();
+        throw new Error(j.error || r.statusText);
+      }
+      setNewText('');
+      setNewWeight(1);
+      load();
+    }).catch(e => console.error('create prompt', e));
   };
 
   const update = (id: number, text: string, tags: string[], weight: number) => {
@@ -73,14 +84,22 @@ export default function Prompts() {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, tags, weight })
-    }).then(() => {
+    }).then(async r => {
+      if (!r.ok) {
+        const j = await r.json();
+        throw new Error(j.error || r.statusText);
+      }
       localStorage.setItem(`promptTags_${id}`, JSON.stringify(tags));
       load();
     }).catch(e => console.error('update prompt', e));
   };
 
   const remove = (id: number) => {
-    fetch(`http://localhost:8082/prompts/${id}`, { method: 'DELETE' }).then(() => {
+    fetch(`http://localhost:8082/prompts/${id}`, { method: 'DELETE' }).then(async r => {
+      if (!r.ok) {
+        const j = await r.json();
+        throw new Error(j.error || r.statusText);
+      }
       localStorage.removeItem(`promptTags_${id}`);
       setFavorites(f => f.filter(v => v !== id));
       load();
