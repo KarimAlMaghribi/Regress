@@ -14,11 +14,13 @@ export default function Analyses() {
   const [done, setDone] = useState<Entry[]>([]);
 
   const load = () => {
-    fetch('http://localhost:8090/analyses')
-      .then(r => r.json())
-      .then((data: Entry[]) => {
-        setRunning(data.filter(e => e.status === 'running'));
-        setDone(data.filter(e => e.status === 'completed'));
+    Promise.all([
+      fetch('http://localhost:8090/analyses?status=running').then(r => r.json()),
+      fetch('http://localhost:8090/analyses?status=completed').then(r => r.json()),
+    ])
+      .then(([runningData, doneData]: [Entry[], Entry[]]) => {
+        setRunning(runningData);
+        setDone(doneData);
       })
       .catch(e => console.error('load analyses', e));
   };

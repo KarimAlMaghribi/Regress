@@ -22,6 +22,7 @@ interface HistoryEntry {
   result: { regress?: boolean; answer?: string } | null;
   pdfUrl: string;
   prompt?: string | null;
+  status?: string;
   score?: number;
   result_label?: string;
   [key: string]: any;
@@ -35,6 +36,7 @@ function normalizeEntry(e: any): HistoryEntry {
     timestamp: e.timestamp,
     result: e.result,
     prompt: e.prompt ?? null,
+    status: e.status,
     score: e.score,
     result_label: e.result_label,
   };
@@ -95,6 +97,7 @@ export default function History() {
       valueGetter: p => dayjs(p.row.timestamp).format('HH:mm:ss'),
     },
     { field: 'prompt', headerName: 'Prompt', flex: 1 },
+    { field: 'status', headerName: 'Status', width: 110, valueGetter: p => p.row.status || '' },
     {
       field: 'regress',
       headerName: 'Regress',
