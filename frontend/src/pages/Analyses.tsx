@@ -40,7 +40,7 @@ const renderList = (items: Entry[], finished: boolean) => (
       <Box key={e.id} sx={{ mb: 1, display: 'flex', justifyContent: 'space-between' }}>
         <Typography>{e.pdfId} - {e.prompt || 'Prompt'}</Typography>
         {finished && (
-          <Button size="small" href={`http://localhost:8084/results/${e.pdfId}`}>Ergebnis anzeigen</Button>
+          <Button size="small" href={`/result/${e.pdfId}`} target="_blank" rel="noopener">Ergebnis anzeigen</Button>
         )}
       </Box>
     ))}
