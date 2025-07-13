@@ -38,7 +38,11 @@ export default function AnalysisHistory() {
 
   useEffect(() => {
     fetch(`${import.meta.env.REACT_APP_API_URL || ''}/api/prompts`)
-      .then(r => r.json())
+      .then(async r => {
+        const j = await r.json();
+        if (!r.ok) throw new Error(j.error || r.statusText);
+        return j;
+      })
       .then(d => setPrompts(d))
       .catch(e => console.error('load prompts', e));
   }, []);

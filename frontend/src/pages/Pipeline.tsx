@@ -30,7 +30,11 @@ export default function Pipeline() {
       .then(setPdfs)
       .catch(e => setSnack(`Fehler: ${e}`));
     fetch('http://localhost:8082/prompts')
-      .then(r => r.json())
+      .then(async r => {
+        const json = await r.json();
+        if (!r.ok) throw new Error(json.error || r.statusText);
+        return json as any[];
+      })
       .then((d: any[]) => setPrompts(d.map(p => ({ ...p, weight: p.weight ?? 1 }))))
       .catch(e => setSnack(`Fehler: ${e}`));
   };

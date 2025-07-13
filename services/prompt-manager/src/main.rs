@@ -1,5 +1,6 @@
 use axum::{
     extract::{Path, State},
+    http::StatusCode,
     routing::{get, put},
     Json, Router,
 };
@@ -11,7 +12,7 @@ use tower_http::cors::CorsLayer;
 
 mod model;
 use model::Entity as Prompt;
-use tracing::info;
+use tracing::{error, info};
 
 async fn health() -> &'static str {
     info!("health check request");
@@ -32,18 +33,28 @@ struct PromptInput {
     weight: f64,
 }
 
+#[derive(Serialize, Debug)]
+struct ErrorResponse {
+    error: String,
+}
+
 fn default_weight() -> f64 {
     1.0
 }
 
 async fn list_prompts(
     State(db): State<Arc<DatabaseConnection>>,
-) -> Result<Json<Vec<PromptData>>, axum::http::StatusCode> {
+) -> Result<Json<Vec<PromptData>>, (StatusCode, Json<ErrorResponse>)> {
     info!("listing prompts");
-    let items = Prompt::find()
-        .all(&*db)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let items = Prompt::find().all(&*db).await.map_err(|e| {
+        error!("failed to list prompts: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
     let texts: Vec<PromptData> = items
         .into_iter()
         .map(|p| PromptData {
@@ -59,15 +70,20 @@ async fn list_prompts(
 async fn create_prompt(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
-) -> Result<Json<PromptData>, axum::http::StatusCode> {
+) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
     info!("creating prompt");
     let mut model: model::ActiveModel = Default::default();
     model.text = Set(input.text);
     model.weight = Set(input.weight);
-    let res = model
-        .insert(&*db)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let res = model.insert(&*db).await.map_err(|e| {
+        error!("failed to create prompt: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
     info!(id = res.id, "created prompt");
     Ok(Json(PromptData {
         id: res.id,
@@ -80,22 +96,37 @@ async fn update_prompt(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
-) -> Result<Json<PromptData>, axum::http::StatusCode> {
+) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
     info!(id, "updating prompt");
-    let Some(mut model) = Prompt::find_by_id(id)
-        .one(&*db)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+    let Some(mut model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
+        error!("failed to find prompt {}: {}", id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?
     else {
-        return Err(axum::http::StatusCode::NOT_FOUND);
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Not found".into(),
+            }),
+        ));
     };
     model.text = input.text;
     model.weight = input.weight;
     let active: model::ActiveModel = model.into();
-    let res = active
-        .update(&*db)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    let res = active.update(&*db).await.map_err(|e| {
+        error!("failed to update prompt {}: {}", id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
     info!(id = res.id, "updated prompt");
     Ok(Json(PromptData {
         id: res.id,
@@ -107,20 +138,35 @@ async fn update_prompt(
 async fn delete_prompt(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
-) -> Result<(), axum::http::StatusCode> {
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     info!(id, "deleting prompt");
-    let Some(model) = Prompt::find_by_id(id)
-        .one(&*db)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
+        error!("failed to find prompt {}: {}", id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?
     else {
-        return Err(axum::http::StatusCode::NOT_FOUND);
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Not found".into(),
+            }),
+        ));
     };
     let active: model::ActiveModel = model.into();
-    active
-        .delete(&*db)
-        .await
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    active.delete(&*db).await.map_err(|e| {
+        error!("failed to delete prompt {}: {}", id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
     info!(id, "deleted prompt");
     Ok(())
 }
@@ -190,6 +236,11 @@ mod tests {
                     last_insert_id: 1,
                     rows_affected: 1,
                 }])
+                .append_query_results([[model::Model {
+                    id: 1,
+                    text: "hello".into(),
+                    weight: 2.0,
+                }]])
                 .append_query_results([[model::Model {
                     id: 1,
                     text: "hello".into(),
