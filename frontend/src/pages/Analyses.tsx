@@ -1,5 +1,25 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Box, Tabs, Tab, Paper, Button, Typography } from '@mui/material';
+import {
+  Box,
+  Tabs,
+  Tab,
+  Paper,
+  Button,
+  Typography,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
+  LinearProgress,
+  Grid,
+  Card,
+  CardContent,
+} from '@mui/material';
 import {
   BarChart,
   Bar,
@@ -142,92 +162,123 @@ const renderList = (items: Entry[], finished: boolean) => (
       </Tabs>
       {tab === 0 ? renderList(running, false) : renderList(done, true)}
       {dashboard && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={closeDashboard}>
-          <div
-            className="bg-white p-4 rounded shadow max-h-screen overflow-y-auto w-full max-w-2xl"
-            onClick={e => e.stopPropagation()}
-          >
-            <button className="mb-2 px-2 py-1 border rounded" onClick={closeDashboard}>Schließen</button>
-            <div className="space-y-4">
-              <h2 className="text-xl font-bold">Dokument ID: {dashboardId}</h2>
-              <div className="flex items-center gap-2">
-                <div
-                  className={`w-4 h-4 rounded-full ${
-                    dashboard.resultLabel === 'SICHER_REGRESS'
-                      ? 'bg-green-500'
-                      : dashboard.resultLabel === 'MÖGLICHER_REGRESS'
-                      ? 'bg-yellow-500'
-                      : 'bg-red-500'
-                  }`}
-                />
-                <span>{dashboard.resultLabel}</span>
-              </div>
-              <progress value={dashboard.score} max={1} className="w-full h-2 accent-blue-500"></progress>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  placeholder="Suche"
-                  value={query}
-                  onChange={e => setQuery(e.target.value)}
-                  className="p-2 border rounded w-full"
-                />
-                <select
-                  value={onlyFailed ? 'fails' : 'all'}
-                  onChange={e => setOnlyFailed(e.target.value === 'fails')}
-                  className="p-2 border rounded"
-                >
-                  <option value="all">Alle Regeln</option>
-                  <option value="fails">Nur Fehler</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="h-72">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={rules} layout="vertical">
-                      <XAxis type="number" />
-                      <YAxis
-                        type="category"
-                        dataKey="prompt"
-                        tickFormatter={v => (v.length > 20 ? `${v.slice(0, 20)}…` : v)}
-                        width={150}
-                      />
-                      <Tooltip
-                        content={({ active, payload }: any) => {
-                          if (!active || !payload?.length) return null;
-                          const r: Rule = payload[0].payload;
-                          return (
-                            <div className="p-2 bg-white border rounded shadow text-sm">
-                              <p className="font-semibold break-words">{r.prompt}</p>
-                              <p className="whitespace-pre-wrap">{r.answer}</p>
+        <Dialog open onClose={closeDashboard} maxWidth="md" fullWidth>
+          <DialogTitle>Dokument ID: {dashboardId}</DialogTitle>
+          <DialogContent dividers>
+            {(() => {
+              const color =
+                dashboard.resultLabel === 'SICHER_REGRESS'
+                  ? 'success.main'
+                  : dashboard.resultLabel === 'MÖGLICHER_REGRESS'
+                  ? 'warning.main'
+                  : 'error.main';
+              return (
+                <Box>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                    <Box sx={{ width: 16, height: 16, borderRadius: '50%', bgcolor: color }} />
+                    <Typography>{dashboard.resultLabel}</Typography>
+                  </Box>
+                  <LinearProgress
+                    variant="determinate"
+                    value={dashboard.score * 100}
+                    sx={{ mb: 2, height: 8, borderRadius: 1 }}
+                  />
+                  <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
+                    <TextField
+                      label="Suche"
+                      value={query}
+                      onChange={e => setQuery(e.target.value)}
+                      size="small"
+                      sx={{ flexGrow: 1, minWidth: 160 }}
+                    />
+                    <FormControl size="small" sx={{ minWidth: 120 }}>
+                      <InputLabel id="filter-label">Regeln</InputLabel>
+                      <Select
+                        labelId="filter-label"
+                        value={onlyFailed ? 'fails' : 'all'}
+                        label="Regeln"
+                        onChange={e => setOnlyFailed(e.target.value === 'fails')}
+                      >
+                        <MenuItem value="all">Alle Regeln</MenuItem>
+                        <MenuItem value="fails">Nur Fehler</MenuItem>
+                      </Select>
+                    </FormControl>
+                  </Box>
+                  <Grid container spacing={2}>
+                    <Grid item xs={12} md={6}>
+                      <Box sx={{ height: 288 }}>
+                        <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={rules} layout="vertical">
+                            <XAxis type="number" />
+                            <YAxis
+                              type="category"
+                              dataKey="prompt"
+                              tickFormatter={v => (v.length > 20 ? `${v.slice(0, 20)}…` : v)}
+                              width={150}
+                            />
+                            <Tooltip
+                              content={({ active, payload }: any) => {
+                                if (!active || !payload?.length) return null;
+                                const r: Rule = payload[0].payload;
+                                return (
+                                  <Paper sx={{ p: 1 }}>
+                                    <Typography variant="subtitle2" sx={{ wordBreak: 'break-word' }}>
+                                      {r.prompt}
+                                    </Typography>
+                                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                                      {r.answer}
+                                    </Typography>
+                                    {r.source && (
+                                      <Typography
+                                        component="code"
+                                        variant="caption"
+                                        sx={{ display: 'block', whiteSpace: 'pre-wrap', mt: 0.5 }}
+                                      >
+                                        {r.source}
+                                      </Typography>
+                                    )}
+                                  </Paper>
+                                );
+                              }}
+                            />
+                            <Bar dataKey="weight">
+                              {rules.map((r, i) => (
+                                <Cell key={i} fill={r.result ? '#2e7d32' : '#d32f2f'} />
+                              ))}
+                            </Bar>
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </Box>
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <Box sx={{ maxHeight: 288, overflowY: 'auto' }}>
+                        {responses.map((r, i) => (
+                          <Card key={i} sx={{ mb: 1 }}>
+                            <CardContent>
+                              <Typography sx={{ whiteSpace: 'pre-wrap' }}>{r.answer}</Typography>
                               {r.source && (
-                                <code className="block mt-1 whitespace-pre-wrap">{r.source}</code>
+                                <Typography
+                                  component="code"
+                                  variant="caption"
+                                  sx={{ display: 'block', whiteSpace: 'pre-wrap', mt: 0.5 }}
+                                >
+                                  {r.source}
+                                </Typography>
                               )}
-                            </div>
-                          );
-                        }}
-                      />
-                      <Bar dataKey="weight">
-                        {rules.map((r, i) => (
-                          <Cell key={i} fill={r.result ? '#22c55e' : '#ef4444'} />
+                            </CardContent>
+                          </Card>
                         ))}
-                      </Bar>
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="overflow-y-auto max-h-72">
-                  {responses.map((r, i) => (
-                    <div key={i} className="p-4 border rounded-lg mb-2">
-                      <p className="whitespace-pre-wrap">{r.answer}</p>
-                      {r.source && (
-                        <code className="block mt-1 whitespace-pre-wrap">{r.source}</code>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
+                      </Box>
+                    </Grid>
+                  </Grid>
+                </Box>
+              );
+            })()}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={closeDashboard}>Schließen</Button>
+          </DialogActions>
+        </Dialog>
       )}
     </Box>
   );
