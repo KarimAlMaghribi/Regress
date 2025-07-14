@@ -1,44 +1,63 @@
 use sea_orm::entity::prelude::*;
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "prompts")]
-pub struct Model {
-    #[sea_orm(primary_key)]
-    pub id: i32,
-    pub text: String,
-    pub weight: f64,
-    pub favorite: bool,
+pub mod prompt {
+    use super::*;
+
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "prompts")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub text: String,
+        pub weight: f64,
+        pub favorite: bool,
+    }
+
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum Relation {}
+pub mod group {
+    use super::*;
 
-impl ActiveModelBehavior for ActiveModel {}
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "prompt_groups")]
+    pub struct Model {
+        #[sea_orm(primary_key)]
+        pub id: i32,
+        pub name: String,
+        pub favorite: bool,
+    }
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "prompt_groups")]
-pub struct GroupModel {
-    #[sea_orm(primary_key)]
-    pub id: i32,
-    pub name: String,
-    pub favorite: bool,
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum GroupRelation {}
+pub mod group_prompt {
+    use super::*;
 
-impl ActiveModelBehavior for GroupActiveModel {}
+    #[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
+    #[sea_orm(table_name = "group_prompts")]
+    pub struct Model {
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub group_id: i32,
+        #[sea_orm(primary_key, auto_increment = false)]
+        pub prompt_id: i32,
+    }
 
-#[derive(Clone, Debug, PartialEq, DeriveEntityModel)]
-#[sea_orm(table_name = "group_prompts")]
-pub struct GroupPromptModel {
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub group_id: i32,
-    #[sea_orm(primary_key, auto_increment = false)]
-    pub prompt_id: i32,
+    #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+    pub enum Relation {}
+
+    impl ActiveModelBehavior for ActiveModel {}
 }
 
-#[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
-pub enum GroupPromptRelation {}
-
-impl ActiveModelBehavior for GroupPromptActiveModel {}
+// Re-export commonly used types for convenience
+pub use group::{ActiveModel as GroupActiveModel, Entity as GroupEntity, Model as GroupModel};
+pub use group_prompt::{
+    ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity, Model as GroupPromptModel,
+};
+pub use prompt::{ActiveModel, Entity, Model};

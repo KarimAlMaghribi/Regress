@@ -4,14 +4,21 @@ use axum::{
     routing::{get, put},
     Json, Router,
 };
-use sea_orm::{ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait, Set};
+use sea_orm::{
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
+    QueryFilter, Set,
+};
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
 mod model;
-use model::{Entity as Prompt, GroupModel, GroupPromptModel};
+use model::{
+    group::{Entity as GroupEntity, Model as GroupModel},
+    group_prompt::{Entity as GroupPromptEntity, Model as GroupPromptModel},
+    prompt::Entity as Prompt,
+};
 use tracing::{error, info};
 
 async fn health() -> &'static str {
@@ -199,24 +206,28 @@ async fn list_groups(
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<Json<Vec<GroupData>>, (StatusCode, Json<ErrorResponse>)> {
     info!("listing groups");
-    let groups = GroupModel::find().all(&*db).await.map_err(|e| {
+    let groups = GroupEntity::find().all(&*db).await.map_err(|e| {
         error!("failed to list groups: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
     })?;
     let mut result = Vec::new();
     for g in groups {
-        let members = GroupPromptModel::find()
-            .filter(model::group_prompt_model::Column::GroupId.eq(g.id))
+        let members = GroupPromptEntity::find()
+            .filter(model::group_prompt::Column::GroupId.eq(g.id))
             .all(&*db)
             .await
             .map_err(|e| {
                 error!("failed to list group prompts: {}", e);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse { error: e.to_string() }),
+                    Json(ErrorResponse {
+                        error: e.to_string(),
+                    }),
                 )
             })?;
         result.push(GroupData {
@@ -241,7 +252,9 @@ async fn create_group(
         error!("failed to create group: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
     })?;
     for pid in &input.prompt_ids {
@@ -252,11 +265,18 @@ async fn create_group(
             error!("failed to add prompt to group: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e.to_string() }),
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
             )
         })?;
     }
-    Ok(Json(GroupData { id: g.id, name: g.name, favorite: g.favorite, prompt_ids: input.prompt_ids }))
+    Ok(Json(GroupData {
+        id: g.id,
+        name: g.name,
+        favorite: g.favorite,
+        prompt_ids: input.prompt_ids,
+    }))
 }
 
 async fn set_group_favorite(
@@ -264,16 +284,21 @@ async fn set_group_favorite(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<FavoriteInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(mut group) = GroupModel::find_by_id(id).one(&*db).await.map_err(|e| {
+    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(|e| {
         error!("failed to find group {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
-    })? else {
+    })?
+    else {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse { error: "Not found".into() }),
+            Json(ErrorResponse {
+                error: "Not found".into(),
+            }),
         ));
     };
     group.favorite = input.favorite;
@@ -282,18 +307,22 @@ async fn set_group_favorite(
         error!("failed to update group favorite: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
     })?;
-    let members = GroupPromptModel::find()
-        .filter(model::group_prompt_model::Column::GroupId.eq(g.id))
+    let members = GroupPromptEntity::find()
+        .filter(model::group_prompt::Column::GroupId.eq(g.id))
         .all(&*db)
         .await
         .map_err(|e| {
             error!("failed to list group prompts: {}", e);
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e.to_string() }),
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
             )
         })?;
     Ok(Json(GroupData {
@@ -319,13 +348,17 @@ async fn set_favorite(
         error!("failed to find prompt {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
     })?
     else {
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse { error: "Not found".into() }),
+            Json(ErrorResponse {
+                error: "Not found".into(),
+            }),
         ));
     };
     model.favorite = input.favorite;
@@ -334,7 +367,9 @@ async fn set_favorite(
         error!("failed to update favorite {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
         )
     })?;
     Ok(Json(PromptData {
@@ -512,7 +547,10 @@ mod tests {
                     weight: 1.0,
                     favorite: false,
                 }]])
-                .append_exec_results([MockExecResult { last_insert_id: 0, rows_affected: 1 }])
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                }])
                 .append_query_results([[model::Model {
                     id: 1,
                     text: "test".into(),
@@ -536,16 +574,33 @@ mod tests {
     async fn create_group_route() {
         let db = Arc::new(
             MockDatabase::new(DbBackend::Postgres)
-                .append_exec_results([MockExecResult { last_insert_id: 1, rows_affected: 1 }])
-                .append_exec_results([MockExecResult { last_insert_id: 0, rows_affected: 1 }])
-                .append_query_results([[model::GroupModel { id: 1, name: "g".into(), favorite: false }]])
-                .append_query_results([[model::GroupPromptModel { group_id: 1, prompt_id: 2 }]])
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 1,
+                    rows_affected: 1,
+                }])
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                }])
+                .append_query_results([[model::GroupModel {
+                    id: 1,
+                    name: "g".into(),
+                    favorite: false,
+                }]])
+                .append_query_results([[model::GroupPromptModel {
+                    group_id: 1,
+                    prompt_id: 2,
+                }]])
                 .into_connection(),
         );
 
         let res = create_group(
             State(db.clone()),
-            Json(GroupInput { name: "g".into(), prompt_ids: vec![2], favorite: false }),
+            Json(GroupInput {
+                name: "g".into(),
+                prompt_ids: vec![2],
+                favorite: false,
+            }),
         )
         .await
         .unwrap();
