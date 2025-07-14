@@ -38,6 +38,7 @@ interface Prompt {
   text: string;
   tags: string[];
   weight: number;
+  favorite: boolean;
 }
 
 export default function Prompts() {
@@ -52,7 +53,6 @@ export default function Prompts() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [bulkWeight, setBulkWeight] = useState(1);
   const [helpOpen, setHelpOpen] = useState(false);
-  const [favorites, setFavorites] = useState<number[]>(() => JSON.parse(localStorage.getItem('favoritePrompts') || '[]'));
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { markAllRead } = usePromptNotifications();
@@ -68,6 +68,7 @@ export default function Prompts() {
         const data = d.map(p => ({
           ...p,
           weight: p.weight ?? 1,
+          favorite: !!p.favorite,
           tags: JSON.parse(localStorage.getItem(`promptTags_${p.id}`) || '[]')
         }));
         setPrompts(data);
@@ -98,7 +99,7 @@ export default function Prompts() {
     fetch('http://localhost:8082/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: newText, weight: newWeight })
+      body: JSON.stringify({ text: newText, weight: newWeight, favorite: false })
     }).then(async r => {
       if (!r.ok) {
         const j = await r.json();
@@ -111,10 +112,11 @@ export default function Prompts() {
   };
 
   const update = (id: number, text: string, tags: string[], weight: number) => {
+    const fav = prompts.find(p => p.id === id)?.favorite ?? false;
     fetch(`http://localhost:8082/prompts/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, tags, weight })
+      body: JSON.stringify({ text, tags, weight, favorite: fav })
     }).then(async r => {
       if (!r.ok) {
         const j = await r.json();
@@ -132,17 +134,24 @@ export default function Prompts() {
         throw new Error(j.error || r.statusText);
       }
       localStorage.removeItem(`promptTags_${id}`);
-      setFavorites(f => f.filter(v => v !== id));
       load();
     }).catch(e => console.error('remove prompt', e));
   };
 
   const toggleFav = (id: number) => {
-    setFavorites(f => {
-      const n = f.includes(id) ? f.filter(v => v !== id) : [...f, id];
-      localStorage.setItem('favoritePrompts', JSON.stringify(n));
-      return n;
-    });
+    const p = prompts.find(pr => pr.id === id);
+    if (!p) return;
+    fetch(`http://localhost:8082/prompts/${id}/favorite`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ favorite: !p.favorite })
+    })
+      .then(async r => {
+        if (!r.ok) { const j = await r.json(); throw new Error(j.error || r.statusText); }
+        return r.json();
+      })
+      .then(() => load())
+      .catch(e => console.error('toggle favorite', e));
   };
 
   const applyBulkWeight = () => {
@@ -176,7 +185,6 @@ export default function Prompts() {
       })
     ))
       .then(() => {
-        setFavorites(f => f.filter(v => !selectedIds.includes(v)));
         setSelectedIds([]);
         load();
       })
@@ -199,8 +207,8 @@ export default function Prompts() {
     return arr;
   }, [displayed, sortBy]);
 
-  const favPrompts = sorted.filter(p => favorites.includes(p.id));
-  const others = sorted.filter(p => !favorites.includes(p.id));
+  const favPrompts = sorted.filter(p => p.favorite);
+  const others = sorted.filter(p => !p.favorite);
 
   const renderPrompt = (p: Prompt) => {
     const isSelected = selectedIds.includes(p.id);
@@ -215,7 +223,7 @@ export default function Prompts() {
               <Box sx={{ flexGrow: 1, display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="subtitle1">{p.text.slice(0, 40)}</Typography>
                 <IconButton onClick={(e) => { e.stopPropagation(); toggleFav(p.id); }} size="small">
-                  <StarIcon color={favorites.includes(p.id) ? 'warning' : 'disabled'} />
+                  <StarIcon color={p.favorite ? 'warning' : 'disabled'} />
                 </IconButton>
               </Box>
             </Box>
@@ -234,7 +242,7 @@ export default function Prompts() {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                 <Typography variant="subtitle1">{p.text.slice(0, 40)}</Typography>
                 <IconButton onClick={(e) => { e.stopPropagation(); toggleFav(p.id); }} size="small">
-                  <StarIcon color={favorites.includes(p.id) ? 'warning' : 'disabled'} />
+                  <StarIcon color={p.favorite ? 'warning' : 'disabled'} />
                 </IconButton>
               </Box>
               {p.tags.map(t => <Chip key={t} label={t} size="small" sx={{ mr: 0.5 }} />)}

@@ -16,7 +16,7 @@ import {
 } from '@mui/material';
 import PageHeader from '../components/PageHeader';
 
-interface Prompt { id: number; text: string; weight: number }
+interface Prompt { id: number; text: string; weight: number; favorite: boolean }
 interface TextEntry { id: number }
 
 export default function Pipeline() {
@@ -39,11 +39,13 @@ export default function Pipeline() {
         if (!r.ok) throw new Error(json.error || r.statusText);
         return json as any[];
       })
-      .then((d: any[]) => setPrompts(d.map(p => ({ ...p, weight: p.weight ?? 1 }))))
+      .then((d: any[]) => setPrompts(d.map(p => ({ ...p, weight: p.weight ?? 1, favorite: !!p.favorite }))))
       .catch(e => setSnack(`Fehler: ${e}`));
   };
 
   useEffect(load, []);
+
+  const sortedPrompts = [...prompts].sort((a, b) => Number(b.favorite) - Number(a.favorite));
 
   const toggle = (id: number, checked: boolean) => {
     setSelected(s => checked ? [...s, id] : s.filter(i => i !== id));
@@ -87,7 +89,7 @@ export default function Pipeline() {
           onChange={e => setPromptIds(typeof e.target.value === 'string' ? e.target.value.split(',').map(Number) : e.target.value as number[])}
           renderValue={sel => (sel as number[]).map(id => prompts.find(p => p.id === id)?.text).join(', ')}
         >
-          {prompts.map(p => (
+          {sortedPrompts.map(p => (
             <MenuItem key={p.id} value={p.id}>
               <Checkbox checked={promptIds.indexOf(p.id) > -1} />
               <ListItemText primary={`${p.text} (${p.weight ?? 1})`} />
