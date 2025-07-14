@@ -85,6 +85,25 @@ async fn get_pdf(
     }
 }
 
+async fn delete_pdf(
+    id: web::Path<i32>,
+    db: web::Data<tokio_postgres::Client>,
+) -> Result<HttpResponse, Error> {
+    let stmt = db
+        .prepare("DELETE FROM pdfs WHERE id=$1")
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    let rows = db
+        .execute(&stmt, &[&id.into_inner()])
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    if rows == 0 {
+        Ok(HttpResponse::NotFound().finish())
+    } else {
+        Ok(HttpResponse::Ok().finish())
+    }
+}
+
 async fn health() -> impl Responder {
     "OK"
 }
@@ -125,6 +144,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(producer.clone()))
             .route("/upload", web::post().to(upload))
             .route("/pdf/{id}", web::get().to(get_pdf))
+            .route("/pdf/{id}", web::delete().to(delete_pdf))
             .route("/health", web::get().to(health))
     })
     .bind(("0.0.0.0", 8081))?
@@ -170,12 +190,17 @@ mod tests {
             let app = test::init_service(
                 App::new()
                     .app_data(web::Data::new(client))
-                    .route("/pdf/{id}", web::get().to(get_pdf)),
+                    .route("/pdf/{id}", web::get().to(get_pdf))
+                    .route("/pdf/{id}", web::delete().to(delete_pdf)),
             )
             .await;
             let req = test::TestRequest::get().uri("/pdf/1").to_request();
             let resp = test::call_and_read_body(&app, req).await;
             assert_eq!(&resp[..], b"test");
+
+            let req = test::TestRequest::delete().uri("/pdf/1").to_request();
+            let resp = test::call_service(&app, req).await;
+            assert!(resp.status().is_success());
         }
     }
 }
