@@ -64,6 +64,7 @@ export default function Prompts() {
   const [groups, setGroups] = useState<PromptGroup[]>([]);
   const [groupName, setGroupName] = useState('');
   const [groupPromptIds, setGroupPromptIds] = useState<number[]>([]);
+  const [newPromptGroupIds, setNewPromptGroupIds] = useState<number[]>([]);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { markAllRead } = usePromptNotifications();
@@ -121,7 +122,12 @@ export default function Prompts() {
     fetch('http://localhost:8082/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: newText, weight: newWeight, favorite: false })
+      body: JSON.stringify({
+        text: newText,
+        weight: newWeight,
+        favorite: false,
+        group_ids: newPromptGroupIds,
+      })
     }).then(async r => {
       if (!r.ok) {
         const j = await r.json();
@@ -129,6 +135,7 @@ export default function Prompts() {
       }
       setNewText('');
       setNewWeight(1);
+      setNewPromptGroupIds([]);
       load();
     }).catch(e => console.error('create prompt', e));
   };
@@ -316,6 +323,24 @@ export default function Prompts() {
           value={newWeight}
           onChange={e => setNewWeight(Math.max(1, Math.min(10, +e.target.value)))}
         />
+        <FormControl size="small" sx={{ minWidth: 150 }}>
+          <InputLabel id="new-prompt-groups">Groups</InputLabel>
+          <Select
+            labelId="new-prompt-groups"
+            multiple
+            value={newPromptGroupIds}
+            onChange={e => setNewPromptGroupIds(typeof e.target.value === 'string' ?
+              e.target.value.split(',').map(Number) : e.target.value as number[])}
+            renderValue={sel => (sel as number[]).map(id => groups.find(g => g.id === id)?.name).join(', ')}
+          >
+            {groups.map(g => (
+              <MenuItem key={g.id} value={g.id}>
+                <Checkbox checked={newPromptGroupIds.indexOf(g.id) > -1} />
+                <ListItemText primary={g.name} />
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
         <Button variant="contained" onClick={create} component={motion.button} whileHover={{ y: -2 }}>Add</Button>
         <Box sx={{ flexGrow: 1 }} />
         <FormControl size="small" sx={{ minWidth: 120 }}>

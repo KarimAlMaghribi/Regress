@@ -16,7 +16,10 @@ use tower_http::cors::CorsLayer;
 mod model;
 use model::{
     group::{Entity as GroupEntity, Model as GroupModel},
-    group_prompt::{Entity as GroupPromptEntity, Model as GroupPromptModel},
+    group_prompt::{
+        ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity,
+        Model as GroupPromptModel,
+    },
     prompt::Entity as Prompt,
 };
 use tracing::{error, info};
@@ -41,6 +44,8 @@ struct PromptInput {
     weight: f64,
     #[serde(default)]
     favorite: bool,
+    #[serde(default)]
+    group_ids: Vec<i32>,
 }
 
 #[derive(Serialize)]
@@ -112,6 +117,20 @@ async fn create_prompt(
             }),
         )
     })?;
+    for gid in input.group_ids {
+        let mut gp: model::GroupPromptActiveModel = Default::default();
+        gp.group_id = Set(gid);
+        gp.prompt_id = Set(res.id);
+        gp.insert(&*db).await.map_err(|e| {
+            error!("failed to add prompt to group: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    }
     info!(id = res.id, "created prompt");
     Ok(Json(PromptData {
         id: res.id,
@@ -515,6 +534,7 @@ mod tests {
                 text: "hello".into(),
                 weight: 2.0,
                 favorite: false,
+                group_ids: vec![],
             }),
         )
         .await
@@ -529,6 +549,7 @@ mod tests {
                 text: "world".into(),
                 weight: 3.0,
                 favorite: true,
+                group_ids: vec![],
             }),
         )
         .await
