@@ -7,6 +7,7 @@ pub struct Model {
     pub id: i32,
     pub text: String,
     pub weight: f64,
+    pub favorite: bool,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

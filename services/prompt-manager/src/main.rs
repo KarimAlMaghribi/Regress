@@ -24,6 +24,7 @@ struct PromptData {
     id: i32,
     text: String,
     weight: f64,
+    favorite: bool,
 }
 
 #[derive(Deserialize)]
@@ -31,6 +32,8 @@ struct PromptInput {
     text: String,
     #[serde(default = "default_weight")]
     weight: f64,
+    #[serde(default)]
+    favorite: bool,
 }
 
 #[derive(Serialize, Debug)]
@@ -61,6 +64,7 @@ async fn list_prompts(
             id: p.id,
             text: p.text,
             weight: p.weight,
+            favorite: p.favorite,
         })
         .collect();
     info!("loaded {} prompts", texts.len());
@@ -75,6 +79,7 @@ async fn create_prompt(
     let mut model: model::ActiveModel = Default::default();
     model.text = Set(input.text);
     model.weight = Set(input.weight);
+    model.favorite = Set(input.favorite);
     let res = model.insert(&*db).await.map_err(|e| {
         error!("failed to create prompt: {}", e);
         (
@@ -89,6 +94,7 @@ async fn create_prompt(
         id: res.id,
         text: res.text,
         weight: res.weight,
+        favorite: res.favorite,
     }))
 }
 
@@ -117,6 +123,7 @@ async fn update_prompt(
     };
     model.text = input.text;
     model.weight = input.weight;
+    model.favorite = input.favorite;
     let active: model::ActiveModel = model.into();
     let res = active.update(&*db).await.map_err(|e| {
         error!("failed to update prompt {}: {}", id, e);
@@ -132,6 +139,7 @@ async fn update_prompt(
         id: res.id,
         text: res.text,
         weight: res.weight,
+        favorite: res.favorite,
     }))
 }
 
@@ -171,6 +179,47 @@ async fn delete_prompt(
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct FavoriteInput {
+    favorite: bool,
+}
+
+async fn set_favorite(
+    Path(id): Path<i32>,
+    State(db): State<Arc<DatabaseConnection>>,
+    Json(input): Json<FavoriteInput>,
+) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
+    info!(id, favorite = input.favorite, "setting favorite");
+    let Some(mut model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
+        error!("failed to find prompt {}: {}", id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?
+    else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse { error: "Not found".into() }),
+        ));
+    };
+    model.favorite = input.favorite;
+    let active: model::ActiveModel = model.into();
+    let res = active.update(&*db).await.map_err(|e| {
+        error!("failed to update favorite {}: {}", id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse { error: e.to_string() }),
+        )
+    })?;
+    Ok(Json(PromptData {
+        id: res.id,
+        text: res.text,
+        weight: res.weight,
+        favorite: res.favorite,
+    }))
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -184,12 +233,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // create table if not exists
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, weight DOUBLE PRECISION NOT NULL DEFAULT 1)",
+        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, weight DOUBLE PRECISION NOT NULL DEFAULT 1, favorite BOOLEAN NOT NULL DEFAULT FALSE)",
     ))
     .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS weight DOUBLE PRECISION DEFAULT 1",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
+        "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT FALSE",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
+        "UPDATE prompts SET favorite = FALSE WHERE favorite IS NULL",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
+        "ALTER TABLE prompts ALTER COLUMN favorite SET NOT NULL",
     ))
     .await?;
     db.execute(sea_orm::Statement::from_string(
@@ -207,6 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/prompts", get(list_prompts).post(create_prompt))
         .route("/prompts/:id", put(update_prompt).delete(delete_prompt))
+        .route("/prompts/:id/favorite", put(set_favorite))
         .with_state(db.clone())
         .layer(CorsLayer::permissive());
     info!("starting prompt-manager");
@@ -250,11 +315,13 @@ mod tests {
                     id: 1,
                     text: "hello".into(),
                     weight: 2.0,
+                    favorite: false,
                 }]])
                 .append_query_results([[model::Model {
                     id: 1,
                     text: "hello".into(),
                     weight: 2.0,
+                    favorite: false,
                 }]])
                 .append_exec_results([MockExecResult {
                     last_insert_id: 0,
@@ -264,6 +331,7 @@ mod tests {
                     id: 1,
                     text: "world".into(),
                     weight: 3.0,
+                    favorite: true,
                 }]])
                 .into_connection(),
         );
@@ -273,11 +341,13 @@ mod tests {
             Json(PromptInput {
                 text: "hello".into(),
                 weight: 2.0,
+                favorite: false,
             }),
         )
         .await
         .unwrap();
         assert_eq!(res.0.weight, 2.0);
+        assert!(!res.0.favorite);
 
         let res = update_prompt(
             Path(1),
@@ -285,10 +355,42 @@ mod tests {
             Json(PromptInput {
                 text: "world".into(),
                 weight: 3.0,
+                favorite: true,
             }),
         )
         .await
         .unwrap();
         assert_eq!(res.0.weight, 3.0);
+        assert!(res.0.favorite);
+    }
+
+    #[tokio::test]
+    async fn set_favorite_route() {
+        let db = Arc::new(
+            MockDatabase::new(DbBackend::Postgres)
+                .append_query_results([[model::Model {
+                    id: 1,
+                    text: "test".into(),
+                    weight: 1.0,
+                    favorite: false,
+                }]])
+                .append_exec_results([MockExecResult { last_insert_id: 0, rows_affected: 1 }])
+                .append_query_results([[model::Model {
+                    id: 1,
+                    text: "test".into(),
+                    weight: 1.0,
+                    favorite: true,
+                }]])
+                .into_connection(),
+        );
+
+        let res = set_favorite(
+            Path(1),
+            State(db.clone()),
+            Json(FavoriteInput { favorite: true }),
+        )
+        .await
+        .unwrap();
+        assert!(res.0.favorite);
     }
 }
