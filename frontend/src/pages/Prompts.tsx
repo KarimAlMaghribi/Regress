@@ -89,6 +89,12 @@ export default function Prompts() {
 
     fetch('http://localhost:8082/prompt-groups')
       .then(r => r.json())
+      .then((list: any[]) => list.map(g => ({
+        id: g.id,
+        name: g.name,
+        favorite: g.favorite,
+        promptIds: g.prompt_ids as number[],
+      })))
       .then(setGroups)
       .catch(e => console.error('load groups', e));
   };
