@@ -12,6 +12,7 @@
     "@mui/material": "^5.14.0",
     "@mui/x-data-grid": "^6.14.0",
     "@mui/x-date-pickers": "^6.5.0",
+    "dagre": "^0.8.5",
     "dayjs": "^1.11.9",
     "framer-motion": "^10.12.16",
     "openai": "^4.40.0",
