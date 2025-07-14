@@ -4,7 +4,7 @@ import Layout from './components/Layout';
 import Upload from './pages/Upload';
 import Prompts from './pages/Prompts';
 import PromptAnalysis from './pages/PromptAnalysis';
-import Pipeline from './pages/Pipeline';
+import PipelineFlow from './pages/Pipeline';
 import Dashboard from './pages/Dashboard';
 import History from './pages/History';
 import Analyses from './pages/Analyses';
@@ -38,7 +38,7 @@ function AnimatedRoutes() {
         <Route path="/" element={<PageFade><Dashboard /></PageFade>} />
         <Route path="/upload" element={<PageFade><Upload /></PageFade>} />
         <Route path="/prompts" element={<PageFade><Prompts /></PageFade>} />
-        <Route path="/pipeline" element={<PageFade><Pipeline /></PageFade>} />
+        <Route path="/pipeline" element={<PageFade><PipelineFlow /></PageFade>} />
         <Route path="/analysis" element={<PageFade><PromptAnalysis /></PageFade>} />
         <Route path="/analyses" element={<PageFade><Analyses /></PageFade>} />
         <Route path="/result/:id" element={<PageFade><Result /></PageFade>} />
