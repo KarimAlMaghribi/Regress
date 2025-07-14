@@ -50,7 +50,7 @@ type NodeData = { label: string; type: 'pdf' | 'prompt'; onOpen?: () => void };
 const CardNode = ({ data, id }: NodeProps<NodeData>) => {
   const handleClick = () => {
     if (data.type === 'pdf') {
-      data.onOpen ? data.onOpen() : window.open(`${ingest}/pdf/${id.replace('pdf-', '')}.pdf`);
+      data.onOpen ? data.onOpen() : window.open(`${ingest}/pdf/${id.replace('pdf-', '')}`);
     }
   };
 
@@ -147,7 +147,7 @@ export default function PipelineFlow() {
     return { page, ids, total: Math.ceil(g.promptIds.length / promptsPerPage) };
   };
 
-  const addAllPdfs = () => {
+  const selectAllPdfs = () => {
     setPipeline(p => {
       const idx = p.findIndex(s => s.id === 'pdf');
       if (idx === -1) return p;
@@ -164,7 +164,7 @@ export default function PipelineFlow() {
     });
   };
 
-  const clearPdfs = () => {
+  const deselectAllPdfs = () => {
     setPipeline(p => p.map(s => (s.id === 'pdf' ? { ...s, steps: [] } : s)));
   };
 
@@ -338,6 +338,7 @@ export default function PipelineFlow() {
           <Selecto
             container={() => pdfGridRef.current!}
             selectableTargets={[ '.pdf-item' ]}
+            selectByClick={false}
             onSelectEnd={e => {
               const ids = e.selected.map(el => Number(el.getAttribute('data-id')));
               if (ids.length) selectPdfIds(ids);
@@ -351,11 +352,11 @@ export default function PipelineFlow() {
           size="small"
           sx={{ mb: 1 }}
         />
-        <Button size="small" onClick={addAllPdfs} sx={{ mr: 1 }}>
-          Alle rein
+        <Button size="small" onClick={selectAllPdfs} sx={{ mr: 1 }}>
+          Alle auswählen
         </Button>
-        <Button size="small" onClick={clearPdfs}>
-          Leeren
+        <Button size="small" onClick={deselectAllPdfs}>
+          Alle abwählen
         </Button>
       </Paper>
       <Paper sx={{ p: 2, mb: 2 }}>
@@ -449,7 +450,7 @@ export default function PipelineFlow() {
           </IconButton>
           {previewId !== null && (
             <Document
-              file={`${ingest}/pdf/${previewId}.pdf`}
+              file={`${ingest}/pdf/${previewId}`}
               loading={<Skeleton variant="rectangular" height={400} />}
               onLoadError={console.error}
             >
