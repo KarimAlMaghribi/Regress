@@ -209,7 +209,7 @@ async fn latest_by_status(
     {
         (
             "SELECT * FROM (\
-                SELECT DISTINCT ON (pdf_id) id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label\
+                SELECT DISTINCT ON (pdf_id) id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label \
                 FROM classification_history WHERE status = $1 ORDER BY pdf_id, timestamp DESC\
             ) AS t ORDER BY timestamp DESC",
             vec![s],
@@ -217,7 +217,7 @@ async fn latest_by_status(
     } else {
         (
             "SELECT * FROM (\
-                SELECT DISTINCT ON (pdf_id) id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label\
+                SELECT DISTINCT ON (pdf_id) id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label \
                 FROM classification_history ORDER BY pdf_id, timestamp DESC\
             ) AS t ORDER BY timestamp DESC",
             vec![],
