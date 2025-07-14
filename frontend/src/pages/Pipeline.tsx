@@ -1,136 +1,214 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState, memo } from 'react';
 import {
   Box,
   Paper,
   Typography,
-  Checkbox,
-  FormControlLabel,
+  Card,
+  CardContent,
   Button,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  Snackbar,
-  Alert,
-  ListItemText,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails
 } from '@mui/material';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import { useDropzone } from 'react-dropzone';
+import ReactFlow, {
+  MiniMap,
+  Controls,
+  addEdge,
+  useNodesState,
+  useEdgesState,
+  Connection,
+  Handle,
+  Position,
+  NodeProps,
+  ReactFlowInstance,
+  ReactFlowProvider
+} from 'react-flow-renderer';
+import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import PageHeader from '../components/PageHeader';
 
-interface Prompt { id: number; text: string; weight: number; favorite: boolean }
-interface PromptGroup { id: number; name: string; promptIds: number[]; favorite: boolean }
-interface TextEntry { id: number }
+interface Prompt { id: number; text: string; }
+interface PromptGroup { id: number; name: string; promptIds: number[]; }
 
-export default function Pipeline() {
-  const [pdfs, setPdfs] = useState<TextEntry[]>([]);
-  const [selected, setSelected] = useState<number[]>([]);
+type NodeData = { label: string; type: 'pdf' | 'prompt' };
+
+const CardNode = memo(({ data }: NodeProps<NodeData>) => (
+  <Card variant="outlined" sx={{ minWidth: 120, textAlign: 'center' }}>
+    <Handle type="target" position={Position.Top} />
+    <CardContent sx={{ p: 1 }}>
+      <Typography variant="body2">{data.label}</Typography>
+    </CardContent>
+    <Handle type="source" position={Position.Bottom} />
+  </Card>
+));
+
+const nodeTypes = { card: CardNode };
+
+export default function PipelineFlow() {
+  const [pdfFiles, setPdfFiles] = useState<File[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [promptIds, setPromptIds] = useState<number[]>([]);
   const [groups, setGroups] = useState<PromptGroup[]>([]);
-  const [groupIds, setGroupIds] = useState<number[]>([]);
-  const [snack, setSnack] = useState('');
-  // Results are displayed in the history section, not directly in the pipeline
-  // view. Therefore we only keep a snackbar for feedback here.
-  
-  const load = () => {
-    fetch('http://localhost:8083/texts')
-      .then(r => r.json())
-      .then(setPdfs)
-      .catch(e => setSnack(`Fehler: ${e}`));
+  const [selectedPrompts, setSelectedPrompts] = useState<number[]>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [flow, setFlow] = useState<ReactFlowInstance | null>(null);
+
+  const onInit = useCallback((rf: ReactFlowInstance) => setFlow(rf), []);
+
+  useEffect(() => { if (flow) flow.fitView(); }, [flow, nodes]);
+
+  const onConnect = useCallback((c: Connection) => {
+    setEdges(eds => addEdge({ ...c, animated: true, style: { stroke: '#6C5DD3' } }, eds));
+  }, [setEdges]);
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop: files => setPdfFiles(prev => [...prev, ...files])
+  });
+
+  const addAllPdfs = () => {
+    setNodes(ns => {
+      const others = ns.filter(n => n.data.type !== 'pdf');
+      const newNodes = pdfFiles.map((f, i) => ({
+        id: `pdf-${i}`,
+        type: 'card',
+        position: { x: 0, y: i * 140 },
+        data: { label: f.name, type: 'pdf' } as NodeData
+      }));
+      return [...others, ...newNodes];
+    });
+  };
+
+  const clearPdfs = () => {
+    setPdfFiles([]);
+    setNodes(ns => ns.filter(n => n.data.type !== 'pdf'));
+  };
+
+  const togglePrompt = (id: number) => {
+    setSelectedPrompts(p => p.includes(id) ? p.filter(i => i !== id) : [...p, id]);
+  };
+
+  const selectAllGroup = (gid: number) => {
+    const ids = groups.find(g => g.id === gid)?.promptIds || [];
+    setSelectedPrompts(p => Array.from(new Set([...p, ...ids])));
+  };
+
+  const deselectAllGroup = (gid: number) => {
+    const ids = groups.find(g => g.id === gid)?.promptIds || [];
+    setSelectedPrompts(p => p.filter(i => !ids.includes(i)));
+  };
+
+  const onDragEnd = (result: DropResult) => {
+    if (!result.destination) return;
+    const gId = Number(result.source.droppableId);
+    if (gId !== Number(result.destination.droppableId)) return;
+    setGroups(gs => gs.map(g => {
+      if (g.id === gId) {
+        const list = Array.from(g.promptIds);
+        const [removed] = list.splice(result.source.index, 1);
+        list.splice(result.destination.index, 0, removed);
+        return { ...g, promptIds: list };
+      }
+      return g;
+    }));
+  };
+
+  useEffect(() => {
+    setNodes(ns => {
+      const others = ns.filter(n => n.data.type !== 'prompt');
+      const selected = prompts.filter(p => selectedPrompts.includes(p.id));
+      const newNodes = selected.map((p, i) => ({
+        id: `prompt-${p.id}`,
+        type: 'card',
+        position: { x: 400, y: i * 140 },
+        data: { label: p.text, type: 'prompt' } as NodeData
+      }));
+      return [...others, ...newNodes];
+    });
+  }, [selectedPrompts, prompts, setNodes]);
+
+  useEffect(() => {
     fetch('http://localhost:8082/prompts')
-      .then(async r => {
-        const json = await r.json();
-        if (!r.ok) throw new Error(json.error || r.statusText);
-        return json as any[];
-      })
-      .then((d: any[]) => setPrompts(d.map(p => ({ ...p, weight: p.weight ?? 1, favorite: !!p.favorite }))))
-      .catch(e => setSnack(`Fehler: ${e}`));
+      .then(r => r.json())
+      .then(setPrompts)
+      .catch(() => undefined);
     fetch('http://localhost:8082/prompt-groups')
       .then(r => r.json())
       .then(setGroups)
-      .catch(e => setSnack(`Fehler: ${e}`));
-  };
-
-  useEffect(load, []);
-
-  const sortedPrompts = [...prompts].sort((a, b) => Number(b.favorite) - Number(a.favorite));
-
-  const toggle = (id: number, checked: boolean) => {
-    setSelected(s => checked ? [...s, id] : s.filter(i => i !== id));
-  };
-
-  const start = () => {
-    const fromGroups = groupIds.flatMap(id => groups.find(g => g.id === id)?.promptIds || []);
-    const allIds = Array.from(new Set([...promptIds, ...fromGroups]));
-    const chosen = allIds.map(id => prompts.find(p => p.id === id)).filter(Boolean) as Prompt[];
-    if (chosen.length === 0 || selected.length === 0) return;
-    const payloadPrompts = chosen.map(p => ({ text: p.text, weight: p.weight }));
-    const prompt = JSON.stringify(payloadPrompts);
-    fetch('http://localhost:8083/analyze', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids: selected, prompt })
-    })
-      .then(() => {
-        setSnack('Analyse gestartet');
-        setSelected([]);
-      })
-      .catch(e => setSnack(`Fehler: ${e}`));
-  };
+      .catch(() => undefined);
+  }, []);
 
   return (
     <Box>
       <PageHeader title="Pipeline" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Pipeline' }]} />
       <Paper sx={{ p:2, mb:2 }}>
-        <Typography variant="subtitle1" gutterBottom>PDFs</Typography>
-        {pdfs.map(p => (
-          <FormControlLabel key={p.id} control={<Checkbox checked={selected.includes(p.id)} onChange={e => toggle(p.id, e.target.checked)} />} label={`PDF ${p.id}`} />
-        ))}
-        {pdfs.length === 0 && <Typography>Keine PDFs vorhanden</Typography>}
+        <Typography variant="h6" gutterBottom>PDF Stage</Typography>
+        <Box {...getRootProps()} sx={{ p:3, border:'1px dashed', borderColor:'primary.main', mb:2, textAlign:'center', cursor:'pointer' }}>
+          <input {...getInputProps()} />
+          <Typography>{isDragActive ? 'Ablegen ...' : 'Dateien hierher ziehen'}</Typography>
+        </Box>
+        <Button size="small" onClick={addAllPdfs} sx={{ mr:1 }}>Alle rein</Button>
+        <Button size="small" onClick={clearPdfs}>Leeren</Button>
       </Paper>
-      <FormControl size="small" sx={{ minWidth: 220, mb:2 }}>
-        <InputLabel id="prompt-label">Prompts</InputLabel>
-        <Select
-          labelId="prompt-label"
-          multiple
-          value={promptIds}
-          onChange={e => setPromptIds(typeof e.target.value === 'string' ? e.target.value.split(',').map(Number) : e.target.value as number[])}
-          renderValue={sel => (sel as number[]).map(id => prompts.find(p => p.id === id)?.text).join(', ')}
-        >
-          {sortedPrompts.map(p => (
-            <MenuItem key={p.id} value={p.id}>
-              <Checkbox checked={promptIds.indexOf(p.id) > -1} />
-              <ListItemText primary={`${p.text} (${p.weight ?? 1})`} />
-            </MenuItem>
-          ))}
-        </Select>
-      </FormControl>
-      <FormControl size="small" sx={{ minWidth: 220, mb:2, ml:2 }}>
-        <InputLabel id="group-label">Gruppen</InputLabel>
-        <Select
-          labelId="group-label"
-          multiple
-          value={groupIds}
-          onChange={e => setGroupIds(typeof e.target.value === 'string' ? e.target.value.split(',').map(Number) : e.target.value as number[])}
-          renderValue={sel => (sel as number[]).map(id => groups.find(g => g.id === id)?.name).join(', ')}
-        >
+      <Paper sx={{ p:2, mb:2 }}>
+        <Typography variant="h6" gutterBottom>Prompt Stage</Typography>
+        <DragDropContext onDragEnd={onDragEnd}>
           {groups.map(g => (
-            <MenuItem key={g.id} value={g.id}>
-              <Checkbox checked={groupIds.indexOf(g.id) > -1} />
-              <ListItemText primary={g.name} />
-            </MenuItem>
+            <Accordion key={g.id} defaultExpanded>
+              <AccordionSummary expandIcon={<ExpandMoreIcon />}> 
+                <Typography>{g.name}</Typography>
+                <Box sx={{ ml:'auto' }}>
+                  <Button size="small" onClick={e => { e.stopPropagation(); selectAllGroup(g.id); }}>Alle auswählen</Button>
+                  <Button size="small" onClick={e => { e.stopPropagation(); deselectAllGroup(g.id); }}>Alle abwählen</Button>
+                </Box>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Droppable droppableId={String(g.id)}>
+                  {prov => (
+                    <Box ref={prov.innerRef} {...prov.droppableProps}>
+                      {g.promptIds.map((pid, idx) => {
+                        const p = prompts.find(pr => pr.id === pid);
+                        if (!p) return null;
+                        const selected = selectedPrompts.includes(pid);
+                        return (
+                          <Draggable key={pid} draggableId={String(pid)} index={idx}>
+                            {drag => (
+                              <Card ref={drag.innerRef} {...drag.draggableProps} {...drag.dragHandleProps}
+                                    onClick={() => togglePrompt(pid)}
+                                    sx={{ mb:1, bgcolor: selected ? 'action.selected' : 'background.paper', cursor:'pointer' }}>
+                                <CardContent sx={{ p:1 }}>
+                                  <Typography variant="body2">{p.text}</Typography>
+                                </CardContent>
+                              </Card>
+                            )}
+                          </Draggable>
+                        );
+                      })}
+                      {prov.placeholder}
+                    </Box>
+                  )}
+                </Droppable>
+              </AccordionDetails>
+            </Accordion>
           ))}
-        </Select>
-      </FormControl>
-      <Button
-        variant="contained"
-        disabled={!selected.length || (promptIds.length === 0 && groupIds.length === 0)}
-        onClick={start}
-      >
-        Analyse starten
-      </Button>
-      <Snackbar open={!!snack} autoHideDuration={4000} onClose={() => setSnack('')}>
-        <Alert onClose={() => setSnack('')} severity="info">{snack}</Alert>
-      </Snackbar>
+        </DragDropContext>
+      </Paper>
+      <Box sx={{ height: 600 }}>
+        <ReactFlowProvider>
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onInit={onInit}
+            nodeTypes={nodeTypes}
+          >
+            <MiniMap />
+            <Controls />
+          </ReactFlow>
+        </ReactFlowProvider>
+      </Box>
     </Box>
   );
 }
