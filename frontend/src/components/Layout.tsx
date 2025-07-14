@@ -27,7 +27,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       <Box
         component="main"
         sx={{
-          mt: 0,
+          mt: 8,
           ml: open ? `${expandedWidth}px` : `${collapsedWidth}px`,
           width: `calc(100% - ${open ? expandedWidth : collapsedWidth}px)`,
           p: 3,
