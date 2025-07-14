@@ -173,9 +173,55 @@ async fn list_by_status(db: &tokio_postgres::Client, status: Option<String>) -> 
     let (sql, params): (&str, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if let Some(s) =
         &status
     {
-        ("SELECT id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history WHERE status = $1 ORDER BY timestamp DESC", vec![s])
+        (
+            "SELECT id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history WHERE status = $1 ORDER BY timestamp DESC",
+            vec![s],
+        )
     } else {
-        ("SELECT id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC", vec![])
+        (
+            "SELECT id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label FROM classification_history ORDER BY timestamp DESC",
+            vec![],
+        )
+    };
+    let stmt = db.prepare(sql).await.unwrap();
+    let rows = db.query(&stmt, &params).await.unwrap();
+    rows.into_iter()
+        .map(|r| HistoryEntry {
+            id: r.get(0),
+            pdf_id: r.get(1),
+            prompt: r.get(2),
+            result: r.get(3),
+            pdf_url: r.get(4),
+            timestamp: r.get(5),
+            status: r.get(6),
+            score: r.get(7),
+            result_label: r.get(8),
+        })
+        .collect()
+}
+
+async fn latest_by_status(
+    db: &tokio_postgres::Client,
+    status: Option<String>,
+) -> Vec<HistoryEntry> {
+    let (sql, params): (&str, Vec<&(dyn tokio_postgres::types::ToSql + Sync)>) = if let Some(s) =
+        &status
+    {
+        (
+            "SELECT * FROM (\
+                SELECT DISTINCT ON (pdf_id) id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label\
+                FROM classification_history WHERE status = $1 ORDER BY pdf_id, timestamp DESC\
+            ) AS t ORDER BY timestamp DESC",
+            vec![s],
+        )
+    } else {
+        (
+            "SELECT * FROM (\
+                SELECT DISTINCT ON (pdf_id) id, pdf_id, prompt, result, pdf_url, timestamp, status, score, result_label\
+                FROM classification_history ORDER BY pdf_id, timestamp DESC\
+            ) AS t ORDER BY timestamp DESC",
+            vec![],
+        )
     };
     let stmt = db.prepare(sql).await.unwrap();
     let rows = db.query(&stmt, &params).await.unwrap();
@@ -211,7 +257,7 @@ async fn analyses(
     query: web::Query<HashMap<String, String>>,
 ) -> impl Responder {
     let status = query.get("status").cloned();
-    let items = list_by_status(&state.db, status).await;
+    let items = latest_by_status(&state.db, status).await;
     HttpResponse::Ok().json(items)
 }
 
