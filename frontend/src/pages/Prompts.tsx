@@ -41,6 +41,13 @@ interface Prompt {
   favorite: boolean;
 }
 
+interface PromptGroup {
+  id: number;
+  name: string;
+  promptIds: number[];
+  favorite: boolean;
+}
+
 export default function Prompts() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [newText, setNewText] = useState('');
@@ -53,6 +60,9 @@ export default function Prompts() {
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [bulkWeight, setBulkWeight] = useState(1);
   const [helpOpen, setHelpOpen] = useState(false);
+  const [groups, setGroups] = useState<PromptGroup[]>([]);
+  const [groupName, setGroupName] = useState('');
+  const [groupPromptIds, setGroupPromptIds] = useState<number[]>([]);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const { markAllRead } = usePromptNotifications();
@@ -75,6 +85,11 @@ export default function Prompts() {
         markAllRead(d.map(p => p.id));
       })
       .catch(e => console.error('load prompts', e));
+
+    fetch('http://localhost:8082/prompt-groups')
+      .then(r => r.json())
+      .then(setGroups)
+      .catch(e => console.error('load groups', e));
   };
 
   useEffect(() => {
@@ -138,6 +153,18 @@ export default function Prompts() {
     }).catch(e => console.error('remove prompt', e));
   };
 
+  const createGroup = () => {
+    fetch('http://localhost:8082/prompt-groups', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: groupName, prompt_ids: groupPromptIds, favorite: false })
+    }).then(() => {
+      setGroupName('');
+      setGroupPromptIds([]);
+      load();
+    }).catch(e => console.error('create group', e));
+  };
+
   const toggleFav = (id: number) => {
     const p = prompts.find(pr => pr.id === id);
     if (!p) return;
@@ -152,6 +179,22 @@ export default function Prompts() {
       })
       .then(() => load())
       .catch(e => console.error('toggle favorite', e));
+  };
+
+  const toggleGroupFav = (id: number) => {
+    const g = groups.find(gr => gr.id === id);
+    if (!g) return;
+    fetch(`http://localhost:8082/prompt-groups/${id}/favorite`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ favorite: !g.favorite })
+    })
+      .then(async r => {
+        if (!r.ok) { const j = await r.json(); throw new Error(j.error || r.statusText); }
+        return r.json();
+      })
+      .then(() => load())
+      .catch(e => console.error('toggle group favorite', e));
   };
 
   const applyBulkWeight = () => {
@@ -290,6 +333,28 @@ export default function Prompts() {
         <IconButton onClick={() => setHelpOpen(true)} size="small"><InfoIcon /></IconButton>
       </Box>
 
+      <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mb: 2 }}>
+        <TextField size="small" label="Group name" value={groupName} onChange={e => setGroupName(e.target.value)} />
+        <FormControl size="small" sx={{ minWidth: 180 }}>
+          <InputLabel id="group-prompts">Prompts</InputLabel>
+          <Select
+            labelId="group-prompts"
+            multiple
+            value={groupPromptIds}
+            onChange={e => setGroupPromptIds(typeof e.target.value === 'string' ? e.target.value.split(',').map(Number) : e.target.value as number[])}
+            renderValue={sel => (sel as number[]).map(id => prompts.find(p => p.id === id)?.text).join(', ')}
+          >
+            {prompts.map(p => (
+              <MenuItem key={p.id} value={p.id}>
+                <Checkbox checked={groupPromptIds.indexOf(p.id) > -1} />
+                <ListItemText primary={p.text} />
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <Button variant="contained" onClick={createGroup}>Add Group</Button>
+      </Box>
+
       {selectedIds.length > 0 && (
         <Paper sx={{ p: 1, mb: 2, display: 'flex', alignItems: 'center', gap: 2 }}>
           <Typography>{selectedIds.length} selected</Typography>
@@ -323,6 +388,18 @@ export default function Prompts() {
       ) : (
         <Grid container spacing={2}>{others.map(p => (<Grid item xs={12} sm={6} md={4} key={p.id}>{renderPrompt(p)}</Grid>))}</Grid>
       )}
+
+      <Box sx={{ mt: 2 }}>
+        <Typography variant="h6" sx={{ mb: 1 }}>Gruppen</Typography>
+        {groups.map(g => (
+          <Box key={g.id} sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
+            <Typography sx={{ flexGrow: 1 }}>{g.name}</Typography>
+            <IconButton onClick={() => toggleGroupFav(g.id)} size="small">
+              <StarIcon color={g.favorite ? 'warning' : 'disabled'} />
+            </IconButton>
+          </Box>
+        ))}
+      </Box>
 
       <Drawer anchor="right" open={!!edit} onClose={() => setEdit(null)}>
         {edit && (
