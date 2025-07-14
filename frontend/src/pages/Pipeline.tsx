@@ -13,7 +13,6 @@ import {
   AccordionDetails,
   Grid,
   Pagination,
-  Checkbox,
   Modal,
   IconButton,
   Skeleton,
@@ -270,6 +269,13 @@ export default function PipelineFlow() {
     console.log('connect', c);
   }, []);
 
+  const onNodeClick = useCallback((_: any, node: Node<NodeData>) => {
+    if (node.data.type === 'pdf') {
+      const id = Number(node.id.replace('pdf-', ''));
+      setPreviewId(id);
+    }
+  }, []);
+
   const pdfStage = pipeline.find(s => s.id === 'pdf');
   const promptStage = pipeline.find(s => s.id === 'prompt');
 
@@ -300,19 +306,11 @@ export default function PipelineFlow() {
                   <Card
                     className="pdf-item"
                     data-id={id}
-                    onClick={() => setPreviewId(id)}
-                    sx={{ bgcolor: 'background.paper', cursor: 'pointer' }}
+                    onClick={() => togglePdf(id)}
+                    sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer' }}
                   >
-                    <CardContent sx={{ p: 1, display:'flex',alignItems:'center' }}>
-                      <Checkbox
-                        checked={selected}
-                        onClick={e => {
-                          e.stopPropagation();
-                          togglePdf(id);
-                        }}
-                        size="small"
-                      />
-                      <Typography variant="body2" sx={{ ml:1 }}>PDF {id}</Typography>
+                    <CardContent sx={{ p: 1 }}>
+                      <Typography variant="body2">PDF {id}</Typography>
                     </CardContent>
                   </Card>
                 </Grid>
@@ -420,7 +418,7 @@ export default function PipelineFlow() {
       </Paper>
       <Box sx={{ height: 600 }}>
         <ReactFlowProvider>
-          <ReactFlow nodes={nodes} edges={edges} onConnect={onConnect} nodeTypes={nodeTypes}>
+          <ReactFlow nodes={nodes} edges={edges} onConnect={onConnect} nodeTypes={nodeTypes} onNodeClick={onNodeClick}>
             <MiniMap />
             <Controls />
           </ReactFlow>
