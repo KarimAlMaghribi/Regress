@@ -29,6 +29,7 @@ import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
+import { loadPromptGroupMap } from '../utils/promptGroups';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
@@ -106,12 +107,13 @@ function ResponsesList({ responses }: { responses: Response[] }) {
   );
 }
 
-function MetricsTable({ rules }: { rules: Rule[] }) {
+function MetricsTable({ rules, groupMap }: { rules: Rule[]; groupMap: Record<string, string[]> }) {
   return (
     <Table size="small">
       <TableHead>
         <TableRow>
           <TableCell>Prompt</TableCell>
+          <TableCell>Gruppen</TableCell>
           <TableCell align="center">Ergebnis</TableCell>
           <TableCell align="right">Gewicht</TableCell>
         </TableRow>
@@ -120,6 +122,11 @@ function MetricsTable({ rules }: { rules: Rule[] }) {
         {rules.map((r, i) => (
           <TableRow key={i}>
             <TableCell>{r.prompt}</TableCell>
+            <TableCell>
+              {(groupMap[r.prompt] || []).map((g, idx) => (
+                <Chip key={idx} label={g} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+              ))}
+            </TableCell>
             <TableCell align="center">
               {r.result ? (
                 <CheckIcon color="success" fontSize="small" />
@@ -181,6 +188,7 @@ export default function Result() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<ResultData | null>(null);
   const [tab, setTab] = useState(0);
+  const [promptGroups, setPromptGroups] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     if (!id) return;
@@ -190,6 +198,10 @@ export default function Result() {
       .then(setData)
       .catch(e => console.error('load result', e));
   }, [id]);
+
+  useEffect(() => {
+    loadPromptGroupMap().then(setPromptGroups).catch(() => undefined);
+  }, []);
 
   const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
   const pdfUrl = `${ingest}/pdf/${id}`;
@@ -210,7 +222,9 @@ export default function Result() {
             <Tab label="Metriken" />
           </Tabs>
           {tab === 0 && <ResponsesList responses={data.responses} />}
-          {tab === 1 && <MetricsTable rules={data.metrics.rules || []} />}
+          {tab === 1 && (
+            <MetricsTable rules={data.metrics.rules || []} groupMap={promptGroups} />
+          )}
           <Box sx={{ mt: 2 }}>
             <PdfViewer url={pdfUrl} />
           </Box>
