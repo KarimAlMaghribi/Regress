@@ -93,6 +93,10 @@ export default function PipelineFlow() {
   const [pdfIds, setPdfIds] = useState<number[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [groups, setGroups] = useState<PromptGroup[]>([]);
+  const ungroupedPrompts = useMemo(
+    () => prompts.filter(p => !groups.some(g => g.promptIds.includes(p.id))),
+    [prompts, groups],
+  );
   const [pdfPage, setPdfPage] = useState(1);
   const [promptPages, setPromptPages] = useState<Record<number, number>>({});
   const [previewId, setPreviewId] = useState<number | null>(null);
@@ -141,10 +145,12 @@ export default function PipelineFlow() {
     [pdfIds, pdfPage],
   );
 
-  const pagedPrompts = (g: PromptGroup) => {
-    const page = promptPages[g.id] || 1;
-    const ids = g.promptIds.slice((page - 1) * promptsPerPage, page * promptsPerPage);
-    return { page, ids, total: Math.ceil(g.promptIds.length / promptsPerPage) };
+  const pagedPrompts = (g?: PromptGroup) => {
+    const gid = g ? g.id : 0;
+    const list = g ? g.promptIds : ungroupedPrompts.map(p => p.id);
+    const page = promptPages[gid] || 1;
+    const ids = list.slice((page - 1) * promptsPerPage, page * promptsPerPage);
+    return { page, ids, total: Math.ceil(list.length / promptsPerPage), gid };
   };
 
   const selectAllPdfs = () => {
@@ -218,10 +224,44 @@ export default function PipelineFlow() {
     });
   };
 
+  const selectAllUngrouped = () => {
+    const ids = ungroupedPrompts.map(p => p.id);
+    setPipeline(p => {
+      const idx = p.findIndex(s => s.id === 'prompt');
+      if (idx === -1) return p;
+      const stage = p[idx];
+      const steps = [...stage.steps];
+      ids.forEach(id => {
+        const pr = prompts.find(pr => pr.id === id);
+        if (!pr) return;
+        if (!steps.some(s => s.id === `prompt-${id}`)) {
+          steps.push({ id: `prompt-${id}`, label: pr.text, type: 'prompt' });
+        }
+      });
+      const np = [...p];
+      np[idx] = { ...stage, steps };
+      return np;
+    });
+  };
+
+  const deselectAllUngrouped = () => {
+    const ids = ungroupedPrompts.map(p => p.id);
+    setPipeline(p => {
+      const idx = p.findIndex(s => s.id === 'prompt');
+      if (idx === -1) return p;
+      const stage = p[idx];
+      const steps = stage.steps.filter(s => !ids.includes(Number(s.id.replace('prompt-', ''))));
+      const np = [...p];
+      np[idx] = { ...stage, steps };
+      return np;
+    });
+  };
+
   const onDragEnd = (result: DropResult) => {
     if (!result.destination) return;
     const gId = Number(result.source.droppableId);
     if (gId !== Number(result.destination.droppableId)) return;
+    if (gId === 0) return;
     setGroups(gs =>
       gs.map(g => {
         if (g.id === gId) {
@@ -363,6 +403,48 @@ export default function PipelineFlow() {
         <Typography variant="h6" gutterBottom>
           Prompt Stage
         </Typography>
+        {ungroupedPrompts.length > 0 && (() => {
+          const { page, ids, total, gid } = pagedPrompts();
+          return (
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="subtitle1" gutterBottom>
+                Ungruppierte Prompts
+              </Typography>
+              <Grid container spacing={1}>
+                {ids.map(id => {
+                  const p = prompts.find(pr => pr.id === id);
+                  if (!p) return null;
+                  const selected = selectedPrompts.includes(id);
+                  return (
+                    <Grid item xs={6} sm={4} md={3} lg={2} key={id}>
+                      <Card
+                        onClick={() => togglePrompt(id)}
+                        sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer', userSelect: 'none' }}
+                      >
+                        <CardContent sx={{ p: 1 }}>
+                          <Typography variant="body2">{p.text}</Typography>
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+              <Pagination
+                count={total}
+                page={page}
+                onChange={(_,p)=> setPromptPages(ps=>({ ...ps, [gid]: p }))}
+                size="small"
+                sx={{ mt:1 }}
+              />
+              <Box sx={{ mt: 1 }}>
+                <Button size="small" onClick={selectAllUngrouped} sx={{ mr: 1 }}>
+                  Alle auswählen
+                </Button>
+                <Button size="small" onClick={deselectAllUngrouped}>Alle abwählen</Button>
+              </Box>
+            </Box>
+          );
+        })()}
         <DragDropContext onDragEnd={onDragEnd}>
           {groups.map(g => (
             <Accordion key={g.id} defaultExpanded>
