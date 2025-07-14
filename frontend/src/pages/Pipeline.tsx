@@ -11,7 +11,6 @@ import {
   AccordionDetails
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import { useDropzone } from 'react-dropzone';
 import ReactFlow, {
   MiniMap,
   Controls,
@@ -46,7 +45,8 @@ const CardNode = memo(({ data }: NodeProps<NodeData>) => (
 const nodeTypes = { card: CardNode };
 
 export default function PipelineFlow() {
-  const [pdfFiles, setPdfFiles] = useState<File[]>([]);
+  const [pdfIds, setPdfIds] = useState<number[]>([]);
+  const [selectedPdfs, setSelectedPdfs] = useState<number[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [groups, setGroups] = useState<PromptGroup[]>([]);
   const [selectedPrompts, setSelectedPrompts] = useState<number[]>([]);
@@ -62,25 +62,32 @@ export default function PipelineFlow() {
     setEdges(eds => addEdge({ ...c, animated: true, style: { stroke: '#6C5DD3' } }, eds));
   }, [setEdges]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop: files => setPdfFiles(prev => [...prev, ...files])
-  });
+  useEffect(() => {
+    fetch('http://localhost:8083/texts')
+      .then(r => r.json())
+      .then((list: { id: number }[]) => setPdfIds(list.map(i => i.id)))
+      .catch(() => undefined);
+  }, []);
 
-  const addAllPdfs = () => {
+  const togglePdf = (id: number) => {
+    setSelectedPdfs(p => p.includes(id) ? p.filter(i => i !== id) : [...p, id]);
+  };
+
+  const addSelectedPdfs = () => {
     setNodes(ns => {
       const others = ns.filter(n => n.data.type !== 'pdf');
-      const newNodes = pdfFiles.map((f, i) => ({
-        id: `pdf-${i}`,
+      const newNodes = selectedPdfs.map((id, i) => ({
+        id: `pdf-${id}`,
         type: 'card',
         position: { x: 0, y: i * 140 },
-        data: { label: f.name, type: 'pdf' } as NodeData
+        data: { label: `PDF ${id}`, type: 'pdf' } as NodeData
       }));
       return [...others, ...newNodes];
     });
   };
 
   const clearPdfs = () => {
-    setPdfFiles([]);
+    setSelectedPdfs([]);
     setNodes(ns => ns.filter(n => n.data.type !== 'pdf'));
   };
 
@@ -143,11 +150,20 @@ export default function PipelineFlow() {
       <PageHeader title="Pipeline" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Pipeline' }]} />
       <Paper sx={{ p:2, mb:2 }}>
         <Typography variant="h6" gutterBottom>PDF Stage</Typography>
-        <Box {...getRootProps()} sx={{ p:3, border:'1px dashed', borderColor:'primary.main', mb:2, textAlign:'center', cursor:'pointer' }}>
-          <input {...getInputProps()} />
-          <Typography>{isDragActive ? 'Ablegen ...' : 'Dateien hierher ziehen'}</Typography>
+        <Box sx={{ mb:2 }}>
+          {pdfIds.map(id => {
+            const selected = selectedPdfs.includes(id);
+            return (
+              <Card key={id} onClick={() => togglePdf(id)}
+                    sx={{ mb:1, bgcolor: selected ? 'action.selected' : 'background.paper', cursor:'pointer' }}>
+                <CardContent sx={{ p:1 }}>
+                  <Typography variant="body2">PDF {id}</Typography>
+                </CardContent>
+              </Card>
+            );
+          })}
         </Box>
-        <Button size="small" onClick={addAllPdfs} sx={{ mr:1 }}>Alle rein</Button>
+        <Button size="small" onClick={addSelectedPdfs} sx={{ mr:1 }}>Alle rein</Button>
         <Button size="small" onClick={clearPdfs}>Leeren</Button>
       </Paper>
       <Paper sx={{ p:2, mb:2 }}>
