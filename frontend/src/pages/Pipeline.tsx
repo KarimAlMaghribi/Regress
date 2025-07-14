@@ -1,4 +1,6 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useRef } from 'react';
+import { Document, Page, pdfjs } from 'react-pdf';
+import Selecto from 'react-selecto';
 import {
   Box,
   Paper,
@@ -9,10 +11,17 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  Grid,
+  Pagination,
+  Checkbox,
+  Modal,
+  IconButton,
+  Skeleton,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
+import CloseIcon from '@mui/icons-material/Close';
 import ReactFlow, {
   MiniMap,
   Controls,
@@ -27,6 +36,8 @@ import ReactFlow, {
 import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
 import dagre from 'dagre';
 import PageHeader from '../components/PageHeader';
+
+pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
 interface Step { id: string; label: string; type: 'pdf' | 'prompt'; }
 interface Stage { id: string; name: string; steps: Step[]; }
@@ -73,10 +84,18 @@ export default function PipelineFlow() {
   const [pdfIds, setPdfIds] = useState<number[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [groups, setGroups] = useState<PromptGroup[]>([]);
+  const [pdfPage, setPdfPage] = useState(1);
+  const [promptPages, setPromptPages] = useState<Record<number, number>>({});
+  const [previewId, setPreviewId] = useState<number | null>(null);
+  const pdfGridRef = useRef<HTMLDivElement | null>(null);
   const [pipeline, setPipeline] = useState<Stage[]>([
     { id: 'pdf', name: 'PDF Stage', steps: [] },
     { id: 'prompt', name: 'Prompt Stage', steps: [] },
   ]);
+
+  const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+  const pdfPerPage = 8;
+  const promptsPerPage = 8;
 
   const togglePdf = (id: number) => {
     setPipeline(p => {
@@ -91,6 +110,34 @@ export default function PipelineFlow() {
       np[idx] = { ...stage, steps };
       return np;
     });
+  };
+
+  const selectPdfIds = (ids: number[]) => {
+    setPipeline(p => {
+      const idx = p.findIndex(s => s.id === 'pdf');
+      if (idx === -1) return p;
+      const stage = p[idx];
+      const steps = [...stage.steps];
+      ids.forEach(id => {
+        if (!steps.some(s => s.id === `pdf-${id}`)) {
+          steps.push({ id: `pdf-${id}`, label: `PDF ${id}`, type: 'pdf' });
+        }
+      });
+      const np = [...p];
+      np[idx] = { ...stage, steps };
+      return np;
+    });
+  };
+
+  const pagedPdfIds = useMemo(
+    () => pdfIds.slice((pdfPage - 1) * pdfPerPage, pdfPage * pdfPerPage),
+    [pdfIds, pdfPage],
+  );
+
+  const pagedPrompts = (g: PromptGroup) => {
+    const page = promptPages[g.id] || 1;
+    const ids = g.promptIds.slice((page - 1) * promptsPerPage, page * promptsPerPage);
+    return { page, ids, total: Math.ceil(g.promptIds.length / promptsPerPage) };
   };
 
   const addAllPdfs = () => {
@@ -229,29 +276,65 @@ export default function PipelineFlow() {
   const selectedPdfs = pdfStage?.steps.map(s => Number(s.id.replace('pdf-', ''))) || [];
   const selectedPrompts = promptStage?.steps.map(s => Number(s.id.replace('prompt-', ''))) || [];
 
+  const activate = () => {
+    console.log('activate pipeline');
+  };
+
   return (
     <Box>
-      <PageHeader title="Pipeline" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Pipeline' }]} />
+      <PageHeader
+        title="Pipeline"
+        breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Pipeline' }]}
+        actions={<Button variant="contained" onClick={activate}>Pipeline aktivieren</Button>}
+      />
       <Paper sx={{ p: 2, mb: 2 }}>
         <Typography variant="h6" gutterBottom>
           PDF Stage
         </Typography>
-        <Box sx={{ mb: 2 }}>
-          {pdfIds.map(id => {
-            const selected = selectedPdfs.includes(id);
-            return (
-              <Card
-                key={id}
-                onClick={() => togglePdf(id)}
-                sx={{ mb: 1, bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer' }}
-              >
-                <CardContent sx={{ p: 1 }}>
-                  <Typography variant="body2">PDF {id}</Typography>
-                </CardContent>
-              </Card>
-            );
-          })}
+        <Box sx={{ mb: 2 }} className="pdf-grid" ref={pdfGridRef}>
+          <Grid container spacing={1}>
+            {pagedPdfIds.map(id => {
+              const selected = selectedPdfs.includes(id);
+              return (
+                <Grid item xs={6} sm={4} md={3} lg={2} key={id}>
+                  <Card
+                    className="pdf-item"
+                    data-id={id}
+                    onClick={() => setPreviewId(id)}
+                    sx={{ bgcolor: 'background.paper', cursor: 'pointer' }}
+                  >
+                    <CardContent sx={{ p: 1, display:'flex',alignItems:'center' }}>
+                      <Checkbox
+                        checked={selected}
+                        onClick={e => {
+                          e.stopPropagation();
+                          togglePdf(id);
+                        }}
+                        size="small"
+                      />
+                      <Typography variant="body2" sx={{ ml:1 }}>PDF {id}</Typography>
+                    </CardContent>
+                  </Card>
+                </Grid>
+              );
+            })}
+          </Grid>
+          <Selecto
+            container={() => pdfGridRef.current!}
+            selectableTargets={[ '.pdf-item' ]}
+            onSelectEnd={e => {
+              const ids = e.selected.map(el => Number(el.getAttribute('data-id')));
+              if (ids.length) selectPdfIds(ids);
+            }}
+          />
         </Box>
+        <Pagination
+          count={Math.ceil(pdfIds.length / pdfPerPage)}
+          page={pdfPage}
+          onChange={(_, p) => setPdfPage(p)}
+          size="small"
+          sx={{ mb: 1 }}
+        />
         <Button size="small" onClick={addAllPdfs} sx={{ mr: 1 }}>
           Alle rein
         </Button>
@@ -291,33 +374,44 @@ export default function PipelineFlow() {
               </AccordionSummary>
               <AccordionDetails>
                 <Droppable droppableId={String(g.id)}>
-                  {prov => (
+                  {prov => {
+                    const { page, ids, total } = pagedPrompts(g);
+                    return (
                     <Box ref={prov.innerRef} {...prov.droppableProps}>
-                      {g.promptIds.map((pid, idx) => {
+                      <Grid container spacing={1}>
+                      {ids.map((pid, idx) => {
                         const p = prompts.find(pr => pr.id === pid);
                         if (!p) return null;
                         const selected = selectedPrompts.includes(pid);
                         return (
                           <Draggable key={pid} draggableId={String(pid)} index={idx}>
                             {drag => (
-                              <Card
-                                ref={drag.innerRef}
-                                {...drag.draggableProps}
-                                {...drag.dragHandleProps}
-                                onClick={() => togglePrompt(pid)}
-                                sx={{ mb: 1, bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer' }}
-                              >
-                                <CardContent sx={{ p: 1 }}>
-                                  <Typography variant="body2">{p.text}</Typography>
-                                </CardContent>
-                              </Card>
+                              <Grid item xs={6} sm={4} md={3} lg={2} ref={drag.innerRef} {...drag.draggableProps} {...drag.dragHandleProps}>
+                                <Card
+                                  onClick={() => togglePrompt(pid)}
+                                  sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer' }}
+                                >
+                                  <CardContent sx={{ p: 1 }}>
+                                    <Typography variant="body2">{p.text}</Typography>
+                                  </CardContent>
+                                </Card>
+                              </Grid>
                             )}
                           </Draggable>
                         );
                       })}
+                      </Grid>
+                      <Pagination
+                        count={total}
+                        page={page}
+                        onChange={(_,p)=> setPromptPages(ps=>({ ...ps, [g.id]: p }))}
+                        size="small"
+                        sx={{ mt:1 }}
+                      />
                       {prov.placeholder}
                     </Box>
-                  )}
+                    );
+                  }}
                 </Droppable>
               </AccordionDetails>
             </Accordion>
@@ -332,6 +426,18 @@ export default function PipelineFlow() {
           </ReactFlow>
         </ReactFlowProvider>
       </Box>
+      <Modal open={previewId !== null} onClose={() => setPreviewId(null)}>
+        <Box sx={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%, -50%)', bgcolor:'background.paper', p:2 }}>
+          <IconButton onClick={() => setPreviewId(null)} sx={{ position:'absolute', top:8, right:8 }}>
+            <CloseIcon />
+          </IconButton>
+          {previewId !== null && (
+            <Document file={`${ingest}/pdf/${previewId}`} loading={<Skeleton variant="rectangular" height={400} />}> 
+              <Page pageNumber={1} width={600} />
+            </Document>
+          )}
+        </Box>
+      </Modal>
     </Box>
   );
 }
