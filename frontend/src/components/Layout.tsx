@@ -31,6 +31,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           ml: open ? `${expandedWidth}px` : `${collapsedWidth}px`,
           width: `calc(100% - ${open ? expandedWidth : collapsedWidth}px)`,
           p: 3,
+          pb: 7,
           flexGrow: 1,
           boxSizing: 'border-box',
           overflowX: 'hidden',
