@@ -4,6 +4,7 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
 import { utils as XLSXUtils, writeFile } from 'xlsx';
 import PageHeader from '../components/PageHeader';
+import { loadPromptGroupMap } from '../utils/promptGroups';
 
 interface PromptCfg { text: string }
 
@@ -22,6 +23,7 @@ export default function Analyses() {
   const [tab, setTab] = useState(0);
   const [running, setRunning] = useState<Entry[]>([]);
   const [done, setDone] = useState<Entry[]>([]);
+  const [promptGroups, setPromptGroups] = useState<Record<string, string[]>>({});
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
 
@@ -61,6 +63,9 @@ export default function Analyses() {
   };
 
   useEffect(load, []);
+  useEffect(() => {
+    loadPromptGroupMap().then(setPromptGroups).catch(() => undefined);
+  }, []);
 
   const filteredDone = done.filter(e => {
     const ts = dayjs(e.timestamp);
@@ -89,6 +94,7 @@ const renderList = (items: Entry[], finished: boolean) => (
         <TableRow>
           <TableCell>Name der PDF</TableCell>
           <TableCell>Prompts</TableCell>
+          <TableCell>Gruppen</TableCell>
           {finished && <TableCell align="right">Ergebnis</TableCell>}
         </TableRow>
       </TableHead>
@@ -99,6 +105,11 @@ const renderList = (items: Entry[], finished: boolean) => (
             <TableCell>
               {e.prompts.map((p, i) => (
                 <Chip key={i} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+              ))}
+            </TableCell>
+            <TableCell>
+              {Array.from(new Set(e.prompts.flatMap(p => promptGroups[p.text] || []))).map((g, i) => (
+                <Chip key={i} label={g} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
               ))}
             </TableCell>
             {finished && (
@@ -118,7 +129,7 @@ const renderList = (items: Entry[], finished: boolean) => (
         ))}
         {items.length === 0 && (
           <TableRow>
-            <TableCell colSpan={finished ? 3 : 2} align="center">
+            <TableCell colSpan={finished ? 4 : 3} align="center">
               <Typography>Keine Einträge</Typography>
             </TableCell>
           </TableRow>
