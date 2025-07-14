@@ -148,14 +148,18 @@ async fn get_result(
     path: web::Path<i32>,
     db: web::Data<tokio_postgres::Client>,
 ) -> actix_web::Result<HttpResponse> {
-    let id = path.into_inner();
-    info!(id, "fetching classification result");
+    let pdf_id = path.into_inner();
+    info!(pdf_id, "fetching classification result by pdf id");
+    // fetch the most recent classification for this PDF
     let stmt = db
-        .prepare("SELECT regress, metrics, responses, error FROM classifications WHERE id = $1")
+        .prepare(
+            "SELECT regress, metrics, responses, error FROM classifications \
+             WHERE file_name = $1 ORDER BY id DESC LIMIT 1",
+        )
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let row = db
-        .query_opt(&stmt, &[&id])
+        .query_opt(&stmt, &[&pdf_id.to_string()])
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     if let Some(row) = row {
