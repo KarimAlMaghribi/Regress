@@ -176,6 +176,34 @@ async fn update_prompt(
             }),
         )
     })?;
+    // update group relations
+    GroupPromptEntity::delete_many()
+        .filter(model::group_prompt::Column::PromptId.eq(id))
+        .exec(&*db)
+        .await
+        .map_err(|e| {
+            error!("failed to clear prompt groups {}: {}", id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    for gid in input.group_ids {
+        let mut gp: model::GroupPromptActiveModel = Default::default();
+        gp.group_id = Set(gid);
+        gp.prompt_id = Set(id);
+        gp.insert(&*db).await.map_err(|e| {
+            error!("failed to add prompt to group: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    }
     info!(id = res.id, "updated prompt");
     Ok(Json(PromptData {
         id: res.id,
@@ -295,6 +323,80 @@ async fn create_group(
         name: g.name,
         favorite: g.favorite,
         prompt_ids: input.prompt_ids,
+    }))
+}
+
+async fn update_group(
+    Path(id): Path<i32>,
+    State(db): State<Arc<DatabaseConnection>>,
+    Json(input): Json<GroupInput>,
+) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
+    info!(id, "updating group");
+    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(|e| {
+        error!("failed to find group {}: {}", id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?
+    else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "Not found".into(),
+            }),
+        ));
+    };
+    group.name = input.name;
+    group.favorite = input.favorite;
+    let active: model::GroupActiveModel = group.into();
+    let g = active.update(&*db).await.map_err(|e| {
+        error!("failed to update group {}: {}", id, e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })?;
+
+    GroupPromptEntity::delete_many()
+        .filter(model::group_prompt::Column::GroupId.eq(id))
+        .exec(&*db)
+        .await
+        .map_err(|e| {
+            error!("failed to clear group prompts {}: {}", id, e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+
+    let ids = input.prompt_ids.clone();
+    for pid in &ids {
+        let mut gp: model::GroupPromptActiveModel = Default::default();
+        gp.group_id = Set(id);
+        gp.prompt_id = Set(*pid);
+        gp.insert(&*db).await.map_err(|e| {
+            error!("failed to add prompt to group: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: e.to_string(),
+                }),
+            )
+        })?;
+    }
+
+    Ok(Json(GroupData {
+        id: g.id,
+        name: g.name,
+        favorite: g.favorite,
+        prompt_ids: ids,
     }))
 }
 
@@ -463,6 +565,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/prompts/:id", put(update_prompt).delete(delete_prompt))
         .route("/prompts/:id/favorite", put(set_favorite))
         .route("/prompt-groups", get(list_groups).post(create_group))
+        .route("/prompt-groups/:id", put(update_group))
         .route("/prompt-groups/:id/favorite", put(set_group_favorite))
         .with_state(db.clone())
         .layer(CorsLayer::permissive());
@@ -627,5 +730,50 @@ mod tests {
         .unwrap();
         assert_eq!(res.0.name, "g");
         assert_eq!(res.0.prompt_ids, vec![2]);
+    }
+
+    #[tokio::test]
+    async fn update_group_route() {
+        let db = Arc::new(
+            MockDatabase::new(DbBackend::Postgres)
+                .append_query_results([[model::GroupModel {
+                    id: 1,
+                    name: "g".into(),
+                    favorite: false,
+                }]])
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                }])
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                }])
+                .append_query_results([[model::GroupModel {
+                    id: 1,
+                    name: "new".into(),
+                    favorite: true,
+                }]])
+                .append_query_results([[model::GroupPromptModel {
+                    group_id: 1,
+                    prompt_id: 3,
+                }]])
+                .into_connection(),
+        );
+
+        let res = update_group(
+            Path(1),
+            State(db.clone()),
+            Json(GroupInput {
+                name: "new".into(),
+                prompt_ids: vec![3],
+                favorite: true,
+            }),
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.0.name, "new");
+        assert_eq!(res.0.prompt_ids, vec![3]);
+        assert!(res.0.favorite);
     }
 }
