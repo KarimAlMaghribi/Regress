@@ -1,5 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Tabs, Tab, Paper, Button, Typography, Table, TableHead, TableRow, TableCell, TableBody, Chip } from '@mui/material';
+import { Box, Tabs, Tab, Paper, Button, Typography, Table, TableHead, TableRow, TableCell, TableBody, Chip, Stack } from '@mui/material';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import dayjs, { Dayjs } from 'dayjs';
+import { utils as XLSXUtils, writeFile } from 'xlsx';
 import PageHeader from '../components/PageHeader';
 
 interface PromptCfg { text: string }
@@ -10,12 +13,17 @@ interface Entry {
   pdfUrl?: string;
   prompts: PromptCfg[];
   status: string;
+  timestamp: string;
+  score?: number;
+  resultLabel?: string;
 }
 
 export default function Analyses() {
   const [tab, setTab] = useState(0);
   const [running, setRunning] = useState<Entry[]>([]);
   const [done, setDone] = useState<Entry[]>([]);
+  const [start, setStart] = useState<Dayjs | null>(null);
+  const [end, setEnd] = useState<Dayjs | null>(null);
 
   const load = () => {
     Promise.all([
@@ -41,6 +49,9 @@ export default function Analyses() {
             pdfUrl: d.pdf_url ?? d.pdfUrl,
             prompts,
             status: d.status,
+            timestamp: d.timestamp,
+            score: d.score,
+            resultLabel: d.result_label,
           } as Entry;
         };
         setRunning(runningData.map(map));
@@ -50,6 +61,26 @@ export default function Analyses() {
   };
 
   useEffect(load, []);
+
+  const filteredDone = done.filter(e => {
+    const ts = dayjs(e.timestamp);
+    if (start && ts.isBefore(start, 'day')) return false;
+    if (end && ts.isAfter(end, 'day')) return false;
+    return true;
+  });
+
+  const exportExcel = () => {
+    const rows = filteredDone.map(e => ({
+      pdf: `PDF ${e.pdfId}`,
+      prompt: e.prompts.map(p => p.text).join(' | '),
+      score: e.score != null ? e.score.toFixed(2) : '',
+      label: e.resultLabel || '',
+    }));
+    const ws = XLSXUtils.json_to_sheet(rows);
+    const wb = XLSXUtils.book_new();
+    XLSXUtils.book_append_sheet(wb, ws, 'Analysen');
+    writeFile(wb, 'analysen.xlsx');
+  };
 
 const renderList = (items: Entry[], finished: boolean) => (
   <Paper sx={{ p: 2 }}>
@@ -104,7 +135,18 @@ const renderList = (items: Entry[], finished: boolean) => (
         <Tab label={`Laufend (${running.length})`} />
         <Tab label={`Abgeschlossen (${done.length})`} />
       </Tabs>
-      {tab === 0 ? renderList(running, false) : renderList(done, true)}
+      {tab === 0 ? (
+        renderList(running, false)
+      ) : (
+        <Box>
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2 }}>
+            <DatePicker label="Start" value={start} onChange={d => setStart(d)} slotProps={{ textField: { size: 'small' } }} />
+            <DatePicker label="Ende" value={end} onChange={d => setEnd(d)} slotProps={{ textField: { size: 'small' } }} />
+            <Button variant="outlined" onClick={exportExcel}>Excel Export</Button>
+          </Stack>
+          {renderList(filteredDone, true)}
+        </Box>
+      )}
     </Box>
   );
 }
