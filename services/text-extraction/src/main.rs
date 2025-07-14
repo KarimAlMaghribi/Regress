@@ -119,6 +119,14 @@ async fn main() -> std::io::Result<()> {
         .await
         .unwrap();
     info!("ensured pdf_texts table exists");
+    db_client
+        .execute(
+            "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, status TEXT NOT NULL)",
+            &[],
+        )
+        .await
+        .unwrap();
+    info!("ensured uploads table exists");
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "text-extraction")
         .set("bootstrap.servers", &settings.message_broker_url)
@@ -165,6 +173,12 @@ async fn main() -> std::io::Result<()> {
                                         continue;
                                     }
                                     info!(id = event.id, "stored ocr text");
+                                    let _ = db
+                                        .execute(
+                                            "UPDATE uploads SET status='ready' WHERE pdf_id=$1",
+                                            &[&event.id],
+                                        )
+                                        .await;
                                     let evt = TextExtracted { id: event.id, text, prompt: event.prompt.clone() };
                                     let payload = serde_json::to_string(&evt).unwrap();
                                     let _ = prod

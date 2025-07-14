@@ -16,3 +16,6 @@ shared = { path = "../../shared" }
 tokio.workspace = true
 tokio-postgres.workspace = true
 rdkafka.workspace = true
+lopdf = "0.36"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+tempfile = "3"

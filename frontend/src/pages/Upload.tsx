@@ -11,52 +11,55 @@ import PageHeader from '../components/PageHeader';
 
 interface UploadEntry {
   id: number;
+  pdfId: number | null;
   status: string;
   pdfUrl: string;
   ocr: boolean;
 }
 
 export default function Upload() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [message, setMessage] = useState<string>('');
   const [entries, setEntries] = useState<UploadEntry[]>([]);
 
   const load = () => {
+    const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
     Promise.all([
-      fetch('http://localhost:8090/analyses').then(r => r.json()),
+      fetch(`${ingest}/uploads`).then(r => r.json()),
       fetch('http://localhost:8083/texts').then(r => r.json()),
     ])
-      .then(([analysisData, texts]: [any[], { id: number }[]]) => {
+      .then(([uploadData, texts]: [any[], { id: number }[]]) => {
         const ocrIds = texts.map(t => t.id);
-        const mapped: UploadEntry[] = analysisData.map(d => ({
-          id: d.pdf_id ?? d.pdfId,
+        const mapped: UploadEntry[] = uploadData.map((d: any) => ({
+          id: d.id,
+          pdfId: d.pdf_id ?? null,
           status: d.status,
-          pdfUrl: d.pdf_url ?? d.pdfUrl,
-          ocr: ocrIds.includes(d.pdf_id ?? d.pdfId),
+          pdfUrl: d.pdf_id ? `${ingest}/pdf/${d.pdf_id}` : '',
+          ocr: d.pdf_id ? ocrIds.includes(d.pdf_id) : false,
         }));
         setEntries(mapped);
       })
       .catch(e => console.error('load uploads', e));
   };
 
-  const onDrop = useCallback((files: File[]) => {
-    console.log('Selected file', files[0]);
-    setFile(files[0]);
+  const onDrop = useCallback((sel: File[]) => {
+    console.log('Selected files', sel);
+    setFiles(sel);
   }, []);
 
   useEffect(load, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
-    multiple: false,
-    accept: { 'application/pdf': ['.pdf'] },
+    multiple: true,
+    accept: { 'application/pdf': ['.pdf'], 'application/zip': ['.zip'] },
   });
 
   const upload = () => {
-    if (!file) return;
-    console.log('Uploading file', file.name);
+    if (!files.length) return;
+    console.log('Uploading files', files.map(f => f.name));
     const form = new FormData();
-    form.append('file', file);
+    files.forEach(f => form.append('file', f));
     const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
     fetch(`${ingest}/upload`, { method: 'POST', body: form })
       .then(async r => {
@@ -69,6 +72,7 @@ export default function Upload() {
       .then(d => {
         console.log('Upload result', d);
         setMessage(`Upload erfolgreich. ID: ${d.id}`);
+        setFiles([]);
         load();
       })
       .catch(err => {
@@ -97,7 +101,7 @@ export default function Upload() {
   } as const;
 
   const columns: GridColDef[] = [
-    { field: 'id', headerName: 'PDF', width: 90 },
+    { field: 'pdfId', headerName: 'PDF', width: 90 },
     { field: 'status', headerName: 'Status', flex: 1 },
     { field: 'ocr', headerName: 'OCR', width: 80, valueGetter: p => (p.row.ocr ? 'Ja' : 'Nein') },
     {
@@ -106,7 +110,7 @@ export default function Upload() {
       sortable: false,
       width: 80,
       renderCell: params => (
-        <IconButton size="small" onClick={() => deletePdf(params.row.id)}>
+        <IconButton size="small" onClick={() => deletePdf(params.row.pdfId)} disabled={!params.row.pdfId}>
           <DeleteIcon fontSize="small" />
         </IconButton>
       ),
@@ -132,13 +136,15 @@ export default function Upload() {
         <Typography variant="h6">
           {isDragActive
             ? 'Ablegen zum Hochladen'
-            : file?.name ?? 'Datei hierher ziehen oder klicken ...'}
+            : files.length
+            ? files.map(f => f.name).join(', ')
+            : 'Datei hierher ziehen oder klicken ...'}
         </Typography>
       </Paper>
       <Button
         variant="contained"
         onClick={upload}
-        disabled={!file}
+        disabled={!files.length}
         component={motion.button}
         whileHover={{ y: -2 }}
         sx={{ mt: 2 }}
