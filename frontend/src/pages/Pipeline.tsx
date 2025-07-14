@@ -38,27 +38,37 @@ import PageHeader from '../components/PageHeader';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
+const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+
 interface Step { id: string; label: string; type: 'pdf' | 'prompt'; }
 interface Stage { id: string; name: string; steps: Step[]; }
 interface Prompt { id: number; text: string; }
 interface PromptGroup { id: number; name: string; promptIds: number[]; }
 
-type NodeData = { label: string; type: 'pdf' | 'prompt' };
+type NodeData = { label: string; type: 'pdf' | 'prompt'; onOpen?: () => void };
 
-const CardNode = ({ data }: NodeProps<NodeData>) => (
-  <Card variant="outlined" sx={{ minWidth: 170, textAlign: 'center' }}>
-    <Handle type="target" position={Position.Top} />
-    <CardContent sx={{ p: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1 }}>
-      {data.type === 'pdf' ? (
-        <PictureAsPdfIcon fontSize="small" color="error" />
-      ) : (
-        <ChatBubbleOutlineIcon fontSize="small" color="primary" />
-      )}
-      <Typography variant="body2">{data.label}</Typography>
-    </CardContent>
-    <Handle type="source" position={Position.Bottom} />
-  </Card>
-);
+const CardNode = ({ data, id }: NodeProps<NodeData>) => {
+  const handleClick = () => {
+    if (data.type === 'pdf') {
+      data.onOpen ? data.onOpen() : window.open(`${ingest}/pdf/${id.replace('pdf-', '')}.pdf`);
+    }
+  };
+
+  return (
+    <Card variant="outlined" sx={{ minWidth: 170, textAlign: 'center', cursor: 'pointer' }} onClick={handleClick}>
+      <Handle type="target" position={Position.Top} />
+      <CardContent sx={{ p: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, pointerEvents: 'none' }}>
+        {data.type === 'pdf' ? (
+          <PictureAsPdfIcon fontSize="small" color="error" />
+        ) : (
+          <ChatBubbleOutlineIcon fontSize="small" color="primary" />
+        )}
+        <Typography variant="body2">{data.label}</Typography>
+      </CardContent>
+      <Handle type="source" position={Position.Bottom} />
+    </Card>
+  );
+};
 
 const nodeTypes = { card: CardNode };
 
@@ -91,8 +101,6 @@ export default function PipelineFlow() {
     { id: 'pdf', name: 'PDF Stage', steps: [] },
     { id: 'prompt', name: 'Prompt Stage', steps: [] },
   ]);
-
-  const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
   const pdfPerPage = 8;
   const promptsPerPage = 8;
 
@@ -251,7 +259,17 @@ export default function PipelineFlow() {
 
     pipeline.forEach((stage, i) => {
       stage.steps.forEach(step => {
-        ns.push({ id: step.id, type: 'card', data: { label: step.label, type: step.type }, position: { x: 0, y: 0 } });
+        const idNum = step.type === 'pdf' ? Number(step.id.replace('pdf-', '')) : undefined;
+        ns.push({
+          id: step.id,
+          type: 'card',
+          data: {
+            label: step.label,
+            type: step.type,
+            onOpen: step.type === 'pdf' && idNum !== undefined ? () => setPreviewId(idNum) : undefined,
+          },
+          position: { x: 0, y: 0 },
+        });
       });
       if (i < pipeline.length - 1) {
         stage.steps.forEach(a => {
@@ -307,7 +325,7 @@ export default function PipelineFlow() {
                     className="pdf-item"
                     data-id={id}
                     onClick={() => togglePdf(id)}
-                    sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer' }}
+                    sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer', userSelect: 'none' }}
                   >
                     <CardContent sx={{ p: 1 }}>
                       <Typography variant="body2">PDF {id}</Typography>
@@ -387,7 +405,7 @@ export default function PipelineFlow() {
                               <Grid item xs={6} sm={4} md={3} lg={2} ref={drag.innerRef} {...drag.draggableProps} {...drag.dragHandleProps}>
                                 <Card
                                   onClick={() => togglePrompt(pid)}
-                                  sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer' }}
+                                  sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer', userSelect: 'none' }}
                                 >
                                   <CardContent sx={{ p: 1 }}>
                                     <Typography variant="body2">{p.text}</Typography>
@@ -418,7 +436,7 @@ export default function PipelineFlow() {
       </Paper>
       <Box sx={{ height: 600 }}>
         <ReactFlowProvider>
-          <ReactFlow nodes={nodes} edges={edges} onConnect={onConnect} nodeTypes={nodeTypes} onNodeClick={onNodeClick}>
+          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodeClick={onNodeClick}>
             <MiniMap />
             <Controls />
           </ReactFlow>
@@ -430,7 +448,11 @@ export default function PipelineFlow() {
             <CloseIcon />
           </IconButton>
           {previewId !== null && (
-            <Document file={`${ingest}/pdf/${previewId}`} loading={<Skeleton variant="rectangular" height={400} />}> 
+            <Document
+              file={`${ingest}/pdf/${previewId}.pdf`}
+              loading={<Skeleton variant="rectangular" height={400} />}
+              onLoadError={console.error}
+            >
               <Page pageNumber={1} width={600} />
             </Document>
           )}
