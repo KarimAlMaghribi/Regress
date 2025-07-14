@@ -17,6 +17,7 @@ import {
 import PageHeader from '../components/PageHeader';
 
 interface Prompt { id: number; text: string; weight: number; favorite: boolean }
+interface PromptGroup { id: number; name: string; promptIds: number[]; favorite: boolean }
 interface TextEntry { id: number }
 
 export default function Pipeline() {
@@ -24,6 +25,8 @@ export default function Pipeline() {
   const [selected, setSelected] = useState<number[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [promptIds, setPromptIds] = useState<number[]>([]);
+  const [groups, setGroups] = useState<PromptGroup[]>([]);
+  const [groupIds, setGroupIds] = useState<number[]>([]);
   const [snack, setSnack] = useState('');
   // Results are displayed in the history section, not directly in the pipeline
   // view. Therefore we only keep a snackbar for feedback here.
@@ -41,6 +44,10 @@ export default function Pipeline() {
       })
       .then((d: any[]) => setPrompts(d.map(p => ({ ...p, weight: p.weight ?? 1, favorite: !!p.favorite }))))
       .catch(e => setSnack(`Fehler: ${e}`));
+    fetch('http://localhost:8082/prompt-groups')
+      .then(r => r.json())
+      .then(setGroups)
+      .catch(e => setSnack(`Fehler: ${e}`));
   };
 
   useEffect(load, []);
@@ -52,9 +59,9 @@ export default function Pipeline() {
   };
 
   const start = () => {
-    const chosen = promptIds
-      .map(id => prompts.find(p => p.id === id))
-      .filter(Boolean) as Prompt[];
+    const fromGroups = groupIds.flatMap(id => groups.find(g => g.id === id)?.promptIds || []);
+    const allIds = Array.from(new Set([...promptIds, ...fromGroups]));
+    const chosen = allIds.map(id => prompts.find(p => p.id === id)).filter(Boolean) as Prompt[];
     if (chosen.length === 0 || selected.length === 0) return;
     const payloadPrompts = chosen.map(p => ({ text: p.text, weight: p.weight }));
     const prompt = JSON.stringify(payloadPrompts);
@@ -97,9 +104,26 @@ export default function Pipeline() {
           ))}
         </Select>
       </FormControl>
+      <FormControl size="small" sx={{ minWidth: 220, mb:2, ml:2 }}>
+        <InputLabel id="group-label">Gruppen</InputLabel>
+        <Select
+          labelId="group-label"
+          multiple
+          value={groupIds}
+          onChange={e => setGroupIds(typeof e.target.value === 'string' ? e.target.value.split(',').map(Number) : e.target.value as number[])}
+          renderValue={sel => (sel as number[]).map(id => groups.find(g => g.id === id)?.name).join(', ')}
+        >
+          {groups.map(g => (
+            <MenuItem key={g.id} value={g.id}>
+              <Checkbox checked={groupIds.indexOf(g.id) > -1} />
+              <ListItemText primary={g.name} />
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
       <Button
         variant="contained"
-        disabled={!selected.length || promptIds.length === 0}
+        disabled={!selected.length || (promptIds.length === 0 && groupIds.length === 0)}
         onClick={start}
       >
         Analyse starten
