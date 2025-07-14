@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Tabs, Tab, Paper, Button, Typography } from '@mui/material';
+import { Box, Tabs, Tab, Paper, Button, Typography, Table, TableHead, TableRow, TableCell, TableBody, Chip } from '@mui/material';
 import PageHeader from '../components/PageHeader';
+
+interface PromptCfg { text: string }
 
 interface Entry {
   id: number; // analysis id
   pdfId: number;
-  prompt?: string;
+  pdfUrl?: string;
+  prompts: PromptCfg[];
   status: string;
 }
 
@@ -20,12 +23,26 @@ export default function Analyses() {
       fetch('http://localhost:8090/analyses?status=completed').then(r => r.json()),
     ])
       .then(([runningData, doneData]: [any[], any[]]) => {
-        const map = (d: any): Entry => ({
-          id: d.id,
-          pdfId: d.pdf_id ?? d.pdfId,
-          prompt: d.prompt,
-          status: d.status,
-        });
+        const map = (d: any): Entry => {
+          let prompts: PromptCfg[] = [];
+          try {
+            const arr = JSON.parse(d.prompt ?? '');
+            if (Array.isArray(arr)) {
+              prompts = arr.map((p: any) => ({ text: p.text ?? String(p) }));
+            } else if (typeof arr === 'string') {
+              prompts = [{ text: arr }];
+            }
+          } catch {
+            if (d.prompt) prompts = [{ text: d.prompt }];
+          }
+          return {
+            id: d.id,
+            pdfId: d.pdf_id ?? d.pdfId,
+            pdfUrl: d.pdf_url ?? d.pdfUrl,
+            prompts,
+            status: d.status,
+          } as Entry;
+        };
         setRunning(runningData.map(map));
         setDone(doneData.map(map));
       })
@@ -36,17 +53,49 @@ export default function Analyses() {
 
 const renderList = (items: Entry[], finished: boolean) => (
   <Paper sx={{ p: 2 }}>
-    {items.map(e => (
-      <Box key={e.id} sx={{ mb: 1, display: 'flex', justifyContent: 'space-between' }}>
-        <Typography>{e.pdfId} - {e.prompt || 'Prompt'}</Typography>
-        {finished && (
-          <Button size="small" href={`/result/${e.pdfId}`} target="_blank" rel="noopener">Ergebnis anzeigen</Button>
+    <Table size="small">
+      <TableHead>
+        <TableRow>
+          <TableCell>Name der PDF</TableCell>
+          <TableCell>Prompts</TableCell>
+          {finished && <TableCell align="right">Ergebnis</TableCell>}
+        </TableRow>
+      </TableHead>
+      <TableBody>
+        {items.map(e => (
+          <TableRow key={e.id}>
+            <TableCell>{`PDF ${e.pdfId}`}</TableCell>
+            <TableCell>
+              {e.prompts.map((p, i) => (
+                <Chip key={i} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+              ))}
+            </TableCell>
+            {finished && (
+              <TableCell align="right">
+                <Button
+                  size="small"
+                  href={`/result/${e.pdfId}`}
+                  target="_blank"
+                  rel="noopener"
+                  variant="outlined"
+                >
+                  Ergebnis anzeigen
+                </Button>
+              </TableCell>
+            )}
+          </TableRow>
+        ))}
+        {items.length === 0 && (
+          <TableRow>
+            <TableCell colSpan={finished ? 3 : 2} align="center">
+              <Typography>Keine Einträge</Typography>
+            </TableCell>
+          </TableRow>
         )}
-      </Box>
-    ))}
-    {items.length === 0 && <Typography>Keine Einträge</Typography>}
+      </TableBody>
+    </Table>
   </Paper>
-  );
+);
 
   return (
     <Box>
