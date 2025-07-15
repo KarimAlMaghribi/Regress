@@ -72,6 +72,16 @@ services:
       - KAFKA_KRAFT_CLUSTER_ID=11111111111111111111
     ports:
       - "9092:9092"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "8086:8080"
+    depends_on:
+      - kafka
   frontend:
     build:
       context: .
