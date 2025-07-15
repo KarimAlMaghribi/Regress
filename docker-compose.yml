@@ -1,13 +1,5 @@
 version: '3.9'
 services:
-  db:
-    image: postgres:15
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: regress
-    volumes:
-      - db_data:/var/lib/postgresql/data
   api-gateway:
     build:
       context: .
@@ -19,7 +11,7 @@ services:
       context: .
       dockerfile: services/pdf-ingest/Dockerfile
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/regress
+      DATABASE_URL: 'host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require'
       MESSAGE_BROKER_URL: kafka:9092
     ports:
       - "8081:8081"
@@ -28,7 +20,7 @@ services:
       context: .
       dockerfile: services/text-extraction/Dockerfile
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/regress
+      DATABASE_URL: 'host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require'
       MESSAGE_BROKER_URL: kafka:9092
     ports:
       - "8083:8083"
@@ -37,7 +29,7 @@ services:
       context: .
       dockerfile: services/prompt-manager/Dockerfile
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/regress
+      DATABASE_URL: 'host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require'
     ports:
       - "8082:8082"
   classifier:
@@ -53,7 +45,7 @@ services:
       context: .
       dockerfile: services/metrics/Dockerfile
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/regress
+      DATABASE_URL: 'host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require'
     ports:
       - "8085:8085"
   history-service:
@@ -61,7 +53,7 @@ services:
       context: .
       dockerfile: services/history-service/Dockerfile
     environment:
-      DATABASE_URL: postgres://postgres:postgres@db:5432/regress
+      DATABASE_URL: 'host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require'
       MESSAGE_BROKER_URL: kafka:9092
       SERVER_PORT: 8090
     ports:
@@ -92,5 +84,3 @@ services:
     ports:
       - "3001:80"
 
-volumes:
-  db_data:
