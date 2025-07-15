@@ -11,7 +11,8 @@ use rdkafka::{
     ClientConfig, Message,
 };
 use std::time::Duration;
-use tokio_postgres::NoTls;
+use postgres_native_tls::MakeTlsConnector;
+use native_tls::TlsConnector;
 use tesseract::Tesseract;
 use tracing::{error, info};
 use std::path::Path;
@@ -108,7 +109,12 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting text-extraction service");
     let settings = Settings::new().unwrap();
-    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls).await.unwrap();
+    let tls_connector = TlsConnector::builder().build().unwrap();
+    let connector = MakeTlsConnector::new(tls_connector);
+    let (db_client, connection) =
+        tokio_postgres::connect(&settings.database_url, connector)
+            .await
+            .unwrap();
     info!("connected to database");
     tokio::spawn(async move { if let Err(e) = connection.await { error!(%e, "db error") } });
     db_client

@@ -12,7 +12,8 @@ use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
-use tokio_postgres::NoTls;
+use postgres_native_tls::MakeTlsConnector;
+use native_tls::TlsConnector;
 use tracing::{error, info};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -416,9 +417,12 @@ async fn main() -> std::io::Result<()> {
     let settings = Settings::new().unwrap();
     let pdf_base =
         std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
-    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls)
-        .await
-        .unwrap();
+    let tls_connector = TlsConnector::builder().build().unwrap();
+    let connector = MakeTlsConnector::new(tls_connector);
+    let (db_client, connection) =
+        tokio_postgres::connect(&settings.database_url, connector)
+            .await
+            .unwrap();
     tokio::spawn(async move {
         let _ = connection.await;
     });

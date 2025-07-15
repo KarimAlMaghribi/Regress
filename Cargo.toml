@@ -32,6 +32,8 @@ rdkafka     = { version = "0.36", features = ["tokio"] }
 openai      = "1"
 anyhow      = "1"
 log         = "0.4"
+postgres-native-tls = "0.5"
+native-tls = "0.2"
 
 [workspace.metadata.vcpkg]
 git          = "https://github.com/microsoft/vcpkg"
