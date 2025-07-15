@@ -1646,6 +1646,8 @@ dependencies = [
  "actix-web",
  "actix-web-actors",
  "chrono",
+ "native-tls",
+ "postgres-native-tls",
  "rdkafka",
  "serde",
  "serde_json",
@@ -2306,6 +2308,8 @@ dependencies = [
  "actix-cors",
  "actix-web",
  "chrono",
+ "native-tls",
+ "postgres-native-tls",
  "serde",
  "serde_json",
  "shared",
@@ -2692,6 +2696,8 @@ dependencies = [
  "actix-web",
  "futures-util",
  "lopdf",
+ "native-tls",
+ "postgres-native-tls",
  "rdkafka",
  "serde",
  "serde_json",
@@ -2865,6 +2871,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8a2f0d8d040d7848a709caf78912debcc3f33ee4b3cac47d73d1e1069e83507"
 dependencies = [
  "portable-atomic",
+]
+
+[[package]]
+name = "postgres-native-tls"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a1f39498473c92f7b6820ae970382c1d83178a3454c618161cb772e8598d9f6f"
+dependencies = [
+ "native-tls",
+ "tokio",
+ "tokio-native-tls",
+ "tokio-postgres",
 ]
 
 [[package]]
@@ -4192,7 +4210,9 @@ version = "0.1.0"
 dependencies = [
  "actix-cors",
  "actix-web",
+ "native-tls",
  "pdf-extract",
+ "postgres-native-tls",
  "rdkafka",
  "serde",
  "serde_json",

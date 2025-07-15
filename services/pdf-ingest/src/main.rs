@@ -11,7 +11,8 @@ use rdkafka::{
 use shared::config::Settings;
 use shared::dto::{PdfUploaded, UploadResponse};
 use std::time::Duration;
-use tokio_postgres::NoTls;
+use postgres_native_tls::MakeTlsConnector;
+use native_tls::TlsConnector;
 use tracing::info;
 use lopdf::{Document, Bookmark, Object, ObjectId};
 use zip::ZipArchive;
@@ -322,9 +323,12 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting pdf-ingest service");
     let settings = Settings::new().unwrap();
-    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, NoTls)
-        .await
-        .unwrap();
+    let tls_connector = TlsConnector::builder().build().unwrap();
+    let connector = MakeTlsConnector::new(tls_connector);
+    let (db_client, connection) =
+        tokio_postgres::connect(&settings.database_url, connector)
+            .await
+            .unwrap();
     let db_client = web::Data::new(db_client);
     info!("connected to database");
     tokio::spawn(async move {
@@ -395,7 +399,9 @@ mod tests {
     async fn get_pdf_ok() {
         let url = std::env::var("DATABASE_URL")
             .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/postgres".into());
-        if let Ok((client, connection)) = tokio_postgres::connect(&url, NoTls).await {
+        let tls_connector = TlsConnector::builder().build().unwrap();
+        let connector = MakeTlsConnector::new(tls_connector);
+        if let Ok((client, connection)) = tokio_postgres::connect(&url, connector).await {
             tokio::spawn(async move {
                 let _ = connection.await;
             });

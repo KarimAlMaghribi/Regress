@@ -4,6 +4,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use tracing::info;
+use postgres_native_tls::MakeTlsConnector;
+use native_tls::TlsConnector;
 
 #[derive(Serialize)]
 struct Metric {
@@ -75,8 +77,10 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting metrics service");
     let settings = Settings::new().unwrap();
+    let tls_connector = TlsConnector::builder().build().unwrap();
+    let connector = MakeTlsConnector::new(tls_connector);
     let (db_client, connection) =
-        tokio_postgres::connect(&settings.database_url, tokio_postgres::NoTls)
+        tokio_postgres::connect(&settings.database_url, connector)
             .await
             .unwrap();
     tokio::spawn(async move {
