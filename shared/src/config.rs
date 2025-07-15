@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 fn default_database_url() -> String {
-    "host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require".into()
+    "postgres://regressdb%40regress-db-develop:cu5u.AVC%3F9055l@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require".into()
 }
 
 fn default_message_broker_url() -> String {

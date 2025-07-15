@@ -506,8 +506,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let settings = Settings::new().unwrap_or_else(|_| Settings {
         database_url:
-            "host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require"
-                .into(),
+            "postgres://regressdb%40regress-db-develop:cu5u.AVC%3F9055l@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require".into(),
         message_broker_url: String::new(),
         openai_api_key: String::new(),
         class_prompt_id: 0,

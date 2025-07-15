@@ -30,18 +30,16 @@ The CI workflow installs these packages automatically.
 
 All services read the database connection string from the `DATABASE_URL` environment variable.
 Kafka connection is read from `MESSAGE_BROKER_URL`.
-If either variable is omitted, the code falls back to `host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require` and `kafka:9092` respectively.
+If either variable is omitted, the code falls back to `postgres://regressdb%40regress-db-develop:cu5u.AVC%3F9055l@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require` and `kafka:9092` respectively.
 When running the services outside of Docker you must set `DATABASE_URL` to the Azure server:
 
 ```bash
-export DATABASE_URL="host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require"
+export DATABASE_URL="postgres://regressdb%40regress-db-develop:cu5u.AVC%3F9055l@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
 ```
 To connect to an Azure Database for PostgreSQL Flexible Server, provide the full connection string via `DATABASE_URL`. Example:
 
 ```bash
-export DATABASE_URL="host=regress-db-develop.postgres.database.azure.com \
-  port=5432 dbname=allianz user=regressdb@regress-db-develop \
-  password=<YOUR_PASSWORD> sslmode=require"
+export DATABASE_URL="postgres://regressdb%40regress-db-develop:<YOUR_PASSWORD>@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
 ```
 Failure to connect to the database results in `500 Internal Server Error`
 responses when accessing `/prompts`.
@@ -69,7 +67,7 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to
-`host=regress-db-develop.postgres.database.azure.com port=5432 dbname=allianz user=regressdb@regress-db-develop password=cu5u.AVC?9055l sslmode=require`.
+`postgres://regressdb%40regress-db-develop:cu5u.AVC%3F9055l@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require`.
 `/prompts` exposes all stored prompts and the table is created automatically if
 it does not exist.
 
