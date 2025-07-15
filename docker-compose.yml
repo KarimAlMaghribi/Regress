@@ -11,13 +11,7 @@ services:
       context: .
       dockerfile: services/pdf-ingest/Dockerfile
     environment:
-      DATABASE_URL: >-
-        host=regress-db-develop.postgres.database.azure.com
-        port=5432
-        dbname=allianz
-        user=regressdb@regress-db-develop
-        password=cu5u.AVC?9055l
-        sslmode=require
+      DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
       MESSAGE_BROKER_URL: kafka:9092
     ports:
       - "8081:8081"
@@ -26,13 +20,7 @@ services:
       context: .
       dockerfile: services/text-extraction/Dockerfile
     environment:
-      DATABASE_URL: >-
-        host=regress-db-develop.postgres.database.azure.com
-        port=5432
-        dbname=allianz
-        user=regressdb@regress-db-develop
-        password=cu5u.AVC?9055l
-        sslmode=require
+      DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
       MESSAGE_BROKER_URL: kafka:9092
     ports:
       - "8083:8083"
@@ -41,13 +29,7 @@ services:
       context: .
       dockerfile: services/prompt-manager/Dockerfile
     environment:
-      DATABASE_URL: >-
-        host=regress-db-develop.postgres.database.azure.com
-        port=5432
-        dbname=allianz
-        user=regressdb@regress-db-develop
-        password=cu5u.AVC?9055l
-        sslmode=require
+      DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
     ports:
       - "8082:8082"
   classifier:
@@ -63,13 +45,7 @@ services:
       context: .
       dockerfile: services/metrics/Dockerfile
     environment:
-      DATABASE_URL: >-
-        host=regress-db-develop.postgres.database.azure.com
-        port=5432
-        dbname=allianz
-        user=regressdb@regress-db-develop
-        password=cu5u.AVC?9055l
-        sslmode=require
+      DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
     ports:
       - "8085:8085"
   history-service:
@@ -77,13 +53,7 @@ services:
       context: .
       dockerfile: services/history-service/Dockerfile
     environment:
-      DATABASE_URL: >-
-        host=regress-db-develop.postgres.database.azure.com
-        port=5432
-        dbname=allianz
-        user=regressdb@regress-db-develop
-        password=cu5u.AVC?9055l
-        sslmode=require
+      DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
       MESSAGE_BROKER_URL: kafka:9092
       SERVER_PORT: 8090
     ports:
