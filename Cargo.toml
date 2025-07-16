@@ -5,6 +5,7 @@ members = [
     "services/pdf-ingest",
     "services/text-extraction",
     "services/prompt-manager",
+    "services/pipeline-manager",
     "services/classifier",
     "services/history-service",
     "services/metrics",
