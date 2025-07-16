@@ -8,15 +8,9 @@ workspace "Regress Architecture" "C4 model" {
             container_pdf_ingest = container "PDF Ingest Service" "Handles uploads" "Rust"
             container_text_extraction = container "Text Extraction Service" "Performs OCR" "Rust"
             container_classifier = container "Classifier Service" "Classifies documents via OpenAI" "Rust" {
-                component_controller = component "ClassificationController" "HTTP endpoints" "Rust" {
-                    sourcePath "services/classifier/src/controllers"
-                }
-                component_service = component "ClassificationService" "Business logic" "Rust" {
-                    sourcePath "services/classifier/src/services"
-                }
-                component_repository = component "ClassificationRepository" "Database access" "Rust" {
-                    sourcePath "services/classifier/src/repositories"
-                }
+                component_controller = component "ClassificationController" "HTTP endpoints" "Rust"
+                component_service = component "ClassificationService" "Business logic" "Rust"
+                component_repository = component "ClassificationRepository" "Database access" "Rust"
 
                 component_controller -> component_service "uses"
                 component_service -> component_repository "uses"
