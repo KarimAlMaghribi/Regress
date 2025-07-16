@@ -41,15 +41,15 @@ workspace "Regress Architecture" "C4 model" {
     }
 
     views {
-        systemContext regress "System Context" {
+        systemContext regress context "System Context" {
             include *
             autolayout lr
         }
-        container regress "Containers" {
+        container regress containers "Containers" {
             include *
             autolayout lr
         }
-        component container_classifier "Classifier Components" {
+        component container_classifier classifier_components "Classifier Components" {
             include container_classifier/*
             autolayout lr
         }
