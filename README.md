@@ -69,8 +69,10 @@ The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to
 `postgres://regressdb%40regress-db-develop:cu5u.AVC%3F9055l@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require`.
 `/prompts` exposes all stored prompts and the table is created automatically if
-it does not exist. The same service now also manages pipelines. Use `/pipelines`
-to list and create pipelines or `/pipelines/{id}` to update and delete them.
+it does not exist.
+
+The `pipeline-manager` provides `/pipelines` to list and create pipelines or
+`/pipelines/{id}` to update and delete them.
 
 ## Running with Docker
 
