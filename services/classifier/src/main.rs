@@ -14,7 +14,8 @@ use shared::{
     dto::{ClassificationResult, TextExtracted},
 };
 use std::time::Duration;
-use tokio_postgres::NoTls;
+use postgres_native_tls::MakeTlsConnector;
+use native_tls::TlsConnector;
 use tracing::{error, info};
 
 async fn health() -> impl Responder {
@@ -202,8 +203,10 @@ async fn main() -> std::io::Result<()> {
     }
     std::env::set_var("OPENAI_API_KEY", &settings.openai_api_key);
     std::env::set_var("OPENAI_KEY", &settings.openai_api_key);
+    let tls_connector = TlsConnector::builder().build().unwrap();
+    let connector = MakeTlsConnector::new(tls_connector);
     let (db_client, connection) = loop {
-        match tokio_postgres::connect(&settings.database_url, NoTls).await {
+        match tokio_postgres::connect(&settings.database_url, connector.clone()).await {
             Ok(conn) => break conn,
             Err(e) => {
                 info!(%e, "database connection failed, retrying in 1s");
