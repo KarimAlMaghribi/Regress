@@ -7,7 +7,21 @@ workspace "Regress Architecture" "C4 model" {
             container_gateway = container "API Gateway" "Entry point" "Rust"
             container_pdf_ingest = container "PDF Ingest Service" "Handles uploads" "Rust"
             container_text_extraction = container "Text Extraction Service" "Performs OCR" "Rust"
-            container_classifier = container "Classifier Service" "Classifies documents via OpenAI" "Rust"
+            container_classifier = container "Classifier Service" "Classifies documents via OpenAI" "Rust" {
+                component_controller = component "ClassificationController" "HTTP endpoints" "Rust" {
+                    sourcePath "services/classifier/src/controllers"
+                }
+                component_service = component "ClassificationService" "Business logic" "Rust" {
+                    sourcePath "services/classifier/src/services"
+                }
+                component_repository = component "ClassificationRepository" "Database access" "Rust" {
+                    sourcePath "services/classifier/src/repositories"
+                }
+
+                component_controller -> component_service "uses"
+                component_service -> component_repository "uses"
+                component_repository -> container_db "reads/writes"
+            }
             container_prompt_manager = container "Prompt Manager" "Manages prompts" "Rust"
             container_pipeline_manager = container "Pipeline Manager" "Manages pipelines" "Rust"
             container_history = container "History Service" "WebSocket history" "Rust"
@@ -30,20 +44,6 @@ workspace "Regress Architecture" "C4 model" {
         container_classifier -> container_kafka "Consumes"
         container_text_extraction -> container_kafka "Publishes"
         container_pdf_ingest -> container_kafka "Publishes"
-
-        component_controller = container_classifier.component "ClassificationController" "HTTP endpoints" "Rust" {
-            sourcePath "services/classifier/src/controllers"
-        }
-        component_service = container_classifier.component "ClassificationService" "Business logic" "Rust" {
-            sourcePath "services/classifier/src/services"
-        }
-        component_repository = container_classifier.component "ClassificationRepository" "Database access" "Rust" {
-            sourcePath "services/classifier/src/repositories"
-        }
-
-        component_controller -> component_service "uses"
-        component_service -> component_repository "uses"
-        component_repository -> container_db "reads/writes"
     }
 
     views {
