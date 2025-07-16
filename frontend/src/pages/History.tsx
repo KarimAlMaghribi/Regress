@@ -8,6 +8,7 @@ import {
   Drawer,
   Stack,
   TextField,
+  Chip,
 } from '@mui/material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -15,6 +16,7 @@ import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTheme } from '@mui/material/styles';
+import { loadPromptGroupMap } from '../utils/promptGroups';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -51,6 +53,7 @@ export default function History() {
   const [end, setEnd] = useState<Dayjs | null>(null);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const [promptGroups, setPromptGroups] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     const url = import.meta.env.VITE_HISTORY_WS || 'ws://localhost:8090';
@@ -67,6 +70,10 @@ export default function History() {
       }
     });
     return () => socket.close();
+  }, []);
+
+  useEffect(() => {
+    loadPromptGroupMap().then(setPromptGroups).catch(() => undefined);
   }, []);
 
   const filtered = entries.filter(e => {
@@ -97,7 +104,27 @@ export default function History() {
       flex: 1,
       valueGetter: p => dayjs(p.row.timestamp).format('HH:mm:ss'),
     },
-    { field: 'prompt', headerName: 'Prompt', flex: 1 },
+    {
+      field: 'prompt',
+      headerName: 'Prompt',
+      flex: 1,
+      renderCell: params => (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>
+          {params.row.prompt && (
+            <Chip label={params.row.prompt} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+          )}
+          {(promptGroups[params.row.prompt as string] || []).map((g, i) => (
+            <Chip
+              key={i}
+              label={`Gruppe: ${g}`}
+              size="small"
+              color="secondary"
+              sx={{ mr: 0.5, mb: 0.5 }}
+            />
+          ))}
+        </Box>
+      ),
+    },
     { field: 'status', headerName: 'Status', width: 110, valueGetter: p => p.row.status || '' },
     {
       field: 'regress',
