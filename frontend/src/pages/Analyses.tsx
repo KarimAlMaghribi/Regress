@@ -94,7 +94,6 @@ const renderList = (items: Entry[], finished: boolean) => (
         <TableRow>
           <TableCell>Name der PDF</TableCell>
           <TableCell>Prompts</TableCell>
-          <TableCell>Gruppen</TableCell>
           {finished && <TableCell align="right">Ergebnis</TableCell>}
         </TableRow>
       </TableHead>
@@ -104,12 +103,16 @@ const renderList = (items: Entry[], finished: boolean) => (
             <TableCell>{`PDF ${e.pdfId}`}</TableCell>
             <TableCell>
               {e.prompts.map((p, i) => (
-                <Chip key={i} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+                <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
               ))}
-            </TableCell>
-            <TableCell>
               {Array.from(new Set(e.prompts.flatMap(p => promptGroups[p.text] || []))).map((g, i) => (
-                <Chip key={i} label={g} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+                <Chip
+                  key={`g-${i}`}
+                  label={`Gruppe: ${g}`}
+                  size="small"
+                  color="secondary"
+                  sx={{ mr: 0.5, mb: 0.5 }}
+                />
               ))}
             </TableCell>
             {finished && (
@@ -129,7 +132,7 @@ const renderList = (items: Entry[], finished: boolean) => (
         ))}
         {items.length === 0 && (
           <TableRow>
-            <TableCell colSpan={finished ? 4 : 3} align="center">
+            <TableCell colSpan={finished ? 3 : 2} align="center">
               <Typography>Keine Einträge</Typography>
             </TableCell>
           </TableRow>

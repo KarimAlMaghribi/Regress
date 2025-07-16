@@ -8,6 +8,7 @@ import {
   Drawer,
   Stack,
   TextField,
+  Chip,
 } from '@mui/material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -15,6 +16,7 @@ import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTheme } from '@mui/material/styles';
+import { loadPromptGroupMap } from '../utils/promptGroups';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -50,7 +52,7 @@ export default function History() {
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
   const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
+  const [promptGroups, setPromptGroups] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     const url = import.meta.env.VITE_HISTORY_WS || 'ws://localhost:8090';
@@ -67,6 +69,10 @@ export default function History() {
       }
     });
     return () => socket.close();
+  }, []);
+
+  useEffect(() => {
+    loadPromptGroupMap().then(setPromptGroups).catch(() => undefined);
   }, []);
 
   const filtered = entries.filter(e => {
@@ -90,6 +96,12 @@ export default function History() {
   }, {});
   const groupKeys = Object.keys(groups).sort((a, b) => (a > b ? -1 : 1));
 
+  const pctFmt = new Intl.NumberFormat('de-DE', {
+    style: 'percent',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
   const baseCols: GridColDef[] = [
     {
       field: 'timestamp',
@@ -97,23 +109,53 @@ export default function History() {
       flex: 1,
       valueGetter: p => dayjs(p.row.timestamp).format('HH:mm:ss'),
     },
-    { field: 'prompt', headerName: 'Prompt', flex: 1 },
+    {
+      field: 'prompt',
+      headerName: 'Prompt',
+      flex: 1,
+      renderCell: params => (
+        <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>
+          {params.row.prompt && (
+            <Chip label={params.row.prompt} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+          )}
+          {(promptGroups[params.row.prompt as string] || []).map((g, i) => (
+            <Chip
+              key={i}
+              label={`Gruppe: ${g}`}
+              size="small"
+              color="secondary"
+              sx={{ mr: 0.5, mb: 0.5 }}
+            />
+          ))}
+        </Box>
+      ),
+    },
     { field: 'status', headerName: 'Status', width: 110, valueGetter: p => p.row.status || '' },
     {
-      field: 'regress',
-      headerName: 'Regress',
+      field: 'score',
+      headerName: 'Score',
       width: 90,
-      valueGetter: p => (p.row.result?.regress ? 'Ja' : 'Nein'),
+      valueGetter: p =>
+        typeof p.row.score === 'number' ? pctFmt.format(p.row.score) : '',
     },
     {
-      field: 'answer',
-      headerName: 'Antwort',
-      flex: 1,
-      valueGetter: p => p.row.result?.answer || '',
-      hide: isMobile,
+      field: 'result_label',
+      headerName: 'Label',
+      flex: 0.8,
+      renderCell: params => (
+        <Chip
+          label={params.row.result_label || ''}
+          size="small"
+          color={
+            params.row.result_label === 'KEIN_REGRESS'
+              ? 'success'
+              : params.row.result_label === 'MÖGLICHER_REGRESS'
+              ? 'warning'
+              : 'error'
+          }
+        />
+      ),
     },
-    { field: 'score', headerName: 'Score', width: 90, valueGetter: p => (p.row.score ?? 0).toFixed(2) },
-    { field: 'result_label', headerName: 'Label', flex: 0.8, valueGetter: p => p.row.result_label || '' },
     {
       field: 'actions',
       headerName: '',
@@ -168,8 +210,19 @@ export default function History() {
               {dayjs(selected.timestamp).format('LLL')}
             </Typography>
             {typeof selected.score === 'number' && (
-              <Typography variant="body2" gutterBottom>
-                Score: {selected.score.toFixed(2)} - {selected.result_label}
+              <Typography variant="body2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                Score: {pctFmt.format(selected.score)}
+                <Chip
+                  label={selected.result_label}
+                  size="small"
+                  color={
+                    selected.result_label === 'KEIN_REGRESS'
+                      ? 'success'
+                      : selected.result_label === 'MÖGLICHER_REGRESS'
+                      ? 'warning'
+                      : 'error'
+                  }
+                />
               </Typography>
             )}
             <Box component="pre" sx={{ whiteSpace: 'pre-wrap', fontSize: 12, mb: 2 }}>
