@@ -5,6 +5,8 @@ workspace "Regress Architecture" "C4 model" {
         regress = softwareSystem "Regress" "Distributed microservice system" {
             container_frontend = container "Frontend" "React application" "React"
             container_gateway = container "API Gateway" "Entry point" "Rust"
+            container_db = container "PostgreSQL" "Stores data" "Database"
+            container_kafka = container "Kafka" "Event bus" "Kafka"
             container_pdf_ingest = container "PDF Ingest Service" "Handles uploads" "Rust"
             container_text_extraction = container "Text Extraction Service" "Performs OCR" "Rust"
             container_classifier = container "Classifier Service" "Classifies documents via OpenAI" "Rust" {
@@ -20,8 +22,6 @@ workspace "Regress Architecture" "C4 model" {
             container_pipeline_manager = container "Pipeline Manager" "Manages pipelines" "Rust"
             container_history = container "History Service" "WebSocket history" "Rust"
             container_metrics = container "Metrics Service" "Exports metrics" "Rust"
-            container_db = container "PostgreSQL" "Stores data" "Database"
-            container_kafka = container "Kafka" "Event bus" "Kafka"
         }
 
         user -> container_frontend "Uses"
