@@ -10,7 +10,7 @@ interface PageHeaderProps {
 
 export default function PageHeader({ title, actions, breadcrumb }: PageHeaderProps) {
   return (
-    <Box sx={{ position: 'sticky', top: 64, zIndex: 1, mb: 4, bgcolor: 'background.paper', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
+    <Box sx={{ position: 'sticky', top: 0, zIndex: 1, mb: 4, bgcolor: 'background.paper', px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
       {breadcrumb && (
         <Breadcrumbs sx={{ mb: 0.5 }}>
           {breadcrumb.map((b, idx) => b.to ? (

@@ -37,6 +37,7 @@ services:
       context: .
       dockerfile: services/classifier/Dockerfile
     environment:
+      DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
       OPENAI_API_KEY: "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"
     ports:
       - "8084:8084"
