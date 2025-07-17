@@ -29,7 +29,7 @@ pub struct PromptNode {
     pub metadata: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum EdgeType {
     #[serde(rename = "always")]
@@ -44,7 +44,7 @@ pub enum EdgeType {
     OnError,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Edge {
     pub source: String,
@@ -54,7 +54,7 @@ pub struct Edge {
     pub type_: Option<EdgeType>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Stage {
     pub id: String,
@@ -63,7 +63,7 @@ pub struct Stage {
     pub score_formula: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct LabelRule {
     #[serde(rename = "if")]
@@ -71,14 +71,14 @@ pub struct LabelRule {
     pub label: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct FinalScoring {
     pub score_formula: String,
     pub label_rules: Vec<LabelRule>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PipelineGraph {
     pub nodes: Vec<PromptNode>,
