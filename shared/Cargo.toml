@@ -12,3 +12,4 @@ tracing.workspace = true
 awc = "3"
 openai.workspace = true
 actix-web = "4"
+evalexpr.workspace = true
