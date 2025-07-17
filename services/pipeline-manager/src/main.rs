@@ -6,6 +6,7 @@ use axum::{
 };
 use sea_orm::{
     ActiveModelTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait, Set,
+    QueryOrder,
 };
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
@@ -14,6 +15,7 @@ use tower_http::cors::CorsLayer;
 
 mod model;
 use model::pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel};
+use model::pipeline::Column as PipelineColumn;
 use tracing::{error, info};
 
 async fn health() -> &'static str {
@@ -135,6 +137,28 @@ async fn delete_pipeline(
     Ok(())
 }
 
+async fn active_pipeline(
+    State(db): State<Arc<DatabaseConnection>>,
+) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
+    info!("loading active pipeline");
+    if let Some(model) = PipelineEntity::find()
+        .order_by_desc(PipelineColumn::Id)
+        .one(&*db)
+        .await
+        .map_err(|e| {
+            error!("failed to fetch active pipeline: {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e.to_string() }),
+            )
+        })?
+    {
+        Ok(Json(PipelineData { id: model.id, name: model.name, data: model.data }))
+    } else {
+        Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -155,6 +179,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/pipelines", get(list_pipelines).post(create_pipeline))
+        .route("/pipelines/active", get(active_pipeline))
         .route("/pipelines/:id", put(update_pipeline).delete(delete_pipeline))
         .with_state(db.clone())
         .layer(CorsLayer::permissive());

@@ -43,9 +43,8 @@ export DATABASE_URL="postgres://regressdb%40regress-db-develop:<YOUR_PASSWORD>@r
 ```
 Failure to connect to the database results in `500 Internal Server Error`
 responses when accessing `/prompts`.
-The classifier additionally requires `OPENAI_API_KEY` and uses `CLASS_PROMPT_ID` to select a prompt.
-If the id is zero or the row is missing, the service falls back to a built-in
-prompt so classification still works.
+The pipeline runner additionally requires `OPENAI_API_KEY` to access the OpenAI API.
+It uses the active pipeline from the pipeline-manager when processing events.
 Defaults are provided in `docker-compose.yml`. The metrics service reads from the same database.
 
 ## Usage
@@ -54,11 +53,9 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
    named `file`. The response contains the generated id.
 2. The `text-extraction` service processes the file asynchronously and publishes
    a `text-extracted` event.
-3. The `classifier` consumes that event, calls OpenAI and stores the result in
-   the `classifications` table. Poll `GET http://localhost:8084/results/{id}`
-   until data is returned. The endpoint returns `202 Accepted` while the
-   classification is still pending. If the OpenAI request fails the endpoint
-   returns `500` with an `error` field describing the problem.
+3. The `pipeline-runner` consumes that event, runs the active pipeline using
+   OpenAI and stores the result in the `pipeline_runs` and `prompt_results` tables.
+   Poll `GET http://localhost:8084/runs/{id}` until data is returned.
 4. To re-run classification on already extracted texts, first fetch available
    ids via `GET http://localhost:8083/texts` and then submit them to
    `POST http://localhost:8083/analyze` together with a prompt. The endpoint does
@@ -93,7 +90,7 @@ After the build completes, open <http://localhost:3000> in your browser to use t
 
 The frontend expects four environment variables:
 `VITE_INGEST_URL` for the upload service (defaults to `http://localhost:8081`),
-`VITE_CLASSIFIER_URL` for the classifier service (defaults to
+`VITE_CLASSIFIER_URL` for the pipeline-runner service (defaults to
 `http://localhost:8084`), `VITE_PROMPT_MANAGER_URL` for the prompt-manager
 service (defaults to `http://localhost:8082`), and `VITE_HISTORY_WS` for the
 history WebSocket (defaults to `ws://localhost:8090`).

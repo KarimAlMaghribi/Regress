@@ -1,5 +1,5 @@
 [package]
-name = "pipeline-engine"
+name = "pipeline-runner"
 version.workspace = true
 edition.workspace = true
 
@@ -16,3 +16,5 @@ tokio-postgres.workspace = true
 postgres-native-tls.workspace = true
 native-tls.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
+awc = "3"
+rdkafka = { version = "0.36", features = ["tokio"] }

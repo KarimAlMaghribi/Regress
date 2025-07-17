@@ -40,10 +40,10 @@ services:
       DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
     ports:
       - "8087:8087"
-  pipeline-engine:
+  pipeline-runner:
     build:
       context: .
-      dockerfile: services/pipeline-engine/Dockerfile
+      dockerfile: services/pipeline-runner/Dockerfile
     environment:
       DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
     ports:
