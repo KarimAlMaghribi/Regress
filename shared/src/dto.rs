@@ -1,4 +1,12 @@
 use serde::{Deserialize, Serialize};
+use crate::pipeline_graph::Status;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct StageScore {
+    pub stage_id: String,
+    pub score: f64,
+    pub prompts: Vec<String>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UploadRequest {
@@ -40,7 +48,7 @@ pub struct ClassificationResult {
 pub struct PromptResult {
     pub prompt_id: String,
     pub prompt_type: String,
-    pub status: String,
+    pub status: Status,
     pub result: Option<bool>,
     pub score: Option<f64>,
     pub answer: Option<String>,
@@ -54,7 +62,7 @@ pub struct PipelineRunResult {
     pub score: f64,
     pub label: String,
     pub history: Vec<PromptResult>,
-    pub stage_scores: Option<std::collections::HashMap<String, f64>>,
+    pub stage_scores: Option<Vec<StageScore>>,
     pub run_id: Option<String>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,

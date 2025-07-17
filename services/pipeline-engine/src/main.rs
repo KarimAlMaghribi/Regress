@@ -7,9 +7,9 @@ use postgres_native_tls::MakeTlsConnector;
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use shared::{
-    dto::{PipelineRunResult, PromptResult},
+    dto::{PipelineRunResult, PromptResult, StageScore},
     pipeline_executor::PipelineExecutor,
-    pipeline_graph::PipelineGraph,
+    pipeline_graph::{PipelineGraph, Status},
 };
 use tokio_postgres::Client;
 
@@ -92,25 +92,21 @@ async fn run_pipeline(
     let started = Utc::now();
     exec.run();
     let finished = Utc::now();
-    let (score, label) = exec.get_result().unwrap_or((0.0, String::new()));
+    let (score, label) = exec.get_result();
     let history: Vec<PromptResult> = exec
         .history()
         .iter()
         .map(|(id, data, attempt, ptype)| PromptResult {
             prompt_id: id.clone(),
             prompt_type: ptype.as_str().into(),
-            status: if matches!(ptype, shared::pipeline_graph::PromptType::MetaPrompt) {
-                "meta".into()
-            } else {
-                "done".into()
-            },
+            status: Status::Done,
             result: Some(data.result),
             score: Some(data.score),
             answer: data.answer.clone(),
             source: data.source.clone(),
             attempt: Some(*attempt),
-            started_at: None,
-            finished_at: None,
+            started_at: data.started_at.clone(),
+            finished_at: data.finished_at.clone(),
         })
         .collect();
     let mut result = PipelineRunResult {
