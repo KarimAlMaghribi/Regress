@@ -30,7 +30,7 @@ pub struct PipelineExecutor {
     graph: PipelineGraph,
     status: HashMap<String, PromptStatus>,
     stage_scores: HashMap<String, f64>,
-    history: Vec<(String, ResultData)>,
+    history: Vec<(String, ResultData, u8)>,
     final_score: f64,
     final_label: Option<String>,
 }
@@ -96,15 +96,15 @@ impl PipelineExecutor {
     }
 
     pub fn run(&mut self) {
-        let mut queue: VecDeque<String> = self
+        let mut queue: VecDeque<(String, u8)> = self
             .graph
             .nodes
             .iter()
             .filter(|n| matches!(n.type_, PromptType::TriggerPrompt))
-            .map(|n| n.id.clone())
+            .map(|n| (n.id.clone(), 1))
             .collect();
 
-        while let Some(id) = queue.pop_front() {
+        while let Some((id, attempt)) = queue.pop_front() {
             if !matches!(self.status.get(&id), Some(PromptStatus::Pending)) {
                 continue;
             }
@@ -141,15 +141,24 @@ impl PipelineExecutor {
                 },
             };
 
+            self.history.push((id.clone(), res.clone(), attempt));
+
+            if let Some(th) = node.confidence_threshold {
+                if res.score < th && attempt < 3 {
+                    self.status.insert(id.clone(), PromptStatus::Pending);
+                    queue.push_back((id.clone(), attempt + 1));
+                    continue;
+                }
+            }
+
             self.status
                 .insert(id.clone(), PromptStatus::Done(res.clone()));
-            self.history.push((id.clone(), res.clone()));
             self.compute_stage_scores();
 
             for edge in self.graph.edges.iter().filter(|e| e.source == id) {
                 if self.evaluate_edge(edge, &res) {
                     if let Some(PromptStatus::Pending) = self.status.get(&edge.target) {
-                        queue.push_back(edge.target.clone());
+                        queue.push_back((edge.target.clone(), 1));
                     }
                 }
             }
@@ -208,7 +217,7 @@ impl PipelineExecutor {
             .map(|l| (self.final_score, l.clone()))
     }
 
-    pub fn history(&self) -> &Vec<(String, ResultData)> {
+    pub fn history(&self) -> &Vec<(String, ResultData, u8)> {
         &self.history
     }
 

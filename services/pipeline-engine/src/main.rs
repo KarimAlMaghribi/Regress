@@ -32,7 +32,7 @@ async fn run_pipeline(
     let history: Vec<PromptResult> = exec
         .history()
         .iter()
-        .map(|(id, data)| PromptResult {
+        .map(|(id, data, attempt)| PromptResult {
             prompt_id: id.clone(),
             prompt_type: String::new(),
             status: "done".into(),
@@ -40,7 +40,7 @@ async fn run_pipeline(
             score: Some(data.score),
             answer: data.answer.clone(),
             source: data.source.clone(),
-            attempt: None,
+            attempt: Some(*attempt),
             started_at: None,
             finished_at: None,
         })
