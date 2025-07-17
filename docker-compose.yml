@@ -100,6 +100,7 @@ services:
         VITE_CLASSIFIER_URL: http://localhost:8084
         VITE_INGEST_URL: http://localhost:8081
         VITE_HISTORY_WS: ws://localhost:8090
+        VITE_PROMPT_MANAGER_URL: http://localhost:8082
     ports:
       - "3001:80"
 
