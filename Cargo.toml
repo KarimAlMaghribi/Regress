@@ -6,7 +6,7 @@ members = [
     "services/text-extraction",
     "services/prompt-manager",
     "services/pipeline-manager",
-    "services/classifier",
+    "services/pipeline-engine",
     "services/history-service",
     "services/metrics",
 ]

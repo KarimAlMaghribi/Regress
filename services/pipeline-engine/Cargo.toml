@@ -1,5 +1,5 @@
 [package]
-name = "classifier"
+name = "pipeline-engine"
 version.workspace = true
 edition.workspace = true
 
