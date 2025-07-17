@@ -12,6 +12,5 @@ tracing.workspace = true
 awc = "3"
 openai.workspace = true
 actix-web = "4"
-meval = "0.2"
 evalexpr = "12"
 regex = "1"

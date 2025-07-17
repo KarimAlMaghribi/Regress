@@ -1,10 +1,10 @@
 use std::collections::{HashMap, VecDeque};
 
+use evalexpr::eval_float;
 use evalexpr::{
     eval_boolean_with_context, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
     Value,
 };
-use meval::eval_str;
 
 use crate::pipeline_graph::{Edge, EdgeType, PipelineGraph, PromptNode, PromptType};
 use regex::Regex;
@@ -179,7 +179,7 @@ impl PipelineExecutor {
                 }
             })
             .into_owned();
-        let score = eval_str(&formula).unwrap_or(0.0);
+        let score = eval_float(&formula).unwrap_or(0.0);
         self.final_score = score;
         for rule in &self.graph.final_scoring.label_rules {
             let mut ctx = HashMapContext::<DefaultNumericTypes>::new();
