@@ -1,5 +1,6 @@
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use actix_web::web::Path;
 use chrono::Utc;
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
@@ -20,7 +21,8 @@ struct AppState {
     db: Client,
 }
 
-async fn get_run(Path(id): web::Path<i32>, state: web::Data<AppState>) -> impl Responder {
+async fn get_run(path: web::Path<i32>, state: web::Data<AppState>) -> impl Responder {
+    let id = path.into_inner();
     if let Ok(row) = state
         .db
         .query_one(

@@ -14,9 +14,14 @@ use std::time::Duration;
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
 use tesseract::Tesseract;
+use reqwest::Client;
 use tracing::{error, info};
 use std::path::Path;
 use pdf_extract::extract_text_from_mem;
+use shared::pipeline_graph::{
+    Edge, EdgeType, FinalScoring, LabelRule, PipelineGraph, PromptNode, PromptType, Stage,
+};
+use shared::dto::PipelineRunResult;
 
 fn extract_text(path: &str) -> Result<String> {
     info!(?path, "starting text extraction");
@@ -185,6 +190,79 @@ async fn main() -> std::io::Result<()> {
                                             &[&event.id],
                                         )
                                         .await;
+                                    // Run simple pipeline on the OCR text
+                                    let graph = PipelineGraph {
+                                        nodes: vec![
+                                            PromptNode {
+                                                id: "trigger".into(),
+                                                text: "Trigger".into(),
+                                                type_: PromptType::TriggerPrompt,
+                                                weight: None,
+                                                confidence_threshold: None,
+                                                metadata: None,
+                                            },
+                                            PromptNode {
+                                                id: "analysis".into(),
+                                                text: event.prompt.clone(),
+                                                type_: PromptType::AnalysisPrompt,
+                                                weight: None,
+                                                confidence_threshold: None,
+                                                metadata: None,
+                                            },
+                                            PromptNode {
+                                                id: "final".into(),
+                                                text: "Final".into(),
+                                                type_: PromptType::FinalPrompt,
+                                                weight: None,
+                                                confidence_threshold: None,
+                                                metadata: None,
+                                            },
+                                        ],
+                                        edges: vec![
+                                            Edge {
+                                                source: "trigger".into(),
+                                                target: "analysis".into(),
+                                                condition: None,
+                                                type_: Some(EdgeType::Always),
+                                            },
+                                            Edge {
+                                                source: "analysis".into(),
+                                                target: "final".into(),
+                                                condition: None,
+                                                type_: Some(EdgeType::Always),
+                                            },
+                                        ],
+                                        stages: vec![Stage {
+                                            id: "analysis_stage".into(),
+                                            name: "Analysis".into(),
+                                            prompt_ids: vec!["analysis".into()],
+                                            score_formula: None,
+                                        }],
+                                        final_scoring: FinalScoring {
+                                            score_formula: "analysis_stage.score".into(),
+                                            label_rules: vec![
+                                                LabelRule { if_condition: "score >= 0.5".into(), label: "OK".into() },
+                                                LabelRule { if_condition: "score < 0.5".into(), label: "NOT_OK".into() },
+                                            ],
+                                        },
+                                    };
+
+                                    let client = Client::new();
+                                    if let Ok(resp) = client
+                                        .post("http://pipeline-engine:8084/pipeline/run?persist=true")
+                                        .json(&serde_json::json!({
+                                            "input_graph": graph,
+                                            "ocr_text": text.clone(),
+                                        }))
+                                        .send()
+                                        .await
+                                    {
+                                        if let Ok(result) = resp.json::<PipelineRunResult>().await {
+                                            if let Ok(json) = serde_json::to_string(&result) {
+                                                info!(run_id = result.run_id, result = %json, "pipeline run result");
+                                            }
+                                        }
+                                    }
                                     let evt = TextExtracted { id: event.id, text, prompt: event.prompt.clone() };
                                     let payload = serde_json::to_string(&evt).unwrap();
                                     let _ = prod
