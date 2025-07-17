@@ -3,6 +3,7 @@ use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono::Utc;
 use native_tls::TlsConnector;
 use postgres_native_tls::MakeTlsConnector;
+use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use shared::{
     dto::{PipelineRunResult, PromptResult},
@@ -19,11 +20,72 @@ struct AppState {
     db: Client,
 }
 
+async fn get_run(Path(id): web::Path<i32>, state: web::Data<AppState>) -> impl Responder {
+    if let Ok(row) = state
+        .db
+        .query_one(
+            "SELECT input_graph, ocr_text, result, created_at FROM pipeline_runs WHERE id=$1",
+            &[&id],
+        )
+        .await
+    {
+        let graph_val: serde_json::Value = row.get(0);
+        let ocr_text: Option<String> = row.get(1);
+        let result_val: serde_json::Value = row.get(2);
+        let created_at: chrono::DateTime<Utc> = row.get(3);
+        if let Ok(mut result) = serde_json::from_value::<PipelineRunResult>(result_val) {
+            result.run_id = Some(id.to_string());
+            if let Ok(graph) = serde_json::from_value(graph_val) {
+                let record = PipelineRunRecord {
+                    run_id: id,
+                    created_at,
+                    input_graph: graph,
+                    ocr_text,
+                    result,
+                };
+                return HttpResponse::Ok().json(record);
+            }
+        }
+    }
+    HttpResponse::NotFound().finish()
+}
+
+#[derive(Deserialize)]
+struct RunQuery {
+    persist: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum RunPayload {
+    Graph(PipelineGraph),
+    Data {
+        input_graph: PipelineGraph,
+        ocr_text: Option<String>,
+    },
+}
+
+#[derive(Serialize)]
+struct PipelineRunRecord {
+    run_id: i32,
+    created_at: chrono::DateTime<Utc>,
+    input_graph: PipelineGraph,
+    ocr_text: Option<String>,
+    result: PipelineRunResult,
+}
+
 async fn run_pipeline(
-    graph: web::Json<PipelineGraph>,
+    query: web::Query<RunQuery>,
+    payload: web::Json<RunPayload>,
     state: web::Data<AppState>,
 ) -> impl Responder {
-    let input_graph = graph.into_inner();
+    let (input_graph, ocr_text) = match payload.into_inner() {
+        RunPayload::Graph(g) => (g, None),
+        RunPayload::Data {
+            input_graph,
+            ocr_text,
+        } => (input_graph, ocr_text),
+    };
     let mut exec = PipelineExecutor::new(input_graph.clone());
     let started = Utc::now();
     exec.run();
@@ -58,19 +120,29 @@ async fn run_pipeline(
         started_at: Some(started.to_rfc3339()),
         finished_at: Some(finished.to_rfc3339()),
     };
-    // store in db
-    if let Ok(json_graph) = serde_json::to_value(&input_graph) {
-        if let Ok(json_result) = serde_json::to_value(&result) {
-            if let Ok(row) = state
-                .db
-                .query_one(
-                    "INSERT INTO pipeline_runs (input_graph, result) VALUES ($1, $2) RETURNING id",
-                    &[&json_graph, &json_result],
-                )
-                .await
-            {
-                let id: i32 = row.get(0);
-                result.run_id = Some(id.to_string());
+    if query.persist.unwrap_or(false) {
+        if let Ok(json_graph) = serde_json::to_value(&input_graph) {
+            if let Ok(json_result) = serde_json::to_value(&result) {
+                if let Ok(row) = state
+                    .db
+                    .query_one(
+                        "INSERT INTO pipeline_runs (input_graph, ocr_text, result) VALUES ($1, $2, $3) RETURNING id",
+                        &[&json_graph, &ocr_text, &json_result],
+                    )
+                    .await
+                {
+                    let id: i32 = row.get(0);
+                    result.run_id = Some(id.to_string());
+                    if let Ok(updated) = serde_json::to_value(&result) {
+                        let _ = state
+                            .db
+                            .execute(
+                                "UPDATE pipeline_runs SET result=$2 WHERE id=$1",
+                                &[&id, &updated],
+                            )
+                            .await;
+                    }
+                }
             }
         }
     }
@@ -103,6 +175,7 @@ async fn main() -> std::io::Result<()> {
             .wrap(Cors::permissive())
             .route("/health", web::get().to(health))
             .route("/pipeline/run", web::post().to(run_pipeline))
+            .route("/pipeline/run/{id}", web::get().to(get_run))
     })
     .bind(("0.0.0.0", 8084))?
     .run()
@@ -145,11 +218,12 @@ mod tests {
             let app = actix_test::init_service(
                 App::new()
                     .app_data(web::Data::new(AppState { db: client }))
-                    .route("/pipeline/run", web::post().to(run_pipeline)),
+                    .route("/pipeline/run", web::post().to(run_pipeline))
+                    .route("/pipeline/run/{id}", web::get().to(get_run)),
             )
             .await;
             let req = actix_test::TestRequest::post()
-                .uri("/pipeline/run")
+                .uri("/pipeline/run?persist=true")
                 .set_json(&example_pipeline())
                 .to_request();
             let resp = actix_test::call_service(&app, req).await;
