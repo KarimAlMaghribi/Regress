@@ -43,6 +43,8 @@ field in the JSON body.
   `http://localhost:8081`.
 - The classifier service base URL is configured via `VITE_CLASSIFIER_URL` and
   defaults to `http://localhost:8084`.
+- The prompt-manager service base URL is configured via `VITE_PROMPT_MANAGER_URL`
+  and defaults to `http://localhost:8082`.
 
 ## Example Request
 ```

@@ -10,9 +10,11 @@ export interface PromptGroup {
 }
 
 export async function loadPromptGroupMap(): Promise<Record<string, string[]>> {
+  const base =
+    import.meta.env.VITE_PROMPT_MANAGER_URL || 'http://localhost:8082';
   const [prompts, groups] = await Promise.all([
-    fetch('http://localhost:8082/prompts').then(r => r.json()).catch(() => []),
-    fetch('http://localhost:8082/prompt-groups').then(r => r.json()).catch(() => []),
+    fetch(`${base}/prompts`).then(r => r.json()).catch(() => []),
+    fetch(`${base}/prompt-groups`).then(r => r.json()).catch(() => []),
   ]);
   const textById: Record<number, string> = {};
   (prompts as any[]).forEach(p => {
