@@ -17,6 +17,14 @@ pub enum PromptType {
     MetaPrompt,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub enum Status {
+    Pending,
+    Running,
+    Done,
+    Skipped,
+}
+
 impl PromptType {
     pub fn as_str(&self) -> &'static str {
         match self {

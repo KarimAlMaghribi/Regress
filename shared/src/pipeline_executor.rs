@@ -6,7 +6,10 @@ use evalexpr::{
     Value,
 };
 
+use crate::dto::StageScore;
 use crate::pipeline_graph::{Edge, EdgeType, PipelineGraph, PromptNode, PromptType};
+use chrono::Utc;
+use tracing::debug;
 use regex::Regex;
 
 #[derive(Debug, Clone)]
@@ -15,6 +18,8 @@ pub struct ResultData {
     pub score: f64,
     pub answer: Option<String>,
     pub source: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -29,7 +34,7 @@ pub enum PromptStatus {
 pub struct PipelineExecutor {
     graph: PipelineGraph,
     status: HashMap<String, PromptStatus>,
-    stage_scores: HashMap<String, f64>,
+    stage_scores: Vec<StageScore>,
     history: Vec<(String, ResultData, u8, PromptType)>,
     final_score: f64,
     final_label: Option<String>,
@@ -44,7 +49,7 @@ impl PipelineExecutor {
         Self {
             graph,
             status,
-            stage_scores: HashMap::new(),
+            stage_scores: Vec::new(),
             history: Vec::new(),
             final_score: 0.0,
             final_label: None,
@@ -60,9 +65,9 @@ impl PipelineExecutor {
         ctx.set_value("result".into(), Value::from(result)).unwrap();
         ctx.set_value("score".into(), Value::from_float(score))
             .unwrap();
-        for (stage, val) in &self.stage_scores {
-            let key = format!("stage.{}.score", stage);
-            ctx.set_value(key.into(), Value::from_float(*val)).ok();
+        for stage in &self.stage_scores {
+            let key = format!("stage.{}.score", stage.stage_id);
+            ctx.set_value(key.into(), Value::from_float(stage.score)).ok();
         }
         eval_boolean_with_context(expr, &ctx).unwrap_or(false)
     }
@@ -109,6 +114,8 @@ impl PipelineExecutor {
                 continue;
             }
             self.status.insert(id.clone(), PromptStatus::Running);
+            let started = Utc::now();
+            debug!(prompt_id = %id, started_at = %started.to_rfc3339(), "prompt started");
             let node = match self.get_node(&id) {
                 Some(n) => n.clone(),
                 None => continue,
@@ -120,18 +127,24 @@ impl PipelineExecutor {
                     score: 1.0,
                     answer: Some("trigger".into()),
                     source: Some("trigger".into()),
+                    started_at: Some(started.to_rfc3339()),
+                    finished_at: None,
                 },
                 PromptType::AnalysisPrompt => ResultData {
                     result: true,
                     score: 1.0,
                     answer: Some("analysis".into()),
                     source: Some("analysis".into()),
+                    started_at: Some(started.to_rfc3339()),
+                    finished_at: None,
                 },
                 PromptType::DecisionPrompt => ResultData {
                     result: true,
                     score: 1.0,
                     answer: Some("decision".into()),
                     source: Some("decision".into()),
+                    started_at: Some(started.to_rfc3339()),
+                    finished_at: None,
                 },
                 PromptType::MetaPrompt => {
                     #[derive(serde::Deserialize)]
@@ -157,6 +170,8 @@ impl PipelineExecutor {
                         score: 0.0,
                         answer: Some(node.text.clone()),
                         source: Some(node.text.clone()),
+                        started_at: Some(started.to_rfc3339()),
+                        finished_at: None,
                     }
                 }
                 _ => ResultData {
@@ -164,8 +179,14 @@ impl PipelineExecutor {
                     score: 1.0,
                     answer: Some("answer".into()),
                     source: Some("answer".into()),
+                    started_at: Some(started.to_rfc3339()),
+                    finished_at: None,
                 },
             };
+            let finished = Utc::now();
+            let mut res = res;
+            res.finished_at = Some(finished.to_rfc3339());
+            debug!(prompt_id = %id, finished_at = %finished.to_rfc3339(), "prompt finished");
 
             self.history
                 .push((id.clone(), res.clone(), attempt, node.type_.clone()));
@@ -196,18 +217,25 @@ impl PipelineExecutor {
     }
 
     fn compute_stage_scores(&mut self) {
+        self.stage_scores.clear();
         for stage in &self.graph.stages {
             let mut total_w = 0.0;
             let mut sum = 0.0;
+            let mut prompts = Vec::new();
             for pid in &stage.prompt_ids {
                 if let Some(PromptStatus::Done(res)) = self.status.get(pid) {
                     let weight = self.get_node(pid).and_then(|n| n.weight).unwrap_or(1.0);
                     total_w += weight;
                     sum += weight * res.score;
+                    prompts.push(pid.clone());
                 }
             }
             if total_w > 0.0 {
-                self.stage_scores.insert(stage.id.clone(), sum / total_w);
+                self.stage_scores.push(StageScore {
+                    stage_id: stage.id.clone(),
+                    score: sum / total_w,
+                    prompts,
+                });
             }
         }
     }
@@ -218,8 +246,8 @@ impl PipelineExecutor {
         formula = re
             .replace_all(&formula, |caps: &regex::Captures| {
                 let key = &caps[1];
-                if let Some(score) = self.stage_scores.get(key) {
-                    score.to_string()
+                if let Some(stage) = self.stage_scores.iter().find(|s| s.stage_id == key) {
+                    stage.score.to_string()
                 } else {
                     "0.0".to_string()
                 }
@@ -238,17 +266,18 @@ impl PipelineExecutor {
         }
     }
 
-    pub fn get_result(&self) -> Option<(f64, String)> {
-        self.final_label
-            .as_ref()
-            .map(|l| (self.final_score, l.clone()))
+    pub fn get_result(&self) -> (f64, String) {
+        (
+            self.final_score,
+            self.final_label.clone().unwrap_or_default(),
+        )
     }
 
     pub fn history(&self) -> &Vec<(String, ResultData, u8, PromptType)> {
         &self.history
     }
 
-    pub fn stage_scores(&self) -> &HashMap<String, f64> {
+    pub fn stage_scores(&self) -> &Vec<StageScore> {
         &self.stage_scores
     }
 }
@@ -324,7 +353,7 @@ mod tests {
         let graph = example_pipeline();
         let mut exec = PipelineExecutor::new(graph);
         exec.run();
-        let (_score, label) = exec.get_result().unwrap();
+        let (_score, label) = exec.get_result();
         assert_eq!(label, "M\u{00d6}GLICHER_REGRESS");
     }
 
@@ -333,6 +362,12 @@ mod tests {
         let graph = simple_graph("score >= 0.5");
         let mut exec = PipelineExecutor::new(graph);
         exec.run();
+        let analysis = exec
+            .history
+            .iter()
+            .find(|(_, _, _, t)| matches!(t, PromptType::AnalysisPrompt))
+            .unwrap();
+        assert!(analysis.1.source.is_some());
         assert_eq!(exec.history.len(), 3);
     }
 
