@@ -24,9 +24,9 @@ async fn run_pipeline(
     state: web::Data<AppState>,
 ) -> impl Responder {
     let input_graph = graph.into_inner();
-    let mut exec = PipelineExecutor::new(input_graph.clone());
+    let mut exec = PipelineExecutor::new(input_graph.clone(), String::new());
     let started = Utc::now();
-    exec.run();
+    exec.run().await;
     let finished = Utc::now();
     let (score, label) = exec.get_result().unwrap_or((0.0, String::new()));
     let history: Vec<PromptResult> = exec

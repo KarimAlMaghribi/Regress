@@ -7,6 +7,7 @@ use evalexpr::{
 };
 
 use crate::pipeline_graph::{Edge, EdgeType, PipelineGraph, PromptNode, PromptType};
+use crate::openai_executor;
 use regex::Regex;
 
 #[derive(Debug, Clone)]
@@ -28,6 +29,7 @@ pub enum PromptStatus {
 #[derive(Debug)]
 pub struct PipelineExecutor {
     graph: PipelineGraph,
+    text: String,
     status: HashMap<String, PromptStatus>,
     stage_scores: HashMap<String, f64>,
     history: Vec<(String, ResultData, u8)>,
@@ -36,13 +38,14 @@ pub struct PipelineExecutor {
 }
 
 impl PipelineExecutor {
-    pub fn new(graph: PipelineGraph) -> Self {
+    pub fn new(graph: PipelineGraph, text: String) -> Self {
         let mut status = HashMap::new();
         for n in &graph.nodes {
             status.insert(n.id.clone(), PromptStatus::Pending);
         }
         Self {
             graph,
+            text,
             status,
             stage_scores: HashMap::new(),
             history: Vec::new(),
@@ -95,7 +98,7 @@ impl PipelineExecutor {
         }
     }
 
-    pub fn run(&mut self) {
+    pub async fn run(&mut self) {
         let mut queue: VecDeque<(String, u8)> = self
             .graph
             .nodes
@@ -114,31 +117,28 @@ impl PipelineExecutor {
                 None => continue,
             };
 
-            let res = match node.type_ {
-                PromptType::TriggerPrompt => ResultData {
+            let res = if matches!(node.type_, PromptType::TriggerPrompt) {
+                ResultData {
                     result: true,
                     score: 1.0,
                     answer: Some("trigger".into()),
                     source: Some("trigger".into()),
-                },
-                PromptType::AnalysisPrompt => ResultData {
-                    result: true,
-                    score: 1.0,
-                    answer: Some("analysis".into()),
-                    source: Some("analysis".into()),
-                },
-                PromptType::DecisionPrompt => ResultData {
-                    result: true,
-                    score: 1.0,
-                    answer: Some("decision".into()),
-                    source: Some("decision".into()),
-                },
-                _ => ResultData {
-                    result: true,
-                    score: 1.0,
-                    answer: Some("answer".into()),
-                    source: Some("answer".into()),
-                },
+                }
+            } else {
+                match openai_executor::run_prompt(&node, &self.text).await {
+                    Ok((result, score, answer, source)) => ResultData {
+                        result,
+                        score,
+                        answer: Some(answer),
+                        source: Some(source),
+                    },
+                    Err(e) => ResultData {
+                        result: false,
+                        score: 0.0,
+                        answer: Some(e.to_string()),
+                        source: None,
+                    },
+                }
             };
 
             self.history.push((id.clone(), res.clone(), attempt));
@@ -292,28 +292,28 @@ mod tests {
         }
     }
 
-    #[test]
-    fn run_example_pipeline() {
+    #[tokio::test]
+    async fn run_example_pipeline() {
         let graph = example_pipeline();
-        let mut exec = PipelineExecutor::new(graph);
-        exec.run();
+        let mut exec = PipelineExecutor::new(graph, String::new());
+        exec.run().await;
         let (_score, label) = exec.get_result().unwrap();
         assert_eq!(label, "M\u{00d6}GLICHER_REGRESS");
     }
 
-    #[test]
-    fn onscore_edge() {
+    #[tokio::test]
+    async fn onscore_edge() {
         let graph = simple_graph("score >= 0.5");
-        let mut exec = PipelineExecutor::new(graph);
-        exec.run();
+        let mut exec = PipelineExecutor::new(graph, String::new());
+        exec.run().await;
         assert_eq!(exec.history.len(), 3);
     }
 
-    #[test]
-    fn onscore_stage_condition() {
+    #[tokio::test]
+    async fn onscore_stage_condition() {
         let graph = simple_graph("stage.s1.score > 0.5");
-        let mut exec = PipelineExecutor::new(graph);
-        exec.run();
+        let mut exec = PipelineExecutor::new(graph, String::new());
+        exec.run().await;
         assert_eq!(exec.history.len(), 3);
     }
 }
