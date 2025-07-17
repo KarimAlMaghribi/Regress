@@ -33,3 +33,27 @@ pub struct ClassificationResult {
     pub score: f64,
     pub result_label: String,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PromptResult {
+    pub prompt_id: String,
+    pub prompt_type: String,
+    pub status: String,
+    pub result: Option<bool>,
+    pub score: Option<f64>,
+    pub answer: Option<String>,
+    pub source: Option<String>,
+    pub attempt: Option<u8>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PipelineRunResult {
+    pub score: f64,
+    pub label: String,
+    pub history: Vec<PromptResult>,
+    pub stage_scores: Option<std::collections::HashMap<String, f64>>,
+    pub run_id: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
