@@ -2,7 +2,7 @@ use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use actix_cors::Cors;
 use shared::{
     config::Settings,
-    dto::{PdfUploaded, TextExtracted},
+    dto::{PdfUploaded, LayoutExtracted},
     error::Result,
 };
 use rdkafka::{
@@ -18,6 +18,8 @@ use reqwest::Client;
 use tracing::{error, info};
 use std::path::Path;
 use pdf_extract::extract_text_from_mem;
+use std::process::Command;
+use serde_json;
 use shared::pipeline_graph::{
     Edge, EdgeType, FinalScoring, LabelRule, PipelineGraph, PromptNode, PromptType, Stage,
 };
@@ -51,6 +53,53 @@ fn extract_text(path: &str) -> Result<String> {
     Ok(text)
 }
 
+fn extract_layout(path: &str) -> Result<(String, serde_json::Value)> {
+    const SCRIPT: &str = r#"
+import sys, json, pdfplumber, layoutparser as lp, subprocess
+path = sys.argv[1]
+try:
+    pdf = pdfplumber.open(path)
+    model = lp.Detectron2LayoutModel('lp://PubLayNet/faster_rcnn_R_50_FPN_3x/config')
+    pages = []
+    raw = []
+    for page in pdf.pages:
+        raw.append(page.extract_text() or '')
+        layout = model.detect(page.to_image(resolution=300).original)
+        blocks = []
+        for b in layout:
+            x1, y1, x2, y2 = b.coordinates
+            text = page.crop((x1, y1, x2, y2)).extract_text() or ''
+            blocks.append({'bbox': [x1, y1, x2, y2], 'text': text, 'type': b.type})
+        pages.append(blocks)
+    print(json.dumps({'raw_text': '\n'.join(raw), 'blocks': pages}))
+except Exception:
+    out = subprocess.check_output(['tesseract', path, 'stdout', '-l', 'eng', 'hocr'])
+    print(json.dumps({'raw_text': '', 'blocks': [], 'hocr': out.decode()}))
+"#;
+
+    let output = Command::new("python3")
+        .arg("-c")
+        .arg(SCRIPT)
+        .arg(path)
+        .output()
+        .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
+
+    if !output.status.success() {
+        return Err(shared::error::AppError::Io("python3 failed".into()));
+    }
+
+    let out_str = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&out_str)
+        .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
+    let raw_text = json
+        .get("raw_text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let blocks = json.get("blocks").cloned().unwrap_or_else(|| serde_json::Value::Null);
+    Ok((raw_text, blocks))
+}
+
 
 async fn health() -> impl Responder {
     "OK"
@@ -80,7 +129,7 @@ async fn list_texts(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<
     Ok(HttpResponse::Ok().json(items))
 }
 
-/// Publish `text-extracted` events for existing texts.
+/// Publish `layout-extracted` events for existing texts.
 ///
 /// The endpoint does not run OCR again. It simply forwards the stored text so
 /// classification can be repeated with a different prompt.
@@ -96,11 +145,11 @@ async fn start_analysis(
             .map_err(actix_web::error::ErrorInternalServerError)?;
         if let Ok(row) = db.query_one(&stmt, &[&id]).await {
             let text: String = row.get(0);
-            let evt = TextExtracted { id, text, prompt: req.prompt.clone() };
+            let evt = LayoutExtracted { id, prompt: req.prompt.clone(), raw_text: text, blocks: serde_json::Value::Null };
             let payload = serde_json::to_string(&evt).unwrap();
             let _ = prod
                 .send(
-                    FutureRecord::to("text-extracted").payload(&payload).key(&()),
+                    FutureRecord::to("layout-extracted").payload(&payload).key(&()),
                     Duration::from_secs(0),
                 )
                 .await;
@@ -169,9 +218,9 @@ async fn main() -> std::io::Result<()> {
                                 let data: Vec<u8> = row.get(0);
                                 let path = format!("/tmp/pdf_{}.pdf", event.id);
                                 tokio::fs::write(&path, &data).await.unwrap();
-                                if let Ok(text) = extract_text(&path) {
+                                if let Ok((text, blocks)) = extract_layout(&path) {
                                     let text = text.to_lowercase();
-                                    info!(id = event.id, "extracted text");
+                                    info!(id = event.id, "extracted layout");
                                     let stmt = db
                                         .prepare(
                                             "INSERT INTO pdf_texts (pdf_id, text) VALUES ($1, $2) \
@@ -263,17 +312,17 @@ async fn main() -> std::io::Result<()> {
                                             }
                                         }
                                     }
-                                    let evt = TextExtracted { id: event.id, text, prompt: event.prompt.clone() };
+                                    let evt = LayoutExtracted { id: event.id, prompt: event.prompt.clone(), raw_text: text.clone(), blocks };
                                     let payload = serde_json::to_string(&evt).unwrap();
                                     let _ = prod
                                         .send(
-                                            FutureRecord::to("text-extracted")
+                                            FutureRecord::to("layout-extracted")
                                                 .payload(&payload)
                                                 .key(&()),
                                             Duration::from_secs(0),
                                         )
                                         .await;
-                                    info!(id = evt.id, "published text-extracted event");
+                                    info!(id = evt.id, "published layout-extracted event");
                                     let _ = tokio::fs::remove_file(&path).await;
                                 }
                             }
