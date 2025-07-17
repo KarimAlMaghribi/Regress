@@ -32,10 +32,14 @@ async fn run_pipeline(
     let history: Vec<PromptResult> = exec
         .history()
         .iter()
-        .map(|(id, data, attempt)| PromptResult {
+        .map(|(id, data, attempt, ptype)| PromptResult {
             prompt_id: id.clone(),
-            prompt_type: String::new(),
-            status: "done".into(),
+            prompt_type: ptype.as_str().into(),
+            status: if matches!(ptype, shared::pipeline_graph::PromptType::MetaPrompt) {
+                "meta".into()
+            } else {
+                "done".into()
+            },
             result: Some(data.result),
             score: Some(data.score),
             answer: data.answer.clone(),
