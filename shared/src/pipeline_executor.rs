@@ -6,8 +6,10 @@ use evalexpr::{
     Value,
 };
 
-use crate::dto::StageScore;
+use crate::dto::{StageScore, PromptResult};
 use crate::pipeline_graph::{Edge, EdgeType, PipelineGraph, PromptNode, PromptType};
+use crate::pipeline_graph::Status;
+use crate::openai_executor::OpenAIExecutor;
 use chrono::Utc;
 use tracing::debug;
 use regex::Regex;
@@ -201,6 +203,135 @@ impl PipelineExecutor {
 
             self.status
                 .insert(id.clone(), PromptStatus::Done(res.clone()));
+            self.compute_stage_scores();
+
+            for edge in self.graph.edges.iter().filter(|e| e.source == id) {
+                if self.evaluate_edge(edge, &res) {
+                    if let Some(PromptStatus::Pending) = self.status.get(&edge.target) {
+                        queue.push_back((edge.target.clone(), 1));
+                    }
+                }
+            }
+        }
+
+        self.compute_stage_scores();
+        self.compute_final();
+    }
+
+    pub async fn run_with_openai(
+        &mut self,
+        openai: &OpenAIExecutor,
+        blocks: &serde_json::Value,
+    ) {
+        let mut queue: VecDeque<(String, u8)> = self
+            .graph
+            .nodes
+            .iter()
+            .filter(|n| matches!(n.type_, PromptType::TriggerPrompt))
+            .map(|n| (n.id.clone(), 1))
+            .collect();
+
+        while let Some((id, attempt)) = queue.pop_front() {
+            if !matches!(self.status.get(&id), Some(PromptStatus::Pending)) {
+                continue;
+            }
+            self.status.insert(id.clone(), PromptStatus::Running);
+            let started = Utc::now();
+            let node = match self.get_node(&id) {
+                Some(n) => n.clone(),
+                None => continue,
+            };
+
+            let mut res = match node.type_ {
+                PromptType::AnalysisPrompt => {
+                    let mut r = openai.run_batch(&[node.clone()], blocks).await.pop().unwrap_or(PromptResult {
+                        prompt_id: node.id.clone(),
+                        prompt_type: node.type_.as_str().into(),
+                        status: Status::Done,
+                        result: Some(false),
+                        score: Some(0.0),
+                        answer: None,
+                        source: None,
+                        attempt: Some(attempt),
+                        started_at: Some(started.to_rfc3339()),
+                        finished_at: Some(Utc::now().to_rfc3339()),
+                    });
+                    ResultData {
+                        result: r.result.unwrap_or(false),
+                        score: r.score.unwrap_or(0.0),
+                        answer: r.answer.take(),
+                        source: r.source.take(),
+                        started_at: r.started_at.take(),
+                        finished_at: r.finished_at.take(),
+                    }
+                }
+                PromptType::TriggerPrompt => ResultData {
+                    result: true,
+                    score: 1.0,
+                    answer: Some("trigger".into()),
+                    source: Some("trigger".into()),
+                    started_at: Some(started.to_rfc3339()),
+                    finished_at: None,
+                },
+                PromptType::DecisionPrompt => ResultData {
+                    result: true,
+                    score: 1.0,
+                    answer: Some("decision".into()),
+                    source: Some("decision".into()),
+                    started_at: Some(started.to_rfc3339()),
+                    finished_at: None,
+                },
+                PromptType::MetaPrompt => {
+                    #[derive(serde::Deserialize)]
+                    struct MetaAction {
+                        action: String,
+                        target: String,
+                    }
+                    if let Ok(meta) = serde_json::from_str::<MetaAction>(&node.text) {
+                        match meta.action.as_str() {
+                            "enable" => {
+                                self.status.insert(meta.target.clone(), PromptStatus::Pending);
+                            }
+                            "disable" => {
+                                self.status.insert(meta.target.clone(), PromptStatus::Skipped);
+                            }
+                            _ => {}
+                        }
+                    }
+                    ResultData {
+                        result: true,
+                        score: 0.0,
+                        answer: Some(node.text.clone()),
+                        source: Some(node.text.clone()),
+                        started_at: Some(started.to_rfc3339()),
+                        finished_at: None,
+                    }
+                }
+                _ => ResultData {
+                    result: true,
+                    score: 1.0,
+                    answer: Some("answer".into()),
+                    source: Some("answer".into()),
+                    started_at: Some(started.to_rfc3339()),
+                    finished_at: None,
+                },
+            };
+
+            if res.finished_at.is_none() {
+                res.finished_at = Some(Utc::now().to_rfc3339());
+            }
+
+            self.history.push((id.clone(), res.clone(), attempt, node.type_.clone()));
+
+            if let Some(th) = node.confidence_threshold {
+                if res.score < th && attempt < 3 {
+                    self.status.insert(id.clone(), PromptStatus::Pending);
+                    queue.push_back((id.clone(), attempt + 1));
+                    continue;
+                }
+            }
+
+            self.status.insert(id.clone(), PromptStatus::Done(res.clone()));
             self.compute_stage_scores();
 
             for edge in self.graph.edges.iter().filter(|e| e.source == id) {
