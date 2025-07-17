@@ -14,3 +14,4 @@ openai.workspace = true
 actix-web = "4"
 evalexpr = "12"
 regex = "1"
+anyhow.workspace = true
