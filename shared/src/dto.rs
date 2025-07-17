@@ -17,10 +17,12 @@ pub struct PdfUploaded {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct TextExtracted {
+pub struct LayoutExtracted {
     pub id: i32,
-    pub text: String,
     pub prompt: String,
+    pub raw_text: String,
+    /// page-wise blocks with bbox+text+type
+    pub blocks: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
