@@ -14,6 +14,7 @@ pub struct ResultData {
     pub result: bool,
     pub score: f64,
     pub answer: Option<String>,
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +60,10 @@ impl PipelineExecutor {
         ctx.set_value("result".into(), Value::from(result)).unwrap();
         ctx.set_value("score".into(), Value::from_float(score))
             .unwrap();
+        for (stage, val) in &self.stage_scores {
+            let key = format!("stage.{}.score", stage);
+            ctx.set_value(key.into(), Value::from_float(*val)).ok();
+        }
         eval_boolean_with_context(expr, &ctx).unwrap_or(false)
     }
 
@@ -114,27 +119,32 @@ impl PipelineExecutor {
                     result: true,
                     score: 1.0,
                     answer: Some("trigger".into()),
+                    source: Some("trigger".into()),
                 },
                 PromptType::AnalysisPrompt => ResultData {
                     result: true,
                     score: 1.0,
                     answer: Some("analysis".into()),
+                    source: Some("analysis".into()),
                 },
                 PromptType::DecisionPrompt => ResultData {
                     result: true,
                     score: 1.0,
                     answer: Some("decision".into()),
+                    source: Some("decision".into()),
                 },
                 _ => ResultData {
                     result: true,
                     score: 1.0,
                     answer: Some("answer".into()),
+                    source: Some("answer".into()),
                 },
             };
 
             self.status
                 .insert(id.clone(), PromptStatus::Done(res.clone()));
             self.history.push((id.clone(), res.clone()));
+            self.compute_stage_scores();
 
             for edge in self.graph.edges.iter().filter(|e| e.source == id) {
                 if self.evaluate_edge(edge, &res) {
@@ -201,12 +211,77 @@ impl PipelineExecutor {
     pub fn history(&self) -> &Vec<(String, ResultData)> {
         &self.history
     }
+
+    pub fn stage_scores(&self) -> &HashMap<String, f64> {
+        &self.stage_scores
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::pipeline_graph::example_pipeline;
+    use crate::pipeline_graph::{
+        Edge, EdgeType, FinalScoring, LabelRule, PipelineGraph, PromptNode, PromptType, Stage,
+    };
+
+    fn simple_graph(cond: &str) -> PipelineGraph {
+        PipelineGraph {
+            nodes: vec![
+                PromptNode {
+                    id: "t".into(),
+                    text: "t".into(),
+                    type_: PromptType::TriggerPrompt,
+                    weight: None,
+                    confidence_threshold: None,
+                    metadata: None,
+                },
+                PromptNode {
+                    id: "a".into(),
+                    text: "a".into(),
+                    type_: PromptType::AnalysisPrompt,
+                    weight: None,
+                    confidence_threshold: None,
+                    metadata: None,
+                },
+                PromptNode {
+                    id: "d".into(),
+                    text: "d".into(),
+                    type_: PromptType::DecisionPrompt,
+                    weight: None,
+                    confidence_threshold: None,
+                    metadata: None,
+                },
+            ],
+            edges: vec![
+                Edge {
+                    source: "t".into(),
+                    target: "a".into(),
+                    condition: None,
+                    type_: Some(EdgeType::Always),
+                },
+                Edge {
+                    source: "a".into(),
+                    target: "d".into(),
+                    condition: Some(cond.into()),
+                    type_: Some(EdgeType::OnScore),
+                },
+            ],
+            stages: vec![Stage {
+                id: "s1".into(),
+                name: "s1".into(),
+                prompt_ids: vec!["a".into()],
+                score_formula: None,
+            }],
+            final_scoring: FinalScoring {
+                score_formula: "s1.score".into(),
+                label_rules: vec![LabelRule {
+                    if_condition: "score > 0".into(),
+                    label: "ok".into(),
+                }],
+            },
+        }
+    }
 
     #[test]
     fn run_example_pipeline() {
@@ -215,5 +290,21 @@ mod tests {
         exec.run();
         let (_score, label) = exec.get_result().unwrap();
         assert_eq!(label, "M\u{00d6}GLICHER_REGRESS");
+    }
+
+    #[test]
+    fn onscore_edge() {
+        let graph = simple_graph("score >= 0.5");
+        let mut exec = PipelineExecutor::new(graph);
+        exec.run();
+        assert_eq!(exec.history.len(), 3);
+    }
+
+    #[test]
+    fn onscore_stage_condition() {
+        let graph = simple_graph("stage.s1.score > 0.5");
+        let mut exec = PipelineExecutor::new(graph);
+        exec.run();
+        assert_eq!(exec.history.len(), 3);
     }
 }

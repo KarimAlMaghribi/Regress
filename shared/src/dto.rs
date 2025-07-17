@@ -47,3 +47,13 @@ pub struct PromptResult {
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
 }
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PipelineRunResult {
+    pub score: f64,
+    pub label: String,
+    pub history: Vec<PromptResult>,
+    pub stage_scores: Option<std::collections::HashMap<String, f64>>,
+    pub run_id: Option<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+}
