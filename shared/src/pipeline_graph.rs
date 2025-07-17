@@ -17,6 +17,19 @@ pub enum PromptType {
     MetaPrompt,
 }
 
+impl PromptType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PromptType::TriggerPrompt => "TriggerPrompt",
+            PromptType::AnalysisPrompt => "AnalysisPrompt",
+            PromptType::FollowUpPrompt => "FollowUpPrompt",
+            PromptType::DecisionPrompt => "DecisionPrompt",
+            PromptType::FinalPrompt => "FinalPrompt",
+            PromptType::MetaPrompt => "MetaPrompt",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct PromptNode {

@@ -30,7 +30,7 @@ pub struct PipelineExecutor {
     graph: PipelineGraph,
     status: HashMap<String, PromptStatus>,
     stage_scores: HashMap<String, f64>,
-    history: Vec<(String, ResultData, u8)>,
+    history: Vec<(String, ResultData, u8, PromptType)>,
     final_score: f64,
     final_label: Option<String>,
 }
@@ -133,6 +133,32 @@ impl PipelineExecutor {
                     answer: Some("decision".into()),
                     source: Some("decision".into()),
                 },
+                PromptType::MetaPrompt => {
+                    #[derive(serde::Deserialize)]
+                    struct MetaAction {
+                        action: String,
+                        target: String,
+                    }
+                    if let Ok(meta) = serde_json::from_str::<MetaAction>(&node.text) {
+                        match meta.action.as_str() {
+                            "enable" => {
+                                self.status
+                                    .insert(meta.target.clone(), PromptStatus::Pending);
+                            }
+                            "disable" => {
+                                self.status
+                                    .insert(meta.target.clone(), PromptStatus::Skipped);
+                            }
+                            _ => {}
+                        }
+                    }
+                    ResultData {
+                        result: true,
+                        score: 0.0,
+                        answer: Some(node.text.clone()),
+                        source: Some(node.text.clone()),
+                    }
+                }
                 _ => ResultData {
                     result: true,
                     score: 1.0,
@@ -141,7 +167,8 @@ impl PipelineExecutor {
                 },
             };
 
-            self.history.push((id.clone(), res.clone(), attempt));
+            self.history
+                .push((id.clone(), res.clone(), attempt, node.type_.clone()));
 
             if let Some(th) = node.confidence_threshold {
                 if res.score < th && attempt < 3 {
@@ -217,7 +244,7 @@ impl PipelineExecutor {
             .map(|l| (self.final_score, l.clone()))
     }
 
-    pub fn history(&self) -> &Vec<(String, ResultData, u8)> {
+    pub fn history(&self) -> &Vec<(String, ResultData, u8, PromptType)> {
         &self.history
     }
 
@@ -315,5 +342,42 @@ mod tests {
         let mut exec = PipelineExecutor::new(graph);
         exec.run();
         assert_eq!(exec.history.len(), 3);
+    }
+
+    #[test]
+    fn meta_prompt_disable() {
+        let mut graph = simple_graph("score >= 0.5");
+        graph.nodes.push(PromptNode {
+            id: "m1".into(),
+            text: "{\"action\": \"disable\", \"target\": \"a\"}".into(),
+            type_: PromptType::MetaPrompt,
+            weight: None,
+            confidence_threshold: None,
+            metadata: None,
+        });
+        graph.edges = vec![
+            Edge {
+                source: "t".into(),
+                target: "m1".into(),
+                condition: None,
+                type_: Some(EdgeType::Always),
+            },
+            Edge {
+                source: "m1".into(),
+                target: "a".into(),
+                condition: None,
+                type_: Some(EdgeType::Always),
+            },
+            Edge {
+                source: "a".into(),
+                target: "d".into(),
+                condition: Some("score >= 0.5".into()),
+                type_: Some(EdgeType::OnScore),
+            },
+        ];
+        let mut exec = PipelineExecutor::new(graph);
+        exec.run();
+        assert!(matches!(exec.status.get("a"), Some(PromptStatus::Skipped)));
+        assert_eq!(exec.history.len(), 2);
     }
 }
