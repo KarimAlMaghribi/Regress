@@ -4,20 +4,20 @@ use actix_web::http::header;
 use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use futures_util::StreamExt as _;
+use lopdf::{Bookmark, Document, Object, ObjectId};
+use native_tls::TlsConnector;
+use postgres_native_tls::MakeTlsConnector;
 use rdkafka::{
     producer::{FutureProducer, FutureRecord},
     ClientConfig,
 };
+use serde::Serialize;
 use shared::config::Settings;
 use shared::dto::{PdfUploaded, UploadResponse};
-use std::time::Duration;
-use postgres_native_tls::MakeTlsConnector;
-use native_tls::TlsConnector;
-use tracing::info;
-use lopdf::{Document, Bookmark, Object, ObjectId};
-use zip::ZipArchive;
 use std::collections::BTreeMap;
-use serde::Serialize;
+use std::time::Duration;
+use tracing::info;
+use zip::ZipArchive;
 
 #[derive(Serialize)]
 struct UploadEntry {
@@ -65,7 +65,10 @@ fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
     for (object_id, object) in documents_objects.iter() {
         match object.type_name().unwrap_or(b"") {
             b"Catalog" => {
-                catalog_object = Some((catalog_object.map(|c| c.0).unwrap_or(*object_id), object.clone()));
+                catalog_object = Some((
+                    catalog_object.map(|c| c.0).unwrap_or(*object_id),
+                    object.clone(),
+                ));
             }
             b"Pages" => {
                 if let Ok(dictionary) = object.as_dict() {
@@ -75,7 +78,10 @@ fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
                             dictionary.extend(old_dictionary);
                         }
                     }
-                    pages_object = Some((pages_object.map(|p| p.0).unwrap_or(*object_id), Object::Dictionary(dictionary)));
+                    pages_object = Some((
+                        pages_object.map(|p| p.0).unwrap_or(*object_id),
+                        Object::Dictionary(dictionary),
+                    ));
                 }
             }
             b"Page" => {}
@@ -220,20 +226,26 @@ async fn upload(
             .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
         let id: i32 = row.get(0);
         info!(id, "pdf stored in database");
-        db
-            .execute(
-                "UPDATE uploads SET pdf_id=$1, status='ocr' WHERE id=$2",
-                &[&id, &upload_id],
-            )
-            .await
-            .ok();
+        db.execute(
+            "UPDATE uploads SET pdf_id=$1, status='ocr' WHERE id=$2",
+            &[&id, &upload_id],
+        )
+        .await
+        .ok();
         let names: Vec<String> = files.iter().map(|f| f.1.clone()).collect();
         let stmt = db
             .prepare("INSERT INTO pdf_sources (pdf_id, names, count) VALUES ($1,$2,$3)")
             .await
             .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
         let _ = db
-            .execute(&stmt, &[&id, &serde_json::to_string(&names).unwrap(), &(names.len() as i32)])
+            .execute(
+                &stmt,
+                &[
+                    &id,
+                    &serde_json::to_string(&names).unwrap(),
+                    &(names.len() as i32),
+                ],
+            )
             .await
             .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
         let payload = serde_json::to_string(&PdfUploaded {
@@ -253,9 +265,7 @@ async fn upload(
     Ok(HttpResponse::BadRequest().finish())
 }
 
-async fn list_uploads(
-    db: web::Data<tokio_postgres::Client>,
-) -> Result<HttpResponse, Error> {
+async fn list_uploads(db: web::Data<tokio_postgres::Client>) -> Result<HttpResponse, Error> {
     let stmt = db
         .prepare("SELECT id, pdf_id, status FROM uploads ORDER BY id DESC")
         .await
@@ -273,6 +283,24 @@ async fn list_uploads(
         })
         .collect();
     Ok(HttpResponse::Ok().json(items))
+}
+
+async fn get_upload_status(
+    id: web::Path<i32>,
+    db: web::Data<tokio_postgres::Client>,
+) -> Result<HttpResponse, Error> {
+    let stmt = db
+        .prepare("SELECT status FROM uploads WHERE id=$1")
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    match db.query_opt(&stmt, &[&id.into_inner()]).await {
+        Ok(Some(row)) => {
+            let status: String = row.get(0);
+            Ok(HttpResponse::Ok().json(serde_json::json!({ "status": status })))
+        }
+        Ok(None) => Ok(HttpResponse::NotFound().finish()),
+        Err(e) => Err(actix_web::error::ErrorInternalServerError(e)),
+    }
 }
 
 async fn get_pdf(
@@ -325,10 +353,9 @@ async fn main() -> std::io::Result<()> {
     let settings = Settings::new().unwrap();
     let tls_connector = TlsConnector::builder().build().unwrap();
     let connector = MakeTlsConnector::new(tls_connector);
-    let (db_client, connection) =
-        tokio_postgres::connect(&settings.database_url, connector)
-            .await
-            .unwrap();
+    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, connector)
+        .await
+        .unwrap();
     let db_client = web::Data::new(db_client);
     info!("connected to database");
     tokio::spawn(async move {
@@ -373,6 +400,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(producer.clone()))
             .route("/upload", web::post().to(upload))
             .route("/uploads", web::get().to(list_uploads))
+            .route("/uploads/{id}/status", web::get().to(get_upload_status))
             .route("/pdf/{id}", web::get().to(get_pdf))
             .route("/pdf/{id}", web::delete().to(delete_pdf))
             .route("/health", web::get().to(health))
@@ -447,6 +475,42 @@ mod tests {
             let req = test::TestRequest::delete().uri("/pdf/1").to_request();
             let resp = test::call_service(&app, req).await;
             assert!(resp.status().is_success());
+        }
+    }
+
+    #[actix_web::test]
+    async fn upload_status_ok() {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/postgres".into());
+        let tls_connector = TlsConnector::builder().build().unwrap();
+        let connector = MakeTlsConnector::new(tls_connector);
+        if let Ok((client, connection)) = tokio_postgres::connect(&url, connector).await {
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            client
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, status TEXT NOT NULL)",
+                    &[],
+                )
+                .await
+                .unwrap();
+            client
+                .execute("INSERT INTO uploads (status) VALUES ('ocr')", &[])
+                .await
+                .unwrap();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(client))
+                    .route("/uploads/{id}/status", web::get().to(get_upload_status)),
+            )
+            .await;
+            let req = test::TestRequest::get()
+                .uri("/uploads/1/status")
+                .to_request();
+            let resp = test::call_and_read_body(&app, req).await;
+            let json: serde_json::Value = serde_json::from_slice(&resp).unwrap();
+            assert_eq!(json["status"], "ocr");
         }
     }
 }
