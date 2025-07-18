@@ -46,6 +46,9 @@ responses when accessing `/prompts`.
 The pipeline runner additionally requires `OPENAI_API_KEY` to access the OpenAI API.
 It uses the active pipeline from the pipeline-manager when processing events.
 Defaults are provided in `docker-compose.yml`. The metrics service reads from the same database.
+The text-extraction service triggers a pipeline run via the URL specified in
+`PIPELINE_RUN_URL`. Docker Compose sets this variable to
+`http://pipeline-runner:8084/pipeline/run?persist=true`.
 
 ## Usage
 

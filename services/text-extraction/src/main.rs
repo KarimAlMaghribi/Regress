@@ -1,33 +1,37 @@
-use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use actix_cors::Cors;
-use shared::{
-    config::Settings,
-    dto::{PdfUploaded, LayoutExtracted},
-    error::Result,
-};
+use actix_web::{web, App, HttpResponse, HttpServer, Responder};
+use native_tls::TlsConnector;
+use pdf_extract::extract_text_from_mem;
+use postgres_native_tls::MakeTlsConnector;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     producer::{FutureProducer, FutureRecord},
     ClientConfig, Message,
 };
-use std::time::Duration;
-use postgres_native_tls::MakeTlsConnector;
-use native_tls::TlsConnector;
-use tesseract::Tesseract;
 use reqwest::Client;
-use tracing::{error, info};
-use std::path::Path;
-use pdf_extract::extract_text_from_mem;
-use std::process::Command;
 use serde_json;
+use shared::dto::PipelineRunResult;
 use shared::pipeline_graph::{
     Edge, EdgeType, FinalScoring, LabelRule, PipelineGraph, PromptNode, PromptType, Stage,
 };
-use shared::dto::PipelineRunResult;
+use shared::{
+    config::Settings,
+    dto::{LayoutExtracted, PdfUploaded},
+    error::Result,
+};
+use std::path::Path;
+use std::process::Command;
+use std::time::Duration;
+use tesseract::Tesseract;
+use tracing::{error, info};
 
 fn extract_text(path: &str) -> Result<String> {
     info!(?path, "starting text extraction");
-    if Path::new(path).extension().map(|e| e == "pdf").unwrap_or(false) {
+    if Path::new(path)
+        .extension()
+        .map(|e| e == "pdf")
+        .unwrap_or(false)
+    {
         if let Ok(data) = std::fs::read(path) {
             match extract_text_from_mem(&data) {
                 Ok(text) => {
@@ -89,17 +93,19 @@ except Exception:
     }
 
     let out_str = String::from_utf8_lossy(&output.stdout);
-    let json: serde_json::Value = serde_json::from_str(&out_str)
-        .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&out_str).map_err(|e| shared::error::AppError::Io(e.to_string()))?;
     let raw_text = json
         .get("raw_text")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let blocks = json.get("blocks").cloned().unwrap_or_else(|| serde_json::Value::Null);
+    let blocks = json
+        .get("blocks")
+        .cloned()
+        .unwrap_or_else(|| serde_json::Value::Null);
     Ok((raw_text, blocks))
 }
-
 
 async fn health() -> impl Responder {
     "OK"
@@ -125,7 +131,10 @@ async fn list_texts(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<
         .query(&stmt, &[])
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
-    let items: Vec<TextEntry> = rows.into_iter().map(|r| TextEntry { id: r.get(0) }).collect();
+    let items: Vec<TextEntry> = rows
+        .into_iter()
+        .map(|r| TextEntry { id: r.get(0) })
+        .collect();
     Ok(HttpResponse::Ok().json(items))
 }
 
@@ -145,11 +154,18 @@ async fn start_analysis(
             .map_err(actix_web::error::ErrorInternalServerError)?;
         if let Ok(row) = db.query_one(&stmt, &[&id]).await {
             let text: String = row.get(0);
-            let evt = LayoutExtracted { id, prompt: req.prompt.clone(), raw_text: text, blocks: serde_json::Value::Null };
+            let evt = LayoutExtracted {
+                id,
+                prompt: req.prompt.clone(),
+                raw_text: text,
+                blocks: serde_json::Value::Null,
+            };
             let payload = serde_json::to_string(&evt).unwrap();
             let _ = prod
                 .send(
-                    FutureRecord::to("layout-extracted").payload(&payload).key(&()),
+                    FutureRecord::to("layout-extracted")
+                        .payload(&payload)
+                        .key(&()),
                     Duration::from_secs(0),
                 )
                 .await;
@@ -158,19 +174,59 @@ async fn start_analysis(
     Ok(HttpResponse::Ok().finish())
 }
 
+async fn trigger_pipeline(
+    client: &Client,
+    url: &str,
+    graph: &PipelineGraph,
+    text: &str,
+) -> Option<PipelineRunResult> {
+    match client
+        .post(url)
+        .json(&serde_json::json!({
+            "input_graph": graph,
+            "ocr_text": text,
+        }))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            if resp.status().is_success() {
+                match resp.json::<PipelineRunResult>().await {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        error!(%e, "failed to decode pipeline run result");
+                        None
+                    }
+                }
+            } else {
+                error!(status = ?resp.status(), "pipeline run request failed");
+                None
+            }
+        }
+        Err(e) => {
+            error!(%e, "pipeline run http error");
+            None
+        }
+    }
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting text-extraction service");
     let settings = Settings::new().unwrap();
+    let pipeline_url = settings.pipeline_run_url.clone();
     let tls_connector = TlsConnector::builder().build().unwrap();
     let connector = MakeTlsConnector::new(tls_connector);
-    let (db_client, connection) =
-        tokio_postgres::connect(&settings.database_url, connector)
-            .await
-            .unwrap();
+    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, connector)
+        .await
+        .unwrap();
     info!("connected to database");
-    tokio::spawn(async move { if let Err(e) = connection.await { error!(%e, "db error") } });
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            error!(%e, "db error")
+        }
+    });
     db_client
         .execute(
             "CREATE TABLE IF NOT EXISTS pdf_texts (pdf_id INTEGER PRIMARY KEY, text TEXT NOT NULL)",
@@ -201,10 +257,12 @@ async fn main() -> std::io::Result<()> {
     let db = web::Data::new(db_client);
     let db_consumer = db.clone();
     let producer_consumer = producer.clone();
+    let pipeline_run_url = pipeline_url.clone();
     tokio::spawn(async move {
         let db = db_consumer;
         let cons = consumer;
         let prod = producer_consumer;
+        let pipeline_url = pipeline_run_url;
         info!("starting kafka consume loop");
         loop {
             match cons.recv().await {
@@ -213,7 +271,10 @@ async fn main() -> std::io::Result<()> {
                     if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Ok(event) = serde_json::from_str::<PdfUploaded>(payload) {
                             info!(id = event.id, "received pdf-uploaded event");
-                            let stmt = db.prepare("SELECT data FROM pdfs WHERE id = $1").await.unwrap();
+                            let stmt = db
+                                .prepare("SELECT data FROM pdfs WHERE id = $1")
+                                .await
+                                .unwrap();
                             if let Ok(row) = db.query_one(&stmt, &[&event.id]).await {
                                 let data: Vec<u8> = row.get(0);
                                 let path = format!("/tmp/pdf_{}.pdf", event.id);
@@ -290,29 +351,33 @@ async fn main() -> std::io::Result<()> {
                                         final_scoring: FinalScoring {
                                             score_formula: "analysis_stage.score".into(),
                                             label_rules: vec![
-                                                LabelRule { if_condition: "score >= 0.5".into(), label: "OK".into() },
-                                                LabelRule { if_condition: "score < 0.5".into(), label: "NOT_OK".into() },
+                                                LabelRule {
+                                                    if_condition: "score >= 0.5".into(),
+                                                    label: "OK".into(),
+                                                },
+                                                LabelRule {
+                                                    if_condition: "score < 0.5".into(),
+                                                    label: "NOT_OK".into(),
+                                                },
                                             ],
                                         },
                                     };
 
                                     let client = Client::new();
-                                    if let Ok(resp) = client
-                                        .post("http://pipeline-engine:8084/pipeline/run?persist=true")
-                                        .json(&serde_json::json!({
-                                            "input_graph": graph,
-                                            "ocr_text": text.clone(),
-                                        }))
-                                        .send()
-                                        .await
+                                    if let Some(result) =
+                                        trigger_pipeline(&client, &pipeline_url, &graph, &text)
+                                            .await
                                     {
-                                        if let Ok(result) = resp.json::<PipelineRunResult>().await {
-                                            if let Ok(json) = serde_json::to_string(&result) {
-                                                info!(run_id = result.run_id, result = %json, "pipeline run result");
-                                            }
+                                        if let Ok(json) = serde_json::to_string(&result) {
+                                            info!(run_id = result.run_id, result = %json, "pipeline run result");
                                         }
                                     }
-                                    let evt = LayoutExtracted { id: event.id, prompt: event.prompt.clone(), raw_text: text.clone(), blocks };
+                                    let evt = LayoutExtracted {
+                                        id: event.id,
+                                        prompt: event.prompt.clone(),
+                                        raw_text: text.clone(),
+                                        blocks,
+                                    };
                                     let payload = serde_json::to_string(&evt).unwrap();
                                     let _ = prod
                                         .send(
@@ -345,15 +410,16 @@ async fn main() -> std::io::Result<()> {
             .route("/texts", web::get().to(list_texts))
             .route("/analyze", web::post().to(start_analysis))
     })
-        .bind(("0.0.0.0", 8083))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8083))?
+    .run()
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use actix_web::{test, App};
+    use mockito::Server;
 
     #[actix_web::test]
     async fn health_ok() {
@@ -361,5 +427,29 @@ mod tests {
         let req = test::TestRequest::get().uri("/health").to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
+    }
+
+    #[tokio::test]
+    async fn trigger_pipeline_failure() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("POST", "/run")
+            .with_status(500)
+            .create_async()
+            .await;
+
+        let client = Client::new();
+        let url = format!("{}/run", server.url());
+        let graph = PipelineGraph {
+            nodes: vec![],
+            edges: vec![],
+            stages: vec![],
+            final_scoring: FinalScoring {
+                score_formula: String::new(),
+                label_rules: vec![],
+            },
+        };
+        let res = trigger_pipeline(&client, &url, &graph, "text").await;
+        assert!(res.is_none());
     }
 }

@@ -8,6 +8,10 @@ fn default_message_broker_url() -> String {
     "kafka:9092".into()
 }
 
+fn default_pipeline_run_url() -> String {
+    "http://pipeline-runner:8084/pipeline/run?persist=true".into()
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct Settings {
     #[serde(default = "default_database_url")]
@@ -18,6 +22,8 @@ pub struct Settings {
     pub openai_api_key: String,
     #[serde(default)]
     pub class_prompt_id: i32,
+    #[serde(default = "default_pipeline_run_url")]
+    pub pipeline_run_url: String,
 }
 
 impl Settings {
