@@ -1,5 +1,5 @@
-import React from 'react';
-import { useParams, MemoryRouter } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   Box,
@@ -16,6 +16,8 @@ import {
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import { motion } from 'framer-motion';
+import { useLatestRun } from '../context/LatestRun';
+import { toast } from 'react-hot-toast';
 
 interface PromptResult {
   prompt_id: string;
@@ -127,6 +129,7 @@ function PromptDetails({ history }: { history: PromptResult[] }) {
 export default function Result() {
   const { id } = useParams<{ id: string }>();
   const backend = import.meta.env.VITE_CLASSIFIER_URL || 'http://localhost:8084';
+  const { setLatestRun } = useLatestRun();
   const { data, isLoading } = useQuery<RunResult>(
     `/runs/${id}`,
     async () => {
@@ -136,6 +139,13 @@ export default function Result() {
     },
     { enabled: !!id }
   );
+
+  useEffect(() => {
+    if (data) {
+      setLatestRun(data as any);
+      toast.success(`\ud83c\udf7e Analyse abgeschlossen (Label: ${data.label})`);
+    }
+  }, [data, setLatestRun]);
 
   if (isLoading || !data) {
     return <Skeleton variant="rectangular" height={200} />;

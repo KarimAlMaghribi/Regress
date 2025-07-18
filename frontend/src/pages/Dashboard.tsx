@@ -8,6 +8,7 @@ import HistoryIcon from '@mui/icons-material/History';
 import BuildIcon from '@mui/icons-material/Build';
 import { motion } from 'framer-motion';
 import { Link } from 'react-router-dom';
+import PromptHistoryDrawer from '../components/PromptHistoryDrawer';
 
 const cards = [
   {
@@ -68,6 +69,7 @@ export default function Dashboard() {
         </Grid>
       ))}
       </Grid>
+      <PromptHistoryDrawer />
     </Box>
   );
 }
