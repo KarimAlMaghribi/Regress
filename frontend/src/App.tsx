@@ -11,17 +11,22 @@ import Analyses from './pages/Analyses';
 import Result from './pages/Result';
 import ColorModeProvider from './ColorModeContext';
 import { PromptNotificationProvider } from './context/PromptNotifications';
+import { LatestRunProvider } from './context/LatestRun';
+import { Toaster } from 'react-hot-toast';
 import { AnimatePresence, motion } from 'framer-motion';
 
 export default function App() {
   return (
     <ColorModeProvider>
       <PromptNotificationProvider>
-        <Router>
-          <Layout>
-            <AnimatedRoutes />
-          </Layout>
-        </Router>
+        <LatestRunProvider>
+          <Router>
+            <Layout>
+              <AnimatedRoutes />
+              <Toaster position="top-center" />
+            </Layout>
+          </Router>
+        </LatestRunProvider>
       </PromptNotificationProvider>
     </ColorModeProvider>
   );
