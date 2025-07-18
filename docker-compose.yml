@@ -22,6 +22,7 @@ services:
     environment:
       DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
       MESSAGE_BROKER_URL: kafka:9092
+      PIPELINE_RUN_URL: http://pipeline-runner:8084/pipeline/run?persist=true
     ports:
       - "8083:8083"
   prompt-manager:

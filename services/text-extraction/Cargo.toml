@@ -25,3 +25,6 @@ rdkafka.workspace = true
 postgres-native-tls.workspace = true
 native-tls.workspace = true
 reqwest = { version = "0.11", features = ["json"] }
+
+[dev-dependencies]
+mockito = "1"

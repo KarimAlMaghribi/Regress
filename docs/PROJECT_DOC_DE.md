@@ -12,7 +12,7 @@ Das System besteht aus mehreren Diensten, die über Docker Compose gestartet wer
 
 - **api-gateway** – bündelt sämtliche Endpunkte und leitet Anfragen an die internen Services weiter.
 - **pdf-ingest** – nimmt hochgeladene PDFs entgegen, speichert sie und löst das Extrahieren des Textes aus.
-- **text-extraction** – führt OCR aus und übergibt den erkannten Text an den Classifier.
+- **text-extraction** – führt OCR aus und übergibt den erkannten Text über `PIPELINE_RUN_URL` an den Pipeline Runner.
 - **classifier** – ruft OpenAI auf und speichert die Klassifikation samt Metriken in der Datenbank.
 - **prompt-manager** – verwaltet Prompt-Vorlagen für den Classifier.
 - **pipeline-manager** – speichert und verwaltet Pipelines.

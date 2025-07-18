@@ -64,7 +64,6 @@ struct GroupInput {
     favorite: bool,
 }
 
-
 #[derive(Serialize, Debug)]
 struct ErrorResponse {
     error: String,
@@ -502,7 +501,6 @@ async fn set_favorite(
     }))
 }
 
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -512,6 +510,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         message_broker_url: String::new(),
         openai_api_key: String::new(),
         class_prompt_id: 0,
+        pipeline_run_url: String::new(),
     });
     let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
     // create table if not exists
@@ -561,7 +560,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "CREATE TABLE IF NOT EXISTS group_prompts (group_id INTEGER NOT NULL REFERENCES prompt_groups(id) ON DELETE CASCADE, prompt_id INTEGER NOT NULL REFERENCES prompts(id) ON DELETE CASCADE, PRIMARY KEY (group_id, prompt_id))",
     ))
     .await?;
-
 
     let app = Router::new()
         .route("/health", get(health))
@@ -780,5 +778,4 @@ mod tests {
         assert_eq!(res.0.prompt_ids, vec![3]);
         assert!(res.0.favorite);
     }
-
 }
