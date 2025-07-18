@@ -6,13 +6,13 @@ use evalexpr::{
     Value,
 };
 
-use crate::dto::{StageScore, PromptResult};
-use crate::pipeline_graph::{Edge, EdgeType, PipelineGraph, PromptNode, PromptType};
-use crate::pipeline_graph::Status;
+use crate::dto::{PromptResult, StageScore};
 use crate::openai_executor::OpenAIExecutor;
+use crate::pipeline_graph::Status;
+use crate::pipeline_graph::{Edge, EdgeType, PipelineGraph, PromptNode, PromptType};
 use chrono::Utc;
-use tracing::debug;
 use regex::Regex;
+use tracing::debug;
 
 #[derive(Debug, Clone)]
 pub struct ResultData {
@@ -69,7 +69,8 @@ impl PipelineExecutor {
             .unwrap();
         for stage in &self.stage_scores {
             let key = format!("stage.{}.score", stage.stage_id);
-            ctx.set_value(key.into(), Value::from_float(stage.score)).ok();
+            ctx.set_value(key.into(), Value::from_float(stage.score))
+                .ok();
         }
         eval_boolean_with_context(expr, &ctx).unwrap_or(false)
     }
@@ -218,11 +219,7 @@ impl PipelineExecutor {
         self.compute_final();
     }
 
-    pub async fn run_with_openai(
-        &mut self,
-        openai: &OpenAIExecutor,
-        blocks: &serde_json::Value,
-    ) {
+    pub async fn run_with_openai(&mut self, openai: &OpenAIExecutor, blocks: &serde_json::Value) {
         let mut queue: VecDeque<(String, u8)> = self
             .graph
             .nodes
@@ -244,18 +241,22 @@ impl PipelineExecutor {
 
             let mut res = match node.type_ {
                 PromptType::AnalysisPrompt => {
-                    let mut r = openai.run_batch(&[node.clone()], blocks).await.pop().unwrap_or(PromptResult {
-                        prompt_id: node.id.clone(),
-                        prompt_type: node.type_.as_str().into(),
-                        status: Status::Done,
-                        result: Some(false),
-                        score: Some(0.0),
-                        answer: None,
-                        source: None,
-                        attempt: Some(attempt),
-                        started_at: Some(started.to_rfc3339()),
-                        finished_at: Some(Utc::now().to_rfc3339()),
-                    });
+                    let mut r = openai
+                        .run_batch(&[node.clone()], blocks)
+                        .await
+                        .pop()
+                        .unwrap_or(PromptResult {
+                            prompt_id: node.id.clone(),
+                            prompt_type: node.type_.as_str().into(),
+                            status: Status::Done,
+                            result: Some(false),
+                            score: Some(0.0),
+                            answer: None,
+                            source: None,
+                            attempt: Some(attempt),
+                            started_at: Some(started.to_rfc3339()),
+                            finished_at: Some(Utc::now().to_rfc3339()),
+                        });
                     ResultData {
                         result: r.result.unwrap_or(false),
                         score: r.score.unwrap_or(0.0),
@@ -290,10 +291,12 @@ impl PipelineExecutor {
                     if let Ok(meta) = serde_json::from_str::<MetaAction>(&node.text) {
                         match meta.action.as_str() {
                             "enable" => {
-                                self.status.insert(meta.target.clone(), PromptStatus::Pending);
+                                self.status
+                                    .insert(meta.target.clone(), PromptStatus::Pending);
                             }
                             "disable" => {
-                                self.status.insert(meta.target.clone(), PromptStatus::Skipped);
+                                self.status
+                                    .insert(meta.target.clone(), PromptStatus::Skipped);
                             }
                             _ => {}
                         }
@@ -321,7 +324,8 @@ impl PipelineExecutor {
                 res.finished_at = Some(Utc::now().to_rfc3339());
             }
 
-            self.history.push((id.clone(), res.clone(), attempt, node.type_.clone()));
+            self.history
+                .push((id.clone(), res.clone(), attempt, node.type_.clone()));
 
             if let Some(th) = node.confidence_threshold {
                 if res.score < th && attempt < 3 {
@@ -331,7 +335,8 @@ impl PipelineExecutor {
                 }
             }
 
-            self.status.insert(id.clone(), PromptStatus::Done(res.clone()));
+            self.status
+                .insert(id.clone(), PromptStatus::Done(res.clone()));
             self.compute_stage_scores();
 
             for edge in self.graph.edges.iter().filter(|e| e.source == id) {
@@ -353,18 +358,35 @@ impl PipelineExecutor {
             let mut total_w = 0.0;
             let mut sum = 0.0;
             let mut prompts = Vec::new();
+            let mut prompt_scores: HashMap<String, f64> = HashMap::new();
             for pid in &stage.prompt_ids {
                 if let Some(PromptStatus::Done(res)) = self.status.get(pid) {
                     let weight = self.get_node(pid).and_then(|n| n.weight).unwrap_or(1.0);
                     total_w += weight;
                     sum += weight * res.score;
                     prompts.push(pid.clone());
+                    prompt_scores.insert(pid.clone(), res.score);
                 }
             }
+
             if total_w > 0.0 {
+                let score = if let Some(formula) = &stage.score_formula {
+                    let mut f = formula.clone();
+                    for (pid, sc) in &prompt_scores {
+                        let re = Regex::new(&format!(r"\b{}\b", regex::escape(pid))).unwrap();
+                        f = re.replace_all(&f, sc.to_string()).into_owned();
+                    }
+                    match eval_float(&f) {
+                        Ok(v) => v,
+                        Err(_) => sum / total_w,
+                    }
+                } else {
+                    sum / total_w
+                };
+
                 self.stage_scores.push(StageScore {
                     stage_id: stage.id.clone(),
-                    score: sum / total_w,
+                    score,
                     prompts,
                 });
             }
@@ -545,5 +567,32 @@ mod tests {
         exec.run();
         assert!(matches!(exec.status.get("a"), Some(PromptStatus::Skipped)));
         assert_eq!(exec.history.len(), 2);
+    }
+
+    #[test]
+    fn stage_default_scoring() {
+        let graph = simple_graph("score >= 0.5");
+        let mut exec = PipelineExecutor::new(graph);
+        exec.run();
+        let stage = exec
+            .stage_scores()
+            .iter()
+            .find(|s| s.stage_id == "s1")
+            .unwrap();
+        assert_eq!(stage.score, 1.0);
+    }
+
+    #[test]
+    fn stage_formula_scoring() {
+        let mut graph = simple_graph("score >= 0.5");
+        graph.stages[0].score_formula = Some("0.5 * a".into());
+        let mut exec = PipelineExecutor::new(graph);
+        exec.run();
+        let stage = exec
+            .stage_scores()
+            .iter()
+            .find(|s| s.stage_id == "s1")
+            .unwrap();
+        assert!((stage.score - 0.5).abs() < f64::EPSILON);
     }
 }
