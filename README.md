@@ -98,3 +98,69 @@ The frontend expects four environment variables:
 service (defaults to `http://localhost:8082`), and `VITE_HISTORY_WS` for the
 history WebSocket (defaults to `ws://localhost:8090`).
 
+
+## Pipelines
+
+Pipelines describe how a sequence of prompts is executed by the `pipeline-runner`. Each
+prompt node has a `type` that determines its role in the chain. Supported types are
+`TriggerPrompt`, `AnalysisPrompt`, `FollowUpPrompt`, `DecisionPrompt`, `FinalPrompt`
+and `MetaPrompt`.
+
+Nodes are connected via edges. An edge may specify a `type` such as `always`,
+`onTrue`, `onFalse`, `onScore` or `onError` and an optional `condition` expression.
+The runner traverses edges only when the condition matches the result of the
+source node.
+
+Stages group multiple prompts together. Each stage can define a `scoreFormula`
+that combines the weighted scores of its prompts. After all stages are processed
+`finalScoring` evaluates its own `scoreFormula` and applies `labelRules` to
+produce the final result.
+
+### Defining and uploading pipelines
+
+A pipeline definition is a JSON document matching the `PipelineGraph` schema.
+Send it to the pipeline-manager via:
+
+```bash
+curl -X POST http://localhost:8087/pipelines \
+  -H 'Content-Type: application/json' \
+  -d @pipeline.json
+```
+
+The most recently created pipeline is considered active. Retrieve it using
+`GET /pipelines/active`. Editing or deleting a pipeline uses
+`PUT /pipelines/{id}` and `DELETE /pipelines/{id}`.
+
+### How pipeline-runner works
+
+The `pipeline-runner` subscribes to `layout-extracted` events from Kafka. For
+each event it fetches the active pipeline from the pipeline-manager, executes
+all prompts using OpenAI and stores the intermediate results in the
+`prompt_results` table. The aggregated outcome is written to
+`pipeline_runs` and published as a `pipeline-result` event.
+
+### Example pipeline
+
+```json
+{
+  "nodes": [
+    { "id": "start", "text": "Trigger", "type": "TriggerPrompt" },
+    { "id": "analysis", "text": "Analyse Text", "type": "AnalysisPrompt", "weight": 1.0 },
+    { "id": "final", "text": "Ergebnis", "type": "FinalPrompt" }
+  ],
+  "edges": [
+    { "source": "start", "target": "analysis", "type": "always" },
+    { "source": "analysis", "target": "final", "type": "onScore", "condition": "score >= 0.6" }
+  ],
+  "stages": [
+    { "id": "analysis", "name": "Analyse", "promptIds": ["analysis"], "scoreFormula": null }
+  ],
+  "finalScoring": {
+    "scoreFormula": "analysis.score",
+    "labelRules": [
+      { "if": "score >= 0.6", "label": "OK" },
+      { "if": "score < 0.6", "label": "NOT_OK" }
+    ]
+  }
+}
+```
