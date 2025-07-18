@@ -1,0 +1,11 @@
+.palette { display:flex; gap:0.5rem; margin-bottom:0.5rem; overflow-x:auto; }
+.palette-item { cursor:grab; padding:0.4rem 0.8rem; border-radius:6px; background:#f3f4f6; transition:.2s; }
+.palette-item:hover { background:#e5e7eb; transform:scale(1.05); }
+.node { border-radius:8px; padding:0.6rem 1rem; color:#fff; }
+.node.TriggerPrompt { background:#eab308; }
+.node.AnalysisPrompt { background:#22c55e; }
+.node.FollowUpPrompt { background:#0ea5e9; }
+.node.DecisionPrompt { background:#f97316; }
+.node.FinalPrompt { background:#a855f7; }
+.node.MetaPrompt { background:#64748b; }
+.badge { margin-left:0.5rem; background:#fff2; padding:0 0.4rem; border-radius:4px; font-size:0.75rem; }
