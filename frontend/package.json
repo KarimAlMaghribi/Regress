@@ -23,7 +23,7 @@
     "react-beautiful-dnd": "^13.1.1",
     "react-dom": "^18.0.0",
     "react-dropzone": "^14.2.3",
-    "react-flow-renderer": "^10.3.17",
+    "reactflow": "^11.11.4",
     "react-hot-toast": "^2.4.1",
     "react-pdf": "^7.0.0",
     "react-router-dom": "^6.4.0",
@@ -31,7 +31,8 @@
     "recharts": "^2.6.2",
     "socket.io-client": "^4.5.4",
     "xlsx": "^0.18.5",
-    "zod": "^3.22.4"
+    "zod": "^3.22.4",
+    "use-undo": "^1.1.1"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",
