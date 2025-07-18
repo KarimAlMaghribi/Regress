@@ -54,7 +54,8 @@ const emojiMap: Record<PromptNode['type'], string> = {
 };
 
 function PromptNodeComp({ data }: NodeProps<PromptNode>) {
-  const text = data.text.length > 40 ? data.text.slice(0, 37) + '…' : data.text;
+  const fullText = data?.text || '';
+  const text = fullText.length > 40 ? fullText.slice(0, 37) + '…' : fullText;
   return (
     <Box sx={{ p: 1, border: 1, borderRadius: 1, bgcolor: 'background.paper', textAlign: 'center' }}>
       <Handle type="target" position={Position.Top} />
