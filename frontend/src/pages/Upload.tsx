@@ -1,171 +1,68 @@
-import React, { useCallback, useState, useEffect } from 'react';
-import { useDropzone } from 'react-dropzone';
-import {
-  Box, Typography, Paper, Button, IconButton,
-} from '@mui/material';
-import CloudUploadIcon from '@mui/icons-material/CloudUpload';
-import DeleteIcon from '@mui/icons-material/Delete';
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
-import { motion } from 'framer-motion';
-import PageHeader from '../components/PageHeader';
+import React, { useState, useEffect } from 'react';
+import { Box, Button, LinearProgress, Typography } from '@mui/material';
+import { useNavigate } from 'react-router-dom';
+import DropZone from '../components/DropZone';
+import DocumentPreview from '../components/DocumentPreview';
 
-interface UploadEntry {
-  id: number;
-  pdfId: number | null;
-  status: string;
-  pdfUrl: string;
-  ocr: boolean;
+interface LayoutPage {
+  width: number;
+  height: number;
+  blocks: { bbox: [number, number, number, number]; text: string }[];
 }
+interface Layout { pages: LayoutPage[] }
 
 export default function Upload() {
-  const [files, setFiles] = useState<File[]>([]);
-  const [message, setMessage] = useState<string>('');
-  const [entries, setEntries] = useState<UploadEntry[]>([]);
+  const [uploadId, setUploadId] = useState<number | null>(null);
+  const [status, setStatus] = useState<string>('');
+  const [layout, setLayout] = useState<Layout | null>(null);
+  const navigate = useNavigate();
+  const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
 
-  const load = () => {
-    const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-    Promise.all([
-      fetch(`${ingest}/uploads`).then(r => r.json()),
-      fetch('http://localhost:8083/texts').then(r => r.json()),
-    ])
-      .then(([uploadData, texts]: [any[], { id: number }[]]) => {
-        const ocrIds = texts.map(t => t.id);
-        const mapped: UploadEntry[] = uploadData.map((d: any) => ({
-          id: d.id,
-          pdfId: d.pdf_id ?? null,
-          status: d.status,
-          pdfUrl: d.pdf_id ? `${ingest}/pdf/${d.pdf_id}` : '',
-          ocr: d.pdf_id ? ocrIds.includes(d.pdf_id) : false,
-        }));
-        setEntries(mapped);
-      })
-      .catch(e => console.error('load uploads', e));
-  };
-
-  const onDrop = useCallback((sel: File[]) => {
-    console.log('Selected files', sel);
-    setFiles(sel);
-  }, []);
-
-  useEffect(load, []);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    multiple: true,
-    accept: { 'application/pdf': ['.pdf'], 'application/zip': ['.zip'] },
-  });
-
-  const upload = () => {
-    if (!files.length) return;
-    console.log('Uploading files', files.map(f => f.name));
+  const handleFile = async (file: File) => {
     const form = new FormData();
-    files.forEach(f => form.append('file', f));
-    const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-    fetch(`${ingest}/upload`, { method: 'POST', body: form })
-      .then(async r => {
-        if (!r.ok) {
-          const text = await r.text();
-          throw new Error(text || `HTTP ${r.status}`);
-        }
-        return r.json();
-      })
-      .then(d => {
-        console.log('Upload result', d);
-        setMessage(`Upload erfolgreich. ID: ${d.id}`);
-        setFiles([]);
-        load();
-      })
-      .catch(err => {
-        console.error('Upload error', err);
-        setMessage(`Error: ${(err as Error).message}`);
-      });
+    form.append('file', file);
+    const res = await fetch(`${ingest}/upload`, { method: 'POST', body: form });
+    const data = await res.json();
+    setUploadId(Number(data.id));
+    setStatus('uploading');
   };
 
-  const deletePdf = (id: number) => {
-    const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-    fetch(`${ingest}/pdf/${id}`, { method: 'DELETE' })
-      .then(() => load())
-      .catch(e => console.error('delete pdf', e));
-  };
-
-  const dropStyles = {
-    p: 6,
-    border: '2px dashed',
-    borderColor: 'primary.main',
-    borderRadius: 3,
-    textAlign: 'center',
-    cursor: 'pointer',
-    background:
-      'linear-gradient(135deg, rgba(108,93,211,0.1), rgba(58,134,255,0.05))',
-    transition: 'border 0.2s ease',
-  } as const;
-
-  const columns: GridColDef[] = [
-    { field: 'pdfId', headerName: 'PDF', width: 90 },
-    { field: 'status', headerName: 'Status', flex: 1 },
-    { field: 'ocr', headerName: 'OCR', width: 80, valueGetter: p => (p.row.ocr ? 'Ja' : 'Nein') },
-    {
-      field: 'actions',
-      headerName: '',
-      sortable: false,
-      width: 80,
-      renderCell: params => (
-        <IconButton size="small" onClick={() => deletePdf(params.row.pdfId)} disabled={!params.row.pdfId}>
-          <DeleteIcon fontSize="small" />
-        </IconButton>
-      ),
-    },
-  ];
+  useEffect(() => {
+    if (!uploadId) return;
+    let int: NodeJS.Timer;
+    const poll = async () => {
+      const res = await fetch(`${ingest}/uploads/${uploadId}/status`);
+      const d = await res.json();
+      setStatus(d.status);
+      if (d.status === 'ocr_done') {
+        clearInterval(int);
+        const layoutRes = await fetch(`${ingest}/pdf/${uploadId}/layout`);
+        const lay = await layoutRes.json();
+        setLayout(lay);
+      }
+    };
+    poll();
+    int = setInterval(poll, 2000);
+    return () => clearInterval(int);
+  }, [uploadId]);
 
   return (
     <Box>
-      <PageHeader
-        title="Upload"
-        breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Upload' }]}
-        actions={<Button variant="outlined" size="small" onClick={load}>Reload</Button>}
-      />
-      <Paper
-        component={motion.div}
-        whileHover={{ scale: 1.03 }}
-        whileTap={{ scale: 0.99 }}
-        {...getRootProps()}
-        sx={dropStyles}
-      >
-        <input {...getInputProps()} />
-        <CloudUploadIcon sx={{ fontSize: 56, mb: 2 }} />
-        <Typography variant="h6">
-          {isDragActive
-            ? 'Ablegen zum Hochladen'
-            : files.length
-            ? files.map(f => f.name).join(', ')
-            : 'Datei hierher ziehen oder klicken ...'}
-        </Typography>
-      </Paper>
-      <Button
-        variant="contained"
-        onClick={upload}
-        disabled={!files.length}
-        component={motion.button}
-        whileHover={{ y: -2 }}
-        sx={{ mt: 2 }}
-      >
-        Upload
-      </Button>
-      {message && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-          <Typography sx={{ mt: 2 }}>{message}</Typography>
-        </motion.div>
+      {!uploadId && <DropZone onUpload={handleFile} />}
+      {uploadId && status !== 'ocr_done' && (
+        <Box sx={{ mt: 4 }}>
+          <LinearProgress />
+          <Typography sx={{ mt: 1 }}>🔄 OCR läuft…</Typography>
+        </Box>
       )}
-      <Paper sx={{ mt: 3 }}>
-        <DataGrid
-          autoHeight
-          disableRowSelectionOnClick
-          rows={entries}
-          columns={columns}
-          pageSizeOptions={[5, 10, 25]}
-          initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
-        />
-      </Paper>
+      {layout && uploadId && (
+        <Box sx={{ mt: 2 }}>
+          <DocumentPreview pdfUrl={`${ingest}/pdf/${uploadId}`} page={layout.pages[0]} />
+          <Button variant="contained" sx={{ mt: 2 }} onClick={() => navigate(`/analyse?id=${uploadId}`)}>
+            ➡️ Pipeline starten
+          </Button>
+        </Box>
+      )}
     </Box>
   );
 }
