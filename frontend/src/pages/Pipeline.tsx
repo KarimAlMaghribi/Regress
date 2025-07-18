@@ -1,230 +1,234 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import ReactFlow, {
-  MiniMap,
+  ReactFlowProvider,
   Controls,
   Background,
-  Handle,
-  Position,
   Node,
   Edge,
   NodeProps,
-  EdgeProps,
-  useNodesState,
-  useEdgesState,
-  addEdge,
-  BaseEdge,
-  EdgeLabelRenderer,
-  getBezierPath,
 } from 'reactflow';
-import 'reactflow/dist/style.css';
-import useUndo from 'use-undo';
-import { Box, Drawer, TextField, Button } from '@mui/material';
-import PageHeader from '../components/PageHeader';
-import { examplePipeline, PromptNode, Edge as PipelineEdge } from '../types/PipelineGraph';
-import { useNavigate } from 'react-router-dom';
+import StageScorePanel from '../components/StageScorePanel';
+import EdgeConditionPopover from '../components/EdgeConditionPopover';
+import FinalPromptInfo from '../components/FinalPromptInfo';
+import useSimulation from '../hooks/useSimulation';
+import { useParams } from 'react-router-dom';
+import { Box, Button } from '@mui/material';
+import { toast } from 'react-hot-toast';
+import { PipelineGraph } from '../types/PipelineGraph';
+import PromptNode from '../components/PromptNode';
+import { buildGraphFromElements } from '../utils/graph';
+import '../styles/pipeline.css';
 
-function toFlowNodes(nodes: PromptNode[]): Node<PromptNode>[] {
-  return nodes.map((n, i) => ({
-    id: n.id,
-    type: n.type,
-    data: n,
-    position: { x: i * 150, y: 0 },
-  }));
-}
+export default function Pipeline() {
+  const { id } = useParams<{ id?: string }>();
+  const pipelineId = id ?? 'active';
 
-type FlowEdge = Edge<EdgeData> & PipelineEdge & { id: string };
-
-function toFlowEdges(edges: PipelineEdge[]): FlowEdge[] {
-  return edges.map((e, i) => ({
-    id: e.id ?? `e-${i}`,
-    source: e.source,
-    target: e.target,
-    type: e.type,
-    data: { type: e.type, label: e.condition, onChange: () => {} },
-  }));
-}
-
-const emojiMap: Record<PromptNode['type'], string> = {
-  TriggerPrompt: '🚦',
-  AnalysisPrompt: '🔍',
-  FollowUpPrompt: '🔁',
-  DecisionPrompt: '⚖️',
-  FinalPrompt: '🎯',
-  MetaPrompt: '🧩',
-};
-
-function PromptNodeComp({ data }: NodeProps<PromptNode>) {
-  const fullText = data?.text || '';
-  const text = fullText.length > 40 ? fullText.slice(0, 37) + '…' : fullText;
-  return (
-    <Box sx={{ p: 1, border: 1, borderRadius: 1, bgcolor: 'background.paper', textAlign: 'center' }}>
-      <Handle type="target" position={Position.Top} />
-      {emojiMap[data.type]} {text}
-      <Handle type="source" position={Position.Bottom} />
-    </Box>
-  );
-}
-
-const nodeTypes = {
-  TriggerPrompt: PromptNodeComp,
-  AnalysisPrompt: PromptNodeComp,
-  FollowUpPrompt: PromptNodeComp,
-  DecisionPrompt: PromptNodeComp,
-  FinalPrompt: PromptNodeComp,
-  MetaPrompt: PromptNodeComp,
-};
-
-const edgeColor: Record<string, string> = {
-  onTrue: '#2e7d32',
-  onFalse: '#d32f2f',
-  onScore: '#ed6c02',
-  always: '#9e9e9e',
-};
-
-type EdgeData = { type?: string; label?: string; onChange: (id: string, value: string) => void };
-interface EditableEdgeProps extends EdgeProps<EdgeData> {}
-
-const EditableEdge = ({ id, sourceX, sourceY, targetX, targetY, markerEnd, data }: EditableEdgeProps) => {
-  const [path, labelX, labelY] = getBezierPath({ sourceX, sourceY, targetX, targetY });
-  return (
-    <>
-      <BaseEdge path={path} markerEnd={markerEnd} style={{ stroke: edgeColor[data?.type || 'always'] }} />
-      <EdgeLabelRenderer>
-        <foreignObject width={80} height={30} x={labelX - 40} y={labelY - 15} style={{ overflow: 'visible' }}>
-          <input
-            style={{ width: '100%', textAlign: 'center', border: '1px solid #ccc', background: 'transparent' }}
-            value={data?.label || ''}
-            onChange={e => data?.onChange(id, e.target.value)}
-          />
-        </foreignObject>
-      </EdgeLabelRenderer>
-    </>
-  );
-};
-
-const edgeTypes = { default: EditableEdge };
-
-interface PipelineProps {
-  initial?: typeof examplePipeline;
-}
-
-export default function Pipeline({ initial = examplePipeline }: PipelineProps) {
-  const navigate = useNavigate();
-  const [graphState, { set: setGraph, undo, redo }] = useUndo(initial);
-  const { nodes: initialNodes, edges: initialEdges } = graphState.present;
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node<PromptNode>>(toFlowNodes(initialNodes));
-  const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>(toFlowEdges(initialEdges));
-  const [selection, setSelection] = useState<{ node?: string; edge?: string }>({});
-
-  useEffect(() => {
-    setNodes(toFlowNodes(initialNodes));
-    setEdges(toFlowEdges(initialEdges));
-  }, [initialNodes, initialEdges]);
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.ctrlKey && e.key === 'z') undo();
-      if (e.ctrlKey && e.key === 'y') redo();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [undo, redo]);
-
-  const save = async () => {
-    await fetch('/pipelines', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(graphState.present),
+  const [nodes, setNodes] = useState<Node[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
+  const [rfInstance, setRfInstance] = useState<any>(null);
+  const [graph, setGraph] = useState<PipelineGraph | null>(null);
+  const [stageScores, setStageScores] = useState<{ id: string; name: string; score: number }[]>([]);
+  const [finalInfo, setFinalInfo] = useState<{ score: number; label: string }>({ score: 0, label: '' });
+  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
+  const repeatNode = (id: string) => {
+    setNodes(ns => {
+      const orig = ns.find(n => n.id === id);
+      if (!orig) return ns;
+      return ns.concat({
+        ...orig,
+        id: `n_${Date.now()}`,
+        position: { x: orig.position.x + 40, y: orig.position.y + 40 },
+      });
     });
   };
-  const run = async () => {
-    const res = await fetch('/pipeline/run', {
+  const NodeWrapper = ({ id, data }: NodeProps<any>) => (
+    <PromptNode data={data} onRepeat={() => repeatNode(id)} />
+  );
+  const nodeTypesCustom = { default: NodeWrapper };
+  const nodeTypes = nodeTypesCustom;
+  const simulate = useSimulation(
+    graph || { nodes: [], edges: [], stages: [], finalScoring: { scoreFormula: '0', labelRules: [] } },
+  );
+
+  const runPipeline = () => {
+    const g: PipelineGraph = buildGraphFromElements(nodes, edges);
+    setGraph(g);
+    fetch('/pipeline/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(graphState.present),
-    });
-    const data = await res.json();
-    navigate(`/result/${data.id}`);
+      body: JSON.stringify(g),
+    })
+      .then(r => r.json())
+      .then(res => {
+        setNodes(ns =>
+          ns.map(n => {
+            const h = res.history.find((h: any) => h.prompt_id === (n.data as any).promptId);
+            return h
+              ? {
+                  ...n,
+                  data: {
+                    ...n.data,
+                    score: h.score,
+                    answer: h.answer,
+                    source: h.answer_source,
+                  },
+                }
+              : n;
+          }),
+        );
+        const stageMap = g.stages.map(s => {
+          const rel = res.history.filter((h: any) => s.promptIds.includes(h.prompt_id));
+          const sc = rel.length ? rel.reduce((a: number, h: any) => a + (h.score || 0), 0) / rel.length : 0;
+          return { id: s.id, name: s.name, score: sc };
+        });
+        setStageScores(stageMap);
+        setFinalInfo({ score: res.score, label: res.label });
+        toast.success(
+          `\ud83c\udfc1 Pipeline finished \u2013 ${res.label} (score ${res.score.toFixed(2)})`,
+        );
+      });
   };
 
-  const onConnect = useCallback(
-    (params: any) => {
-      setEdges(eds =>
-        addEdge(
-          { ...params, data: { type: 'always', label: '', onChange: handleLabelChange } } as any,
-          eds,
-        ),
+  const savePipeline = () => {
+    const graph: PipelineGraph = buildGraphFromElements(nodes, edges);
+    fetch('/pipelines', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: pipelineId, data: graph }),
+    }).then(() => toast.success('\ud83d\udcbe Pipeline gespeichert'));
+  };
+
+  const handleDrop = useCallback(
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const type = e.dataTransfer.getData('application/reactflow');
+      if (!type || !rfInstance) return;
+      const pos = rfInstance.project({ x: e.clientX, y: e.clientY });
+      setNodes(ns =>
+        ns.concat({
+          id: `n_${Date.now()}`,
+          type: 'default',
+          position: pos,
+          data: { label: type, type, promptId: type },
+        }),
       );
     },
-    [setEdges],
+    [rfInstance],
   );
 
-  const handleLabelChange = useCallback(
-    (id: string, value: string) => {
-      setEdges(eds => eds.map(e => (e.id === id ? { ...e, data: { ...e.data, label: value, onChange: handleLabelChange } } : e)));
-    },
-    [setEdges],
-  );
+  const onEdgeClick = (event: React.MouseEvent, edge: Edge) => {
+    setSelectedEdge(edge);
+    setAnchorEl(event.currentTarget as HTMLElement);
+  };
+
+  const handleSaveEdge = (type: string, condition: string) => {
+    setEdges(es =>
+      es.map(e =>
+        e.id === selectedEdge?.id
+          ? { ...e, data: { ...e.data, edge_type: type, label: condition }, animated: ['onTrue', 'onScore'].includes(type), label: condition }
+          : e,
+      ),
+    );
+  };
 
   useEffect(() => {
-    setGraph({ nodes, edges });
-  }, [nodes, edges, setGraph]);
+    setNodes(ns =>
+      ns.map((n, i) => ({
+        ...n,
+        style: i === simulate.currentStep ? { boxShadow: '0 0 0 2px red' } : {},
+      })),
+    );
+  }, [simulate.currentStep]);
+
+  useEffect(() => {
+    fetch(`/pipelines/${pipelineId}`)
+      .then(r => r.json())
+      .then((g: PipelineGraph) => {
+        const ns: Node[] = g.nodes.map(n => ({
+          id: n.id,
+          data: { label: n.text, type: n.type, promptId: n.id, confidenceThreshold: n.confidenceThreshold },
+          position: { x: Math.random() * 400, y: Math.random() * 400 },
+          type: 'default',
+        }));
+        const es: Edge[] = g.edges.map(e => ({
+          id: `${e.source}-${e.target}`,
+          source: e.source,
+          target: e.target,
+          animated: ['onTrue', 'onScore'].includes(e.type ?? 'always'),
+          label: e.condition ?? undefined,
+          data: { edge_type: e.type, label: e.condition },
+        }));
+        setNodes(ns);
+        setEdges(es);
+      });
+  }, [pipelineId]);
 
   return (
-    <Box sx={{ height: 'calc(100vh - 64px)' }}>
-      <PageHeader
-        title="Pipeline"
-        actions={
-          <>
-            <Button onClick={save}>📤 Speichern</Button>
-            <Button onClick={run}>▶️ Testlauf</Button>
-          </>
-        }
-      />
-      <ReactFlow
-        nodes={nodes}
-        edges={edges.map(e => ({ ...e, data: { ...e.data, onChange: handleLabelChange } }))}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        onConnect={onConnect}
-        onSelectionChange={sel => setSelection({ node: sel.nodes?.[0]?.id, edge: sel.edges?.[0]?.id })}
-        nodeTypes={nodeTypes}
-        edgeTypes={edgeTypes}
-        fitView
-      >
-        <MiniMap />
-        <Controls />
-        <Background variant="dots" />
-      </ReactFlow>
-      <Drawer anchor="right" open={!!selection.node || !!selection.edge} onClose={() => setSelection({})}>
-        <Box sx={{ p: 2, width: 240 }}>
-          {selection.node &&
-            nodes
-              .filter(n => n.id === selection.node)
-              .map(n => (
-                <TextField
-                  key={n.id}
-                  label="Text"
-                  value={n.data.text}
-                  onChange={e => setNodes(ns => ns.map(no => (no.id === n.id ? { ...no, data: { ...no.data, text: e.target.value } } : no)))}
-                  fullWidth
-                  multiline
-                />
-              ))}
-          {selection.edge &&
-            edges
-              .filter(e => e.id === selection.edge)
-              .map(e => (
-                <TextField
-                  key={e.id}
-                  label="Label"
-                  value={e.data?.label || ''}
-                  onChange={ev => handleLabelChange(e.id, ev.target.value)}
-                  fullWidth
-                />
-              ))}
+    <Box>
+      <Box sx={{ mb: 1 }}>
+        <Button className="btn-run" variant="contained" onClick={runPipeline} sx={{ mr: 1 }}>
+          ▶️ Run Pipeline
+        </Button>
+        <Button className="btn-save" variant="outlined" onClick={savePipeline}>
+          💾 Save
+        </Button>
+        <Button onClick={simulate.play} sx={{ ml: 1 }}>▶️ Simulate</Button>
+        <Button onClick={simulate.pause}>⏸️ Pause</Button>
+        <Button onClick={simulate.prev}>⏮️ Prev</Button>
+        <Button onClick={simulate.next}>⏭️ Next</Button>
+      </Box>
+      <StageScorePanel stages={stageScores} />
+      <FinalPromptInfo score={finalInfo.score} label={finalInfo.label} rules={graph?.finalScoring.labelRules || []} />
+      <Box sx={{ display: 'flex', height: 'calc(100vh - 64px - 48px)' }}>
+        <aside className="palette" style={{ width: 120, padding: 8 }}>
+          {[
+            ['TriggerPrompt', '🟡 Trigger'],
+            ['AnalysisPrompt', '🟢 Analysis'],
+            ['FollowUpPrompt', '🔁 Follow‑Up'],
+            ['DecisionPrompt', '⚖️ Decision'],
+            ['FinalPrompt', '🟣 Final'],
+            ['MetaPrompt', '⚙️ Meta'],
+          ].map(([t, l]) => (
+            <div
+              key={t}
+              className="palette-item"
+              draggable
+              onDragStart={e => {
+                e.dataTransfer.setData('application/reactflow', t);
+                e.dataTransfer.effectAllowed = 'move';
+              }}
+            >
+              {l}
+            </div>
+          ))}
+        </aside>
+        <Box sx={{ flexGrow: 1 }}>
+          <ReactFlowProvider>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onInit={setRfInstance}
+              deleteKeyCode={46}
+              onDragOver={e => e.preventDefault()}
+              onDrop={handleDrop}
+              onEdgeClick={onEdgeClick}
+              style={{ width: '100%', height: '100%' }}
+            >
+              <Controls />
+              <Background color="#aaa" gap={16} />
+            </ReactFlow>
+          </ReactFlowProvider>
+          <EdgeConditionPopover
+            edge={selectedEdge as any}
+            anchorEl={anchorEl}
+            open={Boolean(selectedEdge)}
+            onClose={() => setSelectedEdge(null)}
+            onSave={handleSaveEdge}
+          />
         </Box>
-      </Drawer>
+      </Box>
     </Box>
   );
 }
