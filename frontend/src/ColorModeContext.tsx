@@ -1,6 +1,6 @@
 import React, { createContext, useMemo, useState } from 'react';
 import { ThemeProvider, CssBaseline } from '@mui/material';
-import { buildTheme } from './theme';
+import theme from './theme';
 
 export const ColorModeContext = createContext({ toggle: () => {} });
 
@@ -12,7 +12,7 @@ export default function ColorModeProvider({ children }: { children: React.ReactN
   );
   return (
     <ColorModeContext.Provider value={colorMode}>
-      <ThemeProvider theme={buildTheme(mode)}>
+      <ThemeProvider theme={theme}>
         <CssBaseline />
         {children}
       </ThemeProvider>
