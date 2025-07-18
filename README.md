@@ -54,12 +54,15 @@ The text-extraction service triggers a pipeline run via the URL specified in
 
 1. Upload a PDF via `POST http://localhost:8081/upload` with a multipart field
    named `file`. The response contains the generated id.
-2. The `text-extraction` service processes the file asynchronously and publishes
+2. Poll `GET http://localhost:8081/uploads/{id}/status` until the returned
+   status is `ready`. Once ready, fetch the extracted layout with
+   `GET http://localhost:8081/pdf/{id}/layout`.
+3. The `text-extraction` service processes the file asynchronously and publishes
    a `text-extracted` event.
-3. The `pipeline-runner` consumes that event, runs the active pipeline using
+4. The `pipeline-runner` consumes that event, runs the active pipeline using
    OpenAI and stores the result in the `pipeline_runs` and `prompt_results` tables.
    Poll `GET http://localhost:8084/runs/{id}` until data is returned.
-4. To re-run classification on already extracted texts, first fetch available
+5. To re-run classification on already extracted texts, first fetch available
    ids via `GET http://localhost:8083/texts` and then submit them to
    `POST http://localhost:8083/analyze` together with a prompt. The endpoint does
    not repeat OCR but simply republishes a `text-extracted` event to start
