@@ -5,6 +5,8 @@ import ReactFlow, {
   Background,
   Handle,
   Position,
+  Node,
+  Edge,
   NodeProps,
   EdgeProps,
   useNodesState,
@@ -20,6 +22,27 @@ import { Box, Drawer, TextField, Button } from '@mui/material';
 import PageHeader from '../components/PageHeader';
 import { examplePipeline, PromptNode, Edge as PipelineEdge } from '../types/PipelineGraph';
 import { useNavigate } from 'react-router-dom';
+
+function toFlowNodes(nodes: PromptNode[]): Node<PromptNode>[] {
+  return nodes.map((n, i) => ({
+    id: n.id,
+    type: n.type,
+    data: n,
+    position: { x: i * 150, y: 0 },
+  }));
+}
+
+type FlowEdge = Edge<EdgeData> & PipelineEdge & { id: string };
+
+function toFlowEdges(edges: PipelineEdge[]): FlowEdge[] {
+  return edges.map((e, i) => ({
+    id: e.id ?? `e-${i}`,
+    source: e.source,
+    target: e.target,
+    type: e.type,
+    data: { type: e.type, label: e.condition, onChange: () => {} },
+  }));
+}
 
 const emojiMap: Record<PromptNode['type'], string> = {
   TriggerPrompt: '🚦',
@@ -88,17 +111,13 @@ export default function Pipeline({ initial = examplePipeline }: PipelineProps) {
   const navigate = useNavigate();
   const [graphState, { set: setGraph, undo, redo }] = useUndo(initial);
   const { nodes: initialNodes, edges: initialEdges } = graphState.present;
-  const [nodes, setNodes, onNodesChange] = useNodesState<PromptNode>(initialNodes as any);
-  const [edges, setEdges, onEdgesChange] = useEdgesState<PipelineEdge & { data: EdgeData }>(
-    initialEdges.map(e => ({ ...e, data: { type: e.type, label: e.condition, onChange: () => {} } })) as any,
-  );
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<PromptNode>>(toFlowNodes(initialNodes));
+  const [edges, setEdges, onEdgesChange] = useEdgesState<FlowEdge>(toFlowEdges(initialEdges));
   const [selection, setSelection] = useState<{ node?: string; edge?: string }>({});
 
   useEffect(() => {
-    setNodes(initialNodes as any);
-    setEdges(
-      initialEdges.map(e => ({ ...e, data: { type: e.type, label: e.condition, onChange: handleLabelChange } })) as any,
-    );
+    setNodes(toFlowNodes(initialNodes));
+    setEdges(toFlowEdges(initialEdges));
   }, [initialNodes, initialEdges]);
 
   useEffect(() => {
