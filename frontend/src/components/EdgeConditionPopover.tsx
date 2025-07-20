@@ -10,7 +10,7 @@ import {
 import { Edge } from 'reactflow';
 
 interface Props {
-  edge: Edge;
+  edge: Edge | null;
   anchorEl: HTMLElement | null;
   open: boolean;
   onClose: () => void;
@@ -18,8 +18,8 @@ interface Props {
 }
 
 export default function EdgeConditionPopover({ edge, anchorEl, open, onClose, onSave }: Props) {
-  const [type, setType] = useState<string>((edge.data as any)?.edge_type ?? 'always');
-  const [cond, setCond] = useState<string>((edge.data as any)?.label ?? '');
+  const [type, setType] = useState<string>((edge?.data as any)?.edge_type ?? 'always');
+  const [cond, setCond] = useState<string>((edge?.data as any)?.label ?? '');
 
   const handleSave = () => {
     onSave(type, cond);

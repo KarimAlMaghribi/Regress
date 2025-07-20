@@ -220,13 +220,15 @@ export default function Pipeline() {
               <Background color="#aaa" gap={16} />
             </ReactFlow>
           </ReactFlowProvider>
-          <EdgeConditionPopover
-            edge={selectedEdge as any}
-            anchorEl={anchorEl}
-            open={Boolean(selectedEdge)}
-            onClose={() => setSelectedEdge(null)}
-            onSave={handleSaveEdge}
-          />
+          {selectedEdge && (
+            <EdgeConditionPopover
+              edge={selectedEdge}
+              anchorEl={anchorEl}
+              open
+              onClose={() => setSelectedEdge(null)}
+              onSave={handleSaveEdge}
+            />
+          )}
         </Box>
       </Box>
     </Box>
