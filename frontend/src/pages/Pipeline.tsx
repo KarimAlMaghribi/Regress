@@ -8,11 +8,12 @@ import ReactFlow, {
   NodeProps,
 } from 'reactflow';
 import StageScorePanel from '../components/StageScorePanel';
-import EdgeConditionPopover from '../components/EdgeConditionPopover';
 import FinalPromptInfo from '../components/FinalPromptInfo';
+import NodeEditPanel from '../components/NodeEditPanel';
+import EdgeEditPanel from '../components/EdgeEditPanel';
 import useSimulation from '../hooks/useSimulation';
 import { useParams } from 'react-router-dom';
-import { Box, Button } from '@mui/material';
+import { Box, Button, Drawer, Typography, useMediaQuery } from '@mui/material';
 import { toast } from 'react-hot-toast';
 import { PipelineGraph } from '../types/PipelineGraph';
 import PromptNode from '../components/PromptNode';
@@ -29,8 +30,11 @@ export default function Pipeline() {
   const [graph, setGraph] = useState<PipelineGraph | null>(null);
   const [stageScores, setStageScores] = useState<{ id: string; name: string; score: number }[]>([]);
   const [finalInfo, setFinalInfo] = useState<{ score: number; label: string }>({ score: 0, label: '' });
-  const [anchorEl, setAnchorEl] = useState<HTMLElement | null>(null);
+  const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
+  const isMobile = useMediaQuery('(max-width:1024px)');
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const repeatNode = (id: string) => {
     setNodes(ns => {
       const orig = ns.find(n => n.id === id);
@@ -117,16 +121,41 @@ export default function Pipeline() {
     [rfInstance],
   );
 
-  const onEdgeClick = (event: React.MouseEvent, edge: Edge) => {
+  const onEdgeClick = (_: React.MouseEvent, edge: Edge) => {
     setSelectedEdge(edge);
-    setAnchorEl(event.currentTarget as HTMLElement);
+    setSelectedNode(null);
+    if (isMobile) setSidebarOpen(true);
   };
 
-  const handleSaveEdge = (type: string, condition: string) => {
+  const onNodeClick = (_: React.MouseEvent, node: Node) => {
+    setSelectedNode(node);
+    setSelectedEdge(null);
+    if (isMobile) setSidebarOpen(true);
+  };
+
+  const handleSaveNode = (
+    id: string,
+    data: { label: string; weight?: number; confidenceThreshold?: number },
+  ) => {
+    setNodes(ns =>
+      ns.map(n =>
+        n.id === id
+          ? { ...n, data: { ...n.data, ...data } }
+          : n,
+      ),
+    );
+  };
+
+  const handleSaveEdge = (id: string, type: string, condition: string) => {
     setEdges(es =>
       es.map(e =>
-        e.id === selectedEdge?.id
-          ? { ...e, data: { ...e.data, edge_type: type, label: condition }, animated: ['onTrue', 'onScore'].includes(type), label: condition }
+        e.id === id
+          ? {
+              ...e,
+              data: { ...e.data, edge_type: type, label: condition },
+              animated: ['onTrue', 'onScore'].includes(type),
+              label: type === 'onScore' ? condition : undefined,
+            }
           : e,
       ),
     );
@@ -179,31 +208,71 @@ export default function Pipeline() {
         <Button onClick={simulate.next}>⏭️ Next</Button>
       </Box>
       <StageScorePanel stages={stageScores} />
-      <FinalPromptInfo score={finalInfo.score} label={finalInfo.label} rules={graph?.finalScoring.labelRules || []} />
-      <Box sx={{ display: 'flex', height: 'calc(100vh - 64px - 48px)' }}>
-        <aside className="palette" style={{ width: 120, padding: 8 }}>
-          {[
-            ['TriggerPrompt', '🟡 Trigger'],
-            ['AnalysisPrompt', '🟢 Analysis'],
-            ['FollowUpPrompt', '🔁 Follow‑Up'],
-            ['DecisionPrompt', '⚖️ Decision'],
-            ['FinalPrompt', '🟣 Final'],
-            ['MetaPrompt', '⚙️ Meta'],
-          ].map(([t, l]) => (
-            <div
-              key={t}
-              className="palette-item"
-              draggable
-              onDragStart={e => {
-                e.dataTransfer.setData('application/reactflow', t);
-                e.dataTransfer.effectAllowed = 'move';
-              }}
-            >
-              {l}
-            </div>
-          ))}
-        </aside>
-        <Box sx={{ flexGrow: 1 }}>
+      <FinalPromptInfo
+        score={finalInfo.score}
+        label={finalInfo.label}
+        rules={graph?.finalScoring.labelRules || []}
+      />
+      {isMobile && (
+        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+          <Button variant="outlined" onClick={() => setPaletteOpen(true)} aria-label="Open Palette" tabIndex={0}>
+            Palette
+          </Button>
+          <Button variant="outlined" onClick={() => setSidebarOpen(true)} aria-label="Open Sidebar" tabIndex={0}>
+            Panel
+          </Button>
+        </Box>
+      )}
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: '120px 1fr 300px',
+          height: 'calc(100vh - 64px)',
+          gap: 2,
+          '@media (max-width: 1024px)': {
+            gridTemplateColumns: '1fr',
+          },
+        }}
+      >
+        {!isMobile && (
+          <aside
+            className="palette"
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '0.5rem',
+              overflowY: 'auto',
+              height: '100%',
+              padding: '0.5rem',
+              borderRight: '1px solid rgba(0,0,0,0.12)',
+            }}
+          >
+            {[
+              ['TriggerPrompt', '🟡 Trigger'],
+              ['AnalysisPrompt', '🟢 Analysis'],
+              ['FollowUpPrompt', '🔁 Follow‑Up'],
+              ['DecisionPrompt', '⚖️ Decision'],
+              ['FinalPrompt', '🟣 Final'],
+              ['MetaPrompt', '⚙️ Meta'],
+            ].map(([t, l]) => (
+              <div
+                key={t}
+                className="palette-item"
+                draggable
+                role="listitem"
+                aria-label={l}
+                tabIndex={0}
+                onDragStart={e => {
+                  e.dataTransfer.setData('application/reactflow', t);
+                  e.dataTransfer.effectAllowed = 'move';
+                }}
+              >
+                {l}
+              </div>
+            ))}
+          </aside>
+        )}
+        <Box sx={{ flexGrow: 1 }} tabIndex={0} role="region" aria-label="Canvas">
           <ReactFlowProvider>
             <ReactFlow
               nodes={nodes}
@@ -214,23 +283,75 @@ export default function Pipeline() {
               onDragOver={e => e.preventDefault()}
               onDrop={handleDrop}
               onEdgeClick={onEdgeClick}
+              onNodeClick={onNodeClick}
               style={{ width: '100%', height: '100%' }}
             >
               <Controls />
               <Background color="#aaa" gap={16} />
             </ReactFlow>
           </ReactFlowProvider>
-          {selectedEdge && (
-            <EdgeConditionPopover
-              edge={selectedEdge}
-              anchorEl={anchorEl}
-              open
-              onClose={() => setSelectedEdge(null)}
-              onSave={handleSaveEdge}
-            />
-          )}
         </Box>
+        {!isMobile && (
+          <Box sx={{ width: 300 }}>
+            {selectedNode && <NodeEditPanel node={selectedNode} onSave={handleSaveNode} />}
+            {selectedEdge && <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />}
+            {!selectedNode && !selectedEdge && (
+              <Typography>Wähle ein Element</Typography>
+            )}
+          </Box>
+        )}
       </Box>
+      {isMobile && (
+        <>
+          <Drawer anchor="left" open={paletteOpen} onClose={() => setPaletteOpen(false)}>
+            <aside
+              style={{
+                width: 120,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+                overflowY: 'auto',
+                height: '100%',
+                padding: '0.5rem',
+                borderRight: '1px solid rgba(0,0,0,0.12)',
+              }}
+            >
+              {[
+                ['TriggerPrompt', '🟡 Trigger'],
+                ['AnalysisPrompt', '🟢 Analysis'],
+                ['FollowUpPrompt', '🔁 Follow‑Up'],
+                ['DecisionPrompt', '⚖️ Decision'],
+                ['FinalPrompt', '🟣 Final'],
+                ['MetaPrompt', '⚙️ Meta'],
+              ].map(([t, l]) => (
+                <div
+                  key={t}
+                  className="palette-item"
+                  role="listitem"
+                  aria-label={l}
+                  tabIndex={0}
+                  draggable
+                  onDragStart={e => {
+                    e.dataTransfer.setData('application/reactflow', t);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                >
+                  {l}
+                </div>
+              ))}
+            </aside>
+          </Drawer>
+          <Drawer anchor="right" open={sidebarOpen} onClose={() => setSidebarOpen(false)}>
+            <Box sx={{ width: 300, p: 1 }}>
+              {selectedNode && <NodeEditPanel node={selectedNode} onSave={handleSaveNode} />}
+              {selectedEdge && <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />}
+              {!selectedNode && !selectedEdge && (
+                <Typography sx={{ p: 1 }}>Wähle ein Element</Typography>
+              )}
+            </Box>
+          </Drawer>
+        </>
+      )}
     </Box>
   );
 }
