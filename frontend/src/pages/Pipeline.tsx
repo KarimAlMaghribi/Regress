@@ -44,7 +44,7 @@ export default function Pipeline() {
       if (!orig) return ns;
       const newNode = {
         ...orig,
-        id: `n_${Date.now()}`,
+        id: crypto.randomUUID(),
         position: { x: orig.position.x + 40, y: orig.position.y + 40 },
       };
       lastNodeRef.current = newNode;
@@ -143,7 +143,7 @@ export default function Pipeline() {
         };
       }
       const newNode: Node = {
-        id: `n_${Date.now()}`,
+        id: crypto.randomUUID(),
         type: 'default',
         position: pos,
         data: {
@@ -173,17 +173,23 @@ export default function Pipeline() {
     [rfInstance],
   );
 
-  const onEdgeClick = (_: React.MouseEvent, edge: Edge) => {
-    setSelectedEdge(edge);
-    setSelectedNode(null);
-    if (isMobile) setSidebarOpen(true);
-  };
+  const onEdgeClick = useCallback(
+    (_: React.MouseEvent, edge: Edge) => {
+      setSelectedEdge(edge);
+      setSelectedNode(null);
+      if (isMobile) setSidebarOpen(true);
+    },
+    [isMobile],
+  );
 
-  const onNodeClick = (_: React.MouseEvent, node: Node) => {
-    setSelectedNode(node);
-    setSelectedEdge(null);
-    if (isMobile) setSidebarOpen(true);
-  };
+  const onNodeClick = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      setSelectedNode(node);
+      setSelectedEdge(null);
+      if (isMobile) setSidebarOpen(true);
+    },
+    [isMobile],
+  );
 
   const handleSaveNode = (
     id: string,
