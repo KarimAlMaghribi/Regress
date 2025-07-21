@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import ReactFlow, {
   ReactFlowProvider,
   Controls,
@@ -6,6 +6,7 @@ import ReactFlow, {
   Node,
   Edge,
   NodeProps,
+  addEdge,
 } from 'reactflow';
 import StageScorePanel from '../components/StageScorePanel';
 import FinalPromptInfo from '../components/FinalPromptInfo';
@@ -18,6 +19,7 @@ import { toast } from 'react-hot-toast';
 import { PipelineGraph } from '../types/PipelineGraph';
 import PromptNode from '../components/PromptNode';
 import { buildGraphFromElements } from '../utils/graph';
+import dagre from 'dagre';
 import '../styles/pipeline.css';
 
 export default function Pipeline() {
@@ -35,6 +37,7 @@ export default function Pipeline() {
   const isMobile = useMediaQuery('(max-width:1024px)');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const lastNodeRef = useRef<Node | null>(null);
   const repeatNode = (id: string) => {
     setNodes(ns => {
       const orig = ns.find(n => n.id === id);
@@ -103,20 +106,61 @@ export default function Pipeline() {
     }).then(() => toast.success('\ud83d\udcbe Pipeline gespeichert'));
   };
 
+  const handleLayout = () => {
+    const g = new dagre.graphlib.Graph();
+    g.setDefaultEdgeLabel(() => ({}));
+    g.setGraph({ rankdir: 'TB', nodesep: 200, ranksep: 120 });
+    nodes.forEach(n => {
+      g.setNode(n.id, { width: 150, height: 50 });
+    });
+    edges.forEach(e => g.setEdge(e.source, e.target));
+    dagre.layout(g);
+    setNodes(ns =>
+      ns.map(n => {
+        const coord = g.node(n.id);
+        return coord
+          ? { ...n, position: { x: coord.x, y: coord.y } }
+          : n;
+      }),
+    );
+  };
+
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       const type = e.dataTransfer.getData('application/reactflow');
       if (!type || !rfInstance) return;
-      const pos = rfInstance.project({ x: e.clientX, y: e.clientY });
-      setNodes(ns =>
-        ns.concat({
-          id: `n_${Date.now()}`,
-          type: 'default',
-          position: pos,
-          data: { label: type, type, promptId: type },
-        }),
-      );
+      let pos = rfInstance.project({ x: e.clientX, y: e.clientY });
+      if (lastNodeRef.current) {
+        pos = {
+          x: lastNodeRef.current.position.x + 40,
+          y: lastNodeRef.current.position.y + 40,
+        };
+      }
+      const newNode: Node = {
+        id: `n_${Date.now()}`,
+        type: 'default',
+        position: pos,
+        data: {
+          label: type,
+          type,
+          text: '',
+          weight: 1,
+          confidenceThreshold: 0.5,
+        },
+      };
+      setNodes(ns => ns.concat(newNode));
+      if (lastNodeRef.current) {
+        const newEdge: Edge = {
+          id: `${lastNodeRef.current.id}-${newNode.id}`,
+          source: lastNodeRef.current.id,
+          target: newNode.id,
+          type: 'always',
+          data: { edge_type: 'always' },
+        };
+        setEdges(es => es.concat(newEdge));
+      }
+      lastNodeRef.current = newNode;
     },
     [rfInstance],
   );
@@ -135,7 +179,13 @@ export default function Pipeline() {
 
   const handleSaveNode = (
     id: string,
-    data: { label: string; weight?: number; confidenceThreshold?: number },
+    data: {
+      label?: string;
+      weight?: number;
+      confidenceThreshold?: number;
+      text?: string;
+      promptId?: string | number;
+    },
   ) => {
     setNodes(ns =>
       ns.map(n =>
@@ -162,6 +212,17 @@ export default function Pipeline() {
   };
 
   useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' && selectedEdge) {
+        setEdges(prev => prev.filter(ed => ed.id !== selectedEdge.id));
+        setSelectedEdge(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selectedEdge]);
+
+  useEffect(() => {
     setNodes(ns =>
       ns.map((n, i) => ({
         ...n,
@@ -176,7 +237,14 @@ export default function Pipeline() {
       .then((g: PipelineGraph) => {
         const ns: Node[] = g.nodes.map(n => ({
           id: n.id,
-          data: { label: n.text, type: n.type, promptId: n.id, confidenceThreshold: n.confidenceThreshold },
+          data: {
+            label: n.type,
+            text: n.text,
+            type: n.type,
+            weight: n.weight,
+            confidenceThreshold: n.confidenceThreshold,
+            promptId: n.id,
+          },
           position: { x: Math.random() * 400, y: Math.random() * 400 },
           type: 'default',
         }));
@@ -202,6 +270,7 @@ export default function Pipeline() {
         <Button className="btn-save" variant="outlined" onClick={savePipeline}>
           💾 Save
         </Button>
+        <Button onClick={handleLayout} sx={{ ml: 1 }}>📐 Layout</Button>
         <Button onClick={simulate.play} sx={{ ml: 1 }}>▶️ Simulate</Button>
         <Button onClick={simulate.pause}>⏸️ Pause</Button>
         <Button onClick={simulate.prev}>⏮️ Prev</Button>
@@ -282,6 +351,8 @@ export default function Pipeline() {
               deleteKeyCode={46}
               onDragOver={e => e.preventDefault()}
               onDrop={handleDrop}
+              connectable={true}
+              onConnect={params => setEdges(es => addEdge(params, es))}
               onEdgeClick={onEdgeClick}
               onNodeClick={onNodeClick}
               style={{ width: '100%', height: '100%' }}
