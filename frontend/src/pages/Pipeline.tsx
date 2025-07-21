@@ -48,6 +48,9 @@ export default function Pipeline() {
         position: { x: orig.position.x + 40, y: orig.position.y + 40 },
       };
       lastNodeRef.current = newNode;
+      setSelectedNode(newNode);
+      setSelectedEdge(null);
+      if (isMobile) setSidebarOpen(true);
       return ns.concat(newNode);
     });
   };
@@ -152,6 +155,9 @@ export default function Pipeline() {
         },
       };
       setNodes(ns => ns.concat(newNode));
+      setSelectedNode(newNode);
+      setSelectedEdge(null);
+      if (isMobile) setSidebarOpen(true);
       if (lastNodeRef.current) {
         const newEdge: Edge = {
           id: `${lastNodeRef.current.id}-${newNode.id}`,
