@@ -378,7 +378,13 @@ export default function Pipeline() {
         </Box>
         {!isMobile && (
           <Box sx={{ width: 300 }}>
-            {selectedNode && <NodeEditPanel node={selectedNode} onSave={handleSaveNode} />}
+            {selectedNode && (
+              <NodeEditPanel
+                key={selectedNode.id}
+                node={selectedNode}
+                onSave={handleSaveNode}
+              />
+            )}
             {selectedEdge && <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />}
             {!selectedNode && !selectedEdge && (
               <Typography>Wähle ein Element</Typography>
@@ -428,7 +434,13 @@ export default function Pipeline() {
           </Drawer>
           <Drawer anchor="right" open={sidebarOpen} onClose={() => setSidebarOpen(false)}>
             <Box sx={{ width: 300, p: 1 }}>
-              {selectedNode && <NodeEditPanel node={selectedNode} onSave={handleSaveNode} />}
+              {selectedNode && (
+                <NodeEditPanel
+                  key={selectedNode.id}
+                  node={selectedNode}
+                  onSave={handleSaveNode}
+                />
+              )}
               {selectedEdge && <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />}
               {!selectedNode && !selectedEdge && (
                 <Typography sx={{ p: 1 }}>Wähle ein Element</Typography>
