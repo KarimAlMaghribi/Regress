@@ -42,11 +42,13 @@ export default function Pipeline() {
     setNodes(ns => {
       const orig = ns.find(n => n.id === id);
       if (!orig) return ns;
-      return ns.concat({
+      const newNode = {
         ...orig,
         id: `n_${Date.now()}`,
         position: { x: orig.position.x + 40, y: orig.position.y + 40 },
-      });
+      };
+      lastNodeRef.current = newNode;
+      return ns.concat(newNode);
     });
   };
   const NodeWrapper = ({ id, data }: NodeProps<any>) => (
@@ -238,7 +240,7 @@ export default function Pipeline() {
         const ns: Node[] = g.nodes.map(n => ({
           id: n.id,
           data: {
-            label: n.type,
+            label: (n as any).metadata?.label ?? n.text,
             text: n.text,
             type: n.type,
             weight: n.weight,
