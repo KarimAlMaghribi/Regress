@@ -1,5 +1,7 @@
 import React from 'react';
 import { motion } from 'framer-motion';
+import { Card, CardContent, Divider, Typography } from '@mui/material';
+import { Handle, Position } from 'reactflow';
 
 interface Props {
   data: any;
@@ -7,35 +9,50 @@ interface Props {
 }
 
 export default function PromptNode({ data, onRepeat }: Props) {
+  const icons: Record<string, string> = {
+    TriggerPrompt: '🟡',
+    AnalysisPrompt: '🟢',
+    FollowUpPrompt: '🔁',
+    DecisionPrompt: '⚖️',
+    FinalPrompt: '🟣',
+    MetaPrompt: '⚙️',
+  };
+
   return (
     <motion.div
-      className={`node ${data.type}`}
       initial={{ scale: 0.8, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
       transition={{ type: 'spring', stiffness: 260, damping: 20 }}
     >
-      <strong>{data.label}</strong>
-      {data.score !== undefined && (
-        <span className="badge">{data.score.toFixed(2)}</span>
-      )}
-      {data.answer && (
-        <details>
-          <summary>📝 Answer</summary>
-          <pre>{data.answer}</pre>
-          {data.source && <em>📄 {data.source}</em>}
-        </details>
-      )}
-      {data.confidence !== undefined &&
-        data.confidenceThreshold !== undefined &&
-        data.confidence < data.confidenceThreshold && (
-          <motion.button
-            whileTap={{ scale: 0.9 }}
-            onClick={onRepeat}
-            style={{ marginTop: 4 }}
-          >
-            🔁 Repeat
-          </motion.button>
-        )}
+      <Card sx={{ maxWidth: 250, fontSize: '0.875rem', position: 'relative' }}>
+        <Handle type="target" position={Position.Top} />
+        <CardContent sx={{ p: 1, '&:last-child': { pb: 1 } }}>
+          <Typography variant="subtitle2" gutterBottom>
+            {icons[data.type] || '⚙️'} {data.label}
+          </Typography>
+          {data.text && (
+            <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+              {data.text}
+            </Typography>
+          )}
+          {(data.weight !== undefined || data.confidenceThreshold !== undefined) && (
+            <>
+              <Divider sx={{ my: 0.5 }} />
+              {data.weight !== undefined && (
+                <Typography variant="caption" display="block">
+                  Gewicht: {data.weight}
+                </Typography>
+              )}
+              {data.confidenceThreshold !== undefined && (
+                <Typography variant="caption" display="block">
+                  Schwelle: {data.confidenceThreshold}
+                </Typography>
+              )}
+            </>
+          )}
+        </CardContent>
+        <Handle type="source" position={Position.Bottom} />
+      </Card>
     </motion.div>
   );
 }
