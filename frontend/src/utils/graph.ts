@@ -5,7 +5,7 @@ export function buildGraphFromElements(nodes: Node[], edges: Edge[]): PipelineGr
   const n = nodes.map(node => ({
     id: (node.data as any).promptId ?? node.id,
     type: (node.data as any).type,
-    text: (node.data as any).label,
+    text: (node.data as any).text ?? '',
     weight: (node.data as any).weight ?? 1,
     confidenceThreshold: (node.data as any).confidenceThreshold,
   }));

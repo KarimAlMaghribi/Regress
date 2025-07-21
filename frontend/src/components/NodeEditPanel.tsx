@@ -1,16 +1,44 @@
-import React, { useState } from 'react';
-import { Paper, Box, TextField, Button } from '@mui/material';
+import React, { useEffect, useState } from 'react';
+import {
+  Paper,
+  Box,
+  TextField,
+  Button,
+  Select,
+  MenuItem,
+  SelectChangeEvent,
+  FormControl,
+  InputLabel,
+} from '@mui/material';
 import { Node } from 'reactflow';
 
 interface Props {
   node: Node;
-  onSave: (id: string, data: { label: string; weight?: number; confidenceThreshold?: number }) => void;
+  onSave: (
+    id: string,
+    data: {
+      label?: string;
+      weight?: number;
+      confidenceThreshold?: number;
+      text?: string;
+      promptId?: string | number;
+    },
+  ) => void;
 }
 
 export default function NodeEditPanel({ node, onSave }: Props) {
   const [label, setLabel] = useState<string>((node.data as any)?.label || '');
   const [weight, setWeight] = useState<string | number>((node.data as any)?.weight ?? '');
   const [threshold, setThreshold] = useState<string | number>((node.data as any)?.confidenceThreshold ?? '');
+  const [prompts, setPrompts] = useState<{ id: number; text: string; weight: number }[]>([]);
+  const [selectedPrompt, setSelectedPrompt] = useState<string | ''>(String((node.data as any)?.promptId || ''));
+
+  useEffect(() => {
+    fetch('/prompts')
+      .then(r => r.json())
+      .then((list: any[]) => setPrompts(list))
+      .catch(e => console.error('load prompts', e));
+  }, []);
 
   const handleSave = () => {
     onSave(node.id, {
@@ -20,8 +48,45 @@ export default function NodeEditPanel({ node, onSave }: Props) {
     });
   };
 
+  const handlePromptChange = (e: SelectChangeEvent<string>) => {
+    const id = e.target.value;
+    setSelectedPrompt(id);
+    const p = prompts.find(pr => String(pr.id) === id);
+    if (p) {
+      setWeight(p.weight ?? '');
+      onSave(node.id, { promptId: id, text: p.text, weight: p.weight });
+    } else {
+      onSave(node.id, { promptId: id });
+    }
+  };
+
   return (
     <Paper sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <FormControl size="small">
+        <InputLabel id="prompt-select-label">Prompt</InputLabel>
+        <Select
+          labelId="prompt-select-label"
+          value={selectedPrompt}
+          label="Prompt"
+          onChange={handlePromptChange}
+        >
+          {prompts.map(p => (
+            <MenuItem key={p.id} value={String(p.id)}>
+              <span
+                style={{
+                  display: 'block',
+                  maxWidth: '230px',
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                }}
+              >
+                {p.text}
+              </span>
+            </MenuItem>
+          ))}
+        </Select>
+      </FormControl>
       <TextField
         label="Label"
         size="small"
