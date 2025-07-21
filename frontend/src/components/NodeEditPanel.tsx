@@ -27,7 +27,8 @@ interface Props {
 }
 
 export default function NodeEditPanel({ node, onSave }: Props) {
-  const [label, setLabel] = useState<string>((node.data as any)?.label || '');
+  const [label, setLabel] = useState((node.data as any)?.label || '');
+  const [text, setText] = useState((node.data as any)?.text || '');
   const [weight, setWeight] = useState<string | number>((node.data as any)?.weight ?? '');
   const [threshold, setThreshold] = useState<string | number>((node.data as any)?.confidenceThreshold ?? '');
   const [prompts, setPrompts] = useState<{ id: number; text: string; weight: number }[]>([]);
@@ -43,6 +44,7 @@ export default function NodeEditPanel({ node, onSave }: Props) {
   const handleSave = () => {
     onSave(node.id, {
       label,
+      text,
       weight: weight === '' ? undefined : Number(weight),
       confidenceThreshold: threshold === '' ? undefined : Number(threshold),
     });
@@ -54,6 +56,7 @@ export default function NodeEditPanel({ node, onSave }: Props) {
     const p = prompts.find(pr => String(pr.id) === id);
     if (p) {
       setWeight(p.weight ?? '');
+      setText(p.text);
       onSave(node.id, { promptId: id, text: p.text, weight: p.weight });
     } else {
       onSave(node.id, { promptId: id });
@@ -93,6 +96,15 @@ export default function NodeEditPanel({ node, onSave }: Props) {
         value={label}
         onChange={e => setLabel(e.target.value)}
         aria-label="Node Label"
+      />
+      <TextField
+        label="Text"
+        size="small"
+        multiline
+        minRows={3}
+        value={text}
+        onChange={e => setText(e.target.value)}
+        aria-label="Prompt Text"
       />
       <TextField
         label="Weight"
