@@ -45,10 +45,13 @@ export default function Pipeline() {
       if (!orig) return ns;
       const newNode = {
         ...orig,
-        id: `n_${Date.now()}`,
+        id: crypto.randomUUID(),
         position: { x: orig.position.x + 40, y: orig.position.y + 40 },
       };
       lastNodeRef.current = newNode;
+      setSelectedNode(newNode);
+      setSelectedEdge(null);
+      if (isMobile) setSidebarOpen(true);
       return ns.concat(newNode);
     });
   };
@@ -135,28 +138,40 @@ export default function Pipeline() {
   };
 
   const handleDrop = useCallback(
-      (e: React.DragEvent) => {
-        e.preventDefault();
-        const type = e.dataTransfer.getData('application/reactflow');
-        if (!type || !rfInstance) return;
-        let pos = rfInstance.project({ x: e.clientX, y: e.clientY });
-        if (lastNodeRef.current) {
-          pos = {
-            x: lastNodeRef.current.position.x + 40,
-            y: lastNodeRef.current.position.y + 40,
-          };
-        }
-        const newNode: Node = {
-          id: `n_${Date.now()}`,
-          type: 'default',
-          position: pos,
-          data: {
-            label: type,
-            type,
-            text: '',
-            weight: 1,
-            confidenceThreshold: 0.5,
-          },
+    (e: React.DragEvent) => {
+      e.preventDefault();
+      const type = e.dataTransfer.getData('application/reactflow');
+      if (!type || !rfInstance) return;
+      let pos = rfInstance.project({ x: e.clientX, y: e.clientY });
+      if (lastNodeRef.current) {
+        pos = {
+          x: lastNodeRef.current.position.x + 40,
+          y: lastNodeRef.current.position.y + 40,
+        };
+      }
+      const newNode: Node = {
+        id: crypto.randomUUID(),
+        type: 'default',
+        position: pos,
+        data: {
+          label: type,
+          type,
+          text: '',
+          weight: 1,
+          confidenceThreshold: 0.5,
+        },
+      };
+      setNodes(ns => ns.concat(newNode));
+      setSelectedNode(newNode);
+      setSelectedEdge(null);
+      if (isMobile) setSidebarOpen(true);
+      if (lastNodeRef.current) {
+        const newEdge: Edge = {
+          id: `${lastNodeRef.current.id}-${newNode.id}`,
+          source: lastNodeRef.current.id,
+          target: newNode.id,
+          type: 'always',
+          data: { edge_type: 'always' },
         };
         setNodes(ns => ns.concat(newNode));
         if (lastNodeRef.current) {
@@ -172,6 +187,24 @@ export default function Pipeline() {
         lastNodeRef.current = newNode;
       },
       [rfInstance],
+  );
+
+  const onEdgeClick = useCallback(
+    (_: React.MouseEvent, edge: Edge) => {
+      setSelectedEdge(edge);
+      setSelectedNode(null);
+      if (isMobile) setSidebarOpen(true);
+    },
+    [isMobile],
+  );
+
+  const onNodeClick = useCallback(
+    (_: React.MouseEvent, node: Node) => {
+      setSelectedNode(node);
+      setSelectedEdge(null);
+      if (isMobile) setSidebarOpen(true);
+    },
+    [isMobile],
   );
 
   const handleSaveNode = (
@@ -300,11 +333,75 @@ export default function Pipeline() {
             </ReactFlowProvider>
           </Box>
           <Box sx={{ width: 300 }}>
-            {selectedNode && <NodeEditPanel node={selectedNode} onSave={handleSaveNode} />}
+            {selectedNode && (
+              <NodeEditPanel
+                key={selectedNode.id}
+                node={selectedNode}
+                onSave={handleSaveNode}
+              />
+            )}
             {selectedEdge && <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />}
             {!selectedNode && !selectedEdge && <Typography>Wähle ein Element</Typography>}
           </Box>
         </Box>
       </Box>
+      {isMobile && (
+        <>
+          <Drawer anchor="left" open={paletteOpen} onClose={() => setPaletteOpen(false)}>
+            <aside
+              style={{
+                width: 120,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+                overflowY: 'auto',
+                height: '100%',
+                padding: '0.5rem',
+                borderRight: '1px solid rgba(0,0,0,0.12)',
+              }}
+            >
+              {[
+                ['TriggerPrompt', '🟡 Trigger'],
+                ['AnalysisPrompt', '🟢 Analysis'],
+                ['FollowUpPrompt', '🔁 Follow‑Up'],
+                ['DecisionPrompt', '⚖️ Decision'],
+                ['FinalPrompt', '🟣 Final'],
+                ['MetaPrompt', '⚙️ Meta'],
+              ].map(([t, l]) => (
+                <div
+                  key={t}
+                  className="palette-item"
+                  role="listitem"
+                  aria-label={l}
+                  tabIndex={0}
+                  draggable
+                  onDragStart={e => {
+                    e.dataTransfer.setData('application/reactflow', t);
+                    e.dataTransfer.effectAllowed = 'move';
+                  }}
+                >
+                  {l}
+                </div>
+              ))}
+            </aside>
+          </Drawer>
+          <Drawer anchor="right" open={sidebarOpen} onClose={() => setSidebarOpen(false)}>
+            <Box sx={{ width: 300, p: 1 }}>
+              {selectedNode && (
+                <NodeEditPanel
+                  key={selectedNode.id}
+                  node={selectedNode}
+                  onSave={handleSaveNode}
+                />
+              )}
+              {selectedEdge && <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />}
+              {!selectedNode && !selectedEdge && (
+                <Typography sx={{ p: 1 }}>Wähle ein Element</Typography>
+              )}
+            </Box>
+          </Drawer>
+        </>
+      )}
+    </Box>
   );
 }

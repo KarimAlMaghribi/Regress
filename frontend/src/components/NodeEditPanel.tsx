@@ -30,9 +30,13 @@ export default function NodeEditPanel({ node, onSave }: Props) {
   const [label, setLabel] = useState((node.data as any)?.label || '');
   const [text, setText] = useState((node.data as any)?.text || '');
   const [weight, setWeight] = useState<string | number>((node.data as any)?.weight ?? '');
-  const [threshold, setThreshold] = useState<string | number>((node.data as any)?.confidenceThreshold ?? '');
+  const [threshold, setThreshold] = useState<string | number>(
+    (node.data as any)?.confidenceThreshold ?? '',
+  );
   const [prompts, setPrompts] = useState<{ id: number; text: string; weight: number }[]>([]);
-  const [selectedPrompt, setSelectedPrompt] = useState<string | ''>(String((node.data as any)?.promptId || ''));
+  const [selectedPrompt, setSelectedPrompt] = useState<string | ''>(
+    String((node.data as any)?.promptId || ''),
+  );
 
   useEffect(() => {
     fetch('/prompts')
@@ -40,6 +44,14 @@ export default function NodeEditPanel({ node, onSave }: Props) {
       .then((list: any[]) => setPrompts(list))
       .catch(e => console.error('load prompts', e));
   }, []);
+
+  useEffect(() => {
+    setLabel((node.data as any)?.label || '');
+    setText((node.data as any)?.text || '');
+    setWeight((node.data as any)?.weight ?? '');
+    setThreshold((node.data as any)?.confidenceThreshold ?? '');
+    setSelectedPrompt(String((node.data as any)?.promptId || ''));
+  }, [node.id]);
 
   const handleSave = () => {
     onSave(node.id, {

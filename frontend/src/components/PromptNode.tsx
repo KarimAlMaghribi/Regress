@@ -25,7 +25,7 @@ export default function PromptNode({ data, onRepeat }: Props) {
       transition={{ type: 'spring', stiffness: 260, damping: 20 }}
     >
       <Card sx={{ maxWidth: 250, fontSize: '0.875rem', position: 'relative' }}>
-        <Handle type="target" position={Position.Top} style={{ left: '50%' }} />
+        <Handle type="target" id="in" position={Position.Left} />
         <CardContent sx={{ p: 1, '&:last-child': { pb: 1 } }}>
           <Typography variant="subtitle2" gutterBottom>
             {icons[data.type] || '⚙️'} {data.label}
@@ -51,7 +51,7 @@ export default function PromptNode({ data, onRepeat }: Props) {
             </>
           )}
         </CardContent>
-        <Handle type="source" position={Position.Bottom} style={{ left: '50%' }} />
+        <Handle type="source" id="out" position={Position.Right} />
       </Card>
     </motion.div>
   );
