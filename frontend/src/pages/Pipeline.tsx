@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import ReactFlow, {
   ReactFlowProvider,
   Controls,
@@ -12,6 +12,8 @@ import StageScorePanel from '../components/StageScorePanel';
 import FinalPromptInfo from '../components/FinalPromptInfo';
 import NodeEditPanel from '../components/NodeEditPanel';
 import EdgeEditPanel from '../components/EdgeEditPanel';
+import NodeCreationDialog, { NodeCreationData } from '../components/NodeCreationDialog';
+import useAutoConnect from '../hooks/useAutoConnect';
 import useSimulation from '../hooks/useSimulation';
 import { useParams } from 'react-router-dom';
 import { Box, Button, Drawer, Typography, useMediaQuery } from '@mui/material';
@@ -22,13 +24,20 @@ import { buildGraphFromElements } from '../utils/graph';
 import dagre from 'dagre';
 import '../styles/pipeline.css';
 
+type PromptType =
+  | 'TriggerPrompt'
+  | 'AnalysisPrompt'
+  | 'FollowUpPrompt'
+  | 'DecisionPrompt'
+  | 'FinalPrompt'
+  | 'MetaPrompt';
+
 export default function Pipeline() {
   const { id } = useParams<{ id?: string }>();
   const pipelineId = id ?? 'active';
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
-  const [rfInstance, setRfInstance] = useState<any>(null);
   const [graph, setGraph] = useState<PipelineGraph | null>(null);
   const [stageScores, setStageScores] = useState<{ id: string; name: string; score: number }[]>([]);
   const [finalInfo, setFinalInfo] = useState<{ score: number; label: string }>({ score: 0, label: '' });
@@ -37,7 +46,26 @@ export default function Pipeline() {
   const isMobile = useMediaQuery('(max-width:1024px)');
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const lastNodeRef = useRef<Node | null>(null);
+  const [creationType, setCreationType] = useState<PromptType | null>(null);
+
+  const layoutNodes = useCallback((ns: Node[], es: Edge[]): Node[] => {
+    const g = new dagre.graphlib.Graph();
+    g.setDefaultEdgeLabel(() => ({}));
+    g.setGraph({ rankdir: 'TB', nodesep: 200, ranksep: 120 });
+    ns.forEach(n => g.setNode(n.id, { width: 150, height: 50 }));
+    es.forEach(e => g.setEdge(e.source, e.target));
+    dagre.layout(g);
+    return ns.map(n => {
+      const coord = g.node(n.id);
+      return coord ? { ...n, position: { x: coord.x, y: coord.y } } : n;
+    });
+  }, []);
+
+  const handleLayout = useCallback(() => {
+    setNodes(ns => layoutNodes(ns, edges));
+  }, [edges, layoutNodes]);
+
+  const autoConnect = useAutoConnect(nodes, edges);
   const repeatNode = (id: string) => {
     setNodes(ns => {
       const orig = ns.find(n => n.id === id);
@@ -47,7 +75,6 @@ export default function Pipeline() {
         id: crypto.randomUUID(),
         position: { x: orig.position.x + 40, y: orig.position.y + 40 },
       };
-      lastNodeRef.current = newNode;
       setSelectedNode(newNode);
       setSelectedEdge(null);
       if (isMobile) setSidebarOpen(true);
@@ -111,35 +138,14 @@ export default function Pipeline() {
     }).then(() => toast.success('\ud83d\udcbe Pipeline gespeichert'));
   };
 
-  const handleLayout = () => {
-    const g = new dagre.graphlib.Graph();
-    g.setDefaultEdgeLabel(() => ({}));
-    g.setGraph({ rankdir: 'TB', nodesep: 200, ranksep: 120 });
-    nodes.forEach(n => {
-      g.setNode(n.id, { width: 150, height: 50 });
-    });
-    edges.forEach(e => g.setEdge(e.source, e.target));
-    dagre.layout(g);
-    setNodes(ns =>
-      ns.map(n => {
-        const coord = g.node(n.id);
-        return coord
-          ? { ...n, position: { x: coord.x, y: coord.y } }
-          : n;
-      }),
-    );
-  };
 
-  const handleDrop = useCallback(
-    (e: React.DragEvent) => {
-      e.preventDefault();
-      const type = e.dataTransfer.getData('application/reactflow');
-      if (!type || !rfInstance) return;
-      let pos = rfInstance.project({ x: e.clientX, y: e.clientY });
-      if (lastNodeRef.current) {
+  const createNode = useCallback(
+    (type: PromptType, data: Partial<NodeCreationData> = {}) => {
+      let pos = { x: 0, y: 0 };
+      if (selectedNode) {
         pos = {
-          x: lastNodeRef.current.position.x + 40,
-          y: lastNodeRef.current.position.y + 40,
+          x: selectedNode.position.x + 40,
+          y: selectedNode.position.y + 40,
         };
       }
       const newNode: Node = {
@@ -147,31 +153,25 @@ export default function Pipeline() {
         type: 'default',
         position: pos,
         data: {
-          label: type,
+          label: data.label ?? type,
           type,
-          text: '',
-          weight: 1,
-          confidenceThreshold: 0.5,
+          text: data.text ?? '',
+          weight: data.weight ?? 1,
+          confidenceThreshold: data.confidenceThreshold ?? 0.5,
         },
       };
-      setNodes(ns => ns.concat(newNode));
+      const autoEdges = autoConnect(newNode, selectedNode);
+      const newEdges = [...edges, ...autoEdges];
+      const newNodes = [...nodes, newNode];
+      setEdges(newEdges);
+      setNodes(layoutNodes(newNodes, newEdges));
       setSelectedNode(newNode);
       setSelectedEdge(null);
       if (isMobile) setSidebarOpen(true);
-      if (lastNodeRef.current) {
-        const newEdge: Edge = {
-          id: `${lastNodeRef.current.id}-${newNode.id}`,
-          source: lastNodeRef.current.id,
-          target: newNode.id,
-          type: 'always',
-          data: { edge_type: 'always' },
-        };
-        setEdges(es => es.concat(newEdge));
-      }
-      lastNodeRef.current = newNode;
     },
-    [rfInstance],
+    [isMobile, nodes, edges, autoConnect, layoutNodes, selectedNode],
   );
+
 
   const onEdgeClick = useCallback(
     (_: React.MouseEvent, edge: Edge) => {
@@ -227,14 +227,24 @@ export default function Pipeline() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Delete' && selectedEdge) {
-        setEdges(prev => prev.filter(ed => ed.id !== selectedEdge.id));
-        setSelectedEdge(null);
+      if (e.key === 'Delete') {
+        if (selectedEdge) {
+          setEdges(prev => prev.filter(ed => ed.id !== selectedEdge.id));
+          setSelectedEdge(null);
+        } else if (selectedNode) {
+          const remainingNodes = nodes.filter(n => n.id !== selectedNode.id);
+          const remainingEdges = edges.filter(
+            e => e.source !== selectedNode.id && e.target !== selectedNode.id,
+          );
+          setEdges(remainingEdges);
+          setNodes(layoutNodes(remainingNodes, remainingEdges));
+          setSelectedNode(null);
+        }
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [selectedEdge]);
+  }, [selectedEdge, selectedNode, nodes, edges, layoutNodes]);
 
   useEffect(() => {
     setNodes(ns =>
@@ -270,10 +280,10 @@ export default function Pipeline() {
           label: e.condition ?? undefined,
           data: { edge_type: e.type, label: e.condition },
         }));
-        setNodes(ns);
         setEdges(es);
+        setNodes(layoutNodes(ns, es));
       });
-  }, [pipelineId]);
+  }, [pipelineId, layoutNodes]);
 
   return (
     <Box>
@@ -341,13 +351,13 @@ export default function Pipeline() {
               <div
                 key={t}
                 className="palette-item"
-                draggable
                 role="listitem"
                 aria-label={l}
                 tabIndex={0}
-                onDragStart={e => {
-                  e.dataTransfer.setData('application/reactflow', t);
-                  e.dataTransfer.effectAllowed = 'move';
+                onClick={() => {
+                  setCreationType(t as PromptType);
+                  setPaletteOpen(false);
+                  setSidebarOpen(false);
                 }}
               >
                 {l}
@@ -361,10 +371,7 @@ export default function Pipeline() {
               nodes={nodes}
               edges={edges}
               nodeTypes={nodeTypes}
-              onInit={setRfInstance}
               deleteKeyCode={46}
-              onDragOver={e => e.preventDefault()}
-              onDrop={handleDrop}
               connectable={true}
               onConnect={params => setEdges(es => addEdge(params, es))}
               onEdgeClick={onEdgeClick}
@@ -392,6 +399,17 @@ export default function Pipeline() {
           </Box>
         )}
       </Box>
+      {creationType && (
+        <NodeCreationDialog
+          open={true}
+          type={creationType}
+          onCancel={() => setCreationType(null)}
+          onCreate={data => {
+            createNode(creationType, data);
+            setCreationType(null);
+          }}
+        />
+      )}
       {isMobile && (
         <>
           <Drawer anchor="left" open={paletteOpen} onClose={() => setPaletteOpen(false)}>
@@ -421,10 +439,10 @@ export default function Pipeline() {
                   role="listitem"
                   aria-label={l}
                   tabIndex={0}
-                  draggable
-                  onDragStart={e => {
-                    e.dataTransfer.setData('application/reactflow', t);
-                    e.dataTransfer.effectAllowed = 'move';
+                  onClick={() => {
+                    setCreationType(t as PromptType);
+                    setPaletteOpen(false);
+                    setSidebarOpen(false);
                   }}
                 >
                   {l}
