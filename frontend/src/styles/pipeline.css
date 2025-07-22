@@ -1,5 +1,5 @@
 .palette { display:flex; gap:0.5rem; margin-bottom:0.5rem; overflow-x:auto; }
-.palette-item { cursor:grab; padding:0.4rem 0.8rem; border-radius:6px; background:#f3f4f6; transition:.2s; }
+.palette-item { cursor:pointer; padding:0.4rem 0.8rem; border-radius:6px; background:#f3f4f6; transition:.2s; }
 .palette-item:hover { background:#e5e7eb; transform:scale(1.05); }
 .node { border-radius:8px; padding:0.6rem 1rem; color:#fff; }
 .node.TriggerPrompt { background:#eab308; }

@@ -46,13 +46,15 @@ export default function NodeCreationDialog({ open, type, onCreate, onCancel }: P
     reset();
   };
 
+  const handleCancel = () => {
+    reset();
+    onCancel();
+  };
+
   return (
     <Dialog
       open={open}
-      onClose={() => {
-        reset();
-        onCancel();
-      }}
+      onClose={handleCancel}
       fullWidth
       fullScreen={useMediaQuery('(max-width:600px)')}
     >
@@ -92,12 +94,7 @@ export default function NodeCreationDialog({ open, type, onCreate, onCancel }: P
         />
       </DialogContent>
       <DialogActions>
-        <Button
-          onClick={() => {
-            reset();
-            onCancel();
-          }}
-        >
+        <Button onClick={handleCancel}>
           Abbrechen
         </Button>
         <Button onClick={handleCreate} variant="contained">
