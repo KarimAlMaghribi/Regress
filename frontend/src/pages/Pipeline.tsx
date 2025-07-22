@@ -381,8 +381,12 @@ export default function Pipeline() {
                 onSave={handleSaveNode}
               />
             )}
-            {selectedEdge && <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />}
-            {!selectedNode && !selectedEdge && <Typography>Wähle ein Element</Typography>}
+            {selectedEdge && (
+              <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />
+            )}
+            {!selectedNode && !selectedEdge && (
+              <Typography>Wähle ein Element</Typography>
+            )}
           </Box>
         </Box>
       </Box>
@@ -446,7 +450,9 @@ export default function Pipeline() {
                   onSave={handleSaveNode}
                 />
               )}
-              {selectedEdge && <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />}
+              {selectedEdge && (
+                <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />
+              )}
               {!selectedNode && !selectedEdge && (
                 <Typography sx={{ p: 1 }}>Wähle ein Element</Typography>
               )}
