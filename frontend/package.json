@@ -24,6 +24,7 @@
     "react-dom": "^18.0.0",
     "react-dropzone": "^14.2.3",
     "reactflow": "^11.11.4",
+    "elkjs": "^0.8.1",
     "react-hot-toast": "^2.4.1",
     "react-pdf": "^7.0.0",
     "react-router-dom": "^6.4.0",
