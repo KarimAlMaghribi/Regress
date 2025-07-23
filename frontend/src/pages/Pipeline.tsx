@@ -169,10 +169,28 @@ export default function Pipeline() {
           },
         };
         const autoEdges = autoConnect(newNode, selectedNode);
-        const newEdges = [...edges, ...autoEdges];
         const newNodes = [...nodes, newNode];
-        setEdges(newEdges);
-        layoutNodes(newNodes, newEdges).then(setNodes);
+        const updatedEdges = [...edges];
+        autoEdges.forEach((e) => {
+          const sourceNode = newNodes.find((n) => n.id === e.source);
+          const targetNode = newNodes.find((n) => n.id === e.target);
+          if (!sourceNode || !targetNode) return;
+          const outId = `out${(sourceNode.data.outPorts?.length ?? 0) + 1}`;
+          const inId = `in${(targetNode.data.inPorts?.length ?? 0) + 1}`;
+          sourceNode.data.outPorts = [
+            ...(sourceNode.data.outPorts ?? []),
+            { id: outId, side: 'right' },
+          ];
+          targetNode.data.inPorts = [
+            ...(targetNode.data.inPorts ?? []),
+            { id: inId, side: 'left' },
+          ];
+          e.sourceHandle = outId;
+          e.targetHandle = inId;
+          updatedEdges.push(e);
+        });
+        setEdges(updatedEdges);
+        layoutNodes(newNodes, updatedEdges).then(setNodes);
         setSelectedNode(newNode);
         setSelectedEdge(null);
         if (isMobile) setSidebarOpen(true);
