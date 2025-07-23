@@ -6,6 +6,7 @@ import ReactFlow, {
   Node,
   Edge,
   NodeProps,
+  Connection,
   addEdge,
 } from 'reactflow';
 import StageScorePanel from '../components/StageScorePanel';
@@ -21,7 +22,7 @@ import { toast } from 'react-hot-toast';
 import { PipelineGraph } from '../types/PipelineGraph';
 import PromptNode from '../components/PromptNode';
 import { buildGraphFromElements } from '../utils/graph';
-import dagre from 'dagre';
+import { layoutELK } from '../utils/layout';
 import '../styles/pipeline.css';
 
 type PromptType =
@@ -48,22 +49,16 @@ export default function Pipeline() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [creationType, setCreationType] = useState<PromptType | null>(null);
 
-  const layoutNodes = useCallback((ns: Node[], es: Edge[]): Node[] => {
-    const g = new dagre.graphlib.Graph();
-    g.setDefaultEdgeLabel(() => ({}));
-    g.setGraph({ rankdir: 'TB', nodesep: 200, ranksep: 120 });
-    ns.forEach(n => g.setNode(n.id, { width: 150, height: 50 }));
-    es.forEach(e => g.setEdge(e.source, e.target));
-    dagre.layout(g);
-    return ns.map(n => {
-      const coord = g.node(n.id);
-      return coord ? { ...n, position: { x: coord.x, y: coord.y } } : n;
-    });
-  }, []);
+  const layoutNodes = useCallback(
+    async (ns: Node[], es: Edge[]): Promise<Node[]> => {
+      return await layoutELK(ns, es);
+    },
+    [],
+  );
 
   const handleLayout = useCallback(() => {
-    setNodes(ns => layoutNodes(ns, edges));
-  }, [edges, layoutNodes]);
+    layoutNodes(nodes, edges).then(setNodes);
+  }, [edges, nodes, layoutNodes]);
 
   const autoConnect = useAutoConnect(nodes, edges);
   const repeatNode = (id: string) => {
@@ -86,6 +81,27 @@ export default function Pipeline() {
   );
   const nodeTypesCustom = { default: NodeWrapper };
   const nodeTypes = nodeTypesCustom;
+
+  const onConnect = useCallback(
+    (params: Connection) => {
+      const sourceNode = nodes.find(n => n.id === params.source);
+      const targetNode = nodes.find(n => n.id === params.target);
+      if (!sourceNode || !targetNode) return;
+      const outId = `out${(sourceNode.data.outPorts?.length ?? 0) + 1}`;
+      const inId = `in${(targetNode.data.inPorts?.length ?? 0) + 1}`;
+      sourceNode.data.outPorts = [
+        ...(sourceNode.data.outPorts ?? []),
+        { id: outId, side: 'right' },
+      ];
+      targetNode.data.inPorts = [
+        ...(targetNode.data.inPorts ?? []),
+        { id: inId, side: 'left' },
+      ];
+      setNodes([...nodes]);
+      setEdges(es => addEdge({ ...params, sourceHandle: outId, targetHandle: inId }, es));
+    },
+    [nodes],
+  );
   const simulate = useSimulation(
     graph || { nodes: [], edges: [], stages: [], finalScoring: { scoreFormula: '0', labelRules: [] } },
   );
@@ -158,13 +174,15 @@ export default function Pipeline() {
           text: data.text ?? '',
           weight: data.weight ?? 1,
           confidenceThreshold: data.confidenceThreshold ?? 0.5,
+          inPorts: [{ id: 'in1', side: 'left' }],
+          outPorts: [{ id: 'out1', side: 'right' }],
         },
       };
       const autoEdges = autoConnect(newNode, selectedNode);
       const newEdges = [...edges, ...autoEdges];
       const newNodes = [...nodes, newNode];
       setEdges(newEdges);
-      setNodes(layoutNodes(newNodes, newEdges));
+      layoutNodes(newNodes, newEdges).then(setNodes);
       setSelectedNode(newNode);
       setSelectedEdge(null);
       if (isMobile) setSidebarOpen(true);
@@ -237,7 +255,7 @@ export default function Pipeline() {
             e => e.source !== selectedNode.id && e.target !== selectedNode.id,
           );
           setEdges(remainingEdges);
-          setNodes(layoutNodes(remainingNodes, remainingEdges));
+          layoutNodes(remainingNodes, remainingEdges).then(setNodes);
           setSelectedNode(null);
         }
       }
@@ -256,6 +274,10 @@ export default function Pipeline() {
   }, [simulate.currentStep]);
 
   useEffect(() => {
+    layoutNodes(nodes, edges).then(setNodes);
+  }, [nodes.length, edges.length, layoutNodes]);
+
+  useEffect(() => {
     fetch(`/pipelines/${pipelineId}`)
       .then(r => r.json())
       .then((g: PipelineGraph) => {
@@ -268,6 +290,8 @@ export default function Pipeline() {
             weight: n.weight,
             confidenceThreshold: n.confidenceThreshold,
             promptId: n.id,
+            inPorts: [],
+            outPorts: [],
           },
           position: { x: Math.random() * 400, y: Math.random() * 400 },
           type: 'default',
@@ -280,8 +304,29 @@ export default function Pipeline() {
           label: e.condition ?? undefined,
           data: { edge_type: e.type, label: e.condition },
         }));
+
+        // assign ports per edge
+        const inCount: Record<string, number> = {};
+        const outCount: Record<string, number> = {};
+        es.forEach(e => {
+          outCount[e.source] = (outCount[e.source] ?? 0) + 1;
+          const outId = `out${outCount[e.source]}`;
+          inCount[e.target] = (inCount[e.target] ?? 0) + 1;
+          const inId = `in${inCount[e.target]}`;
+          e.sourceHandle = outId;
+          e.targetHandle = inId;
+          const sn = ns.find(n => n.id === e.source)!;
+          const tn = ns.find(n => n.id === e.target)!;
+          sn.data.outPorts!.push({ id: outId, side: 'right' });
+          tn.data.inPorts!.push({ id: inId, side: 'left' });
+        });
+        ns.forEach(n => {
+          if (!n.data.inPorts!.length) n.data.inPorts!.push({ id: 'in1', side: 'left' });
+          if (!n.data.outPorts!.length) n.data.outPorts!.push({ id: 'out1', side: 'right' });
+        });
+
         setEdges(es);
-        setNodes(layoutNodes(ns, es));
+        layoutNodes(ns, es).then(setNodes);
       });
   }, [pipelineId, layoutNodes]);
 
@@ -373,7 +418,7 @@ export default function Pipeline() {
               nodeTypes={nodeTypes}
               deleteKeyCode={46}
               connectable={true}
-              onConnect={params => setEdges(es => addEdge(params, es))}
+              onConnect={onConnect}
               onEdgeClick={onEdgeClick}
               onNodeClick={onNodeClick}
               style={{ width: '100%', height: '100%' }}
