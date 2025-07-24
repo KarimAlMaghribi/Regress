@@ -11,6 +11,8 @@
       <sourceFolder url="file://$MODULE_DIR$/shared/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/services/metrics/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/services/history-service/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/services/pipeline-manager/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/services/pipeline-runner/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

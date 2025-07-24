@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import ReactFlow, {
-  ReactFlowProvider,
   addEdge,
   Background,
+  Connection,
   Controls,
   Edge,
   Node,
   NodeProps,
-  Connection,
+  ReactFlowProvider,
 } from 'reactflow';
 import { useParams } from 'react-router-dom';
 import { Box, Button, Drawer, Typography, useMediaQuery } from '@mui/material';
@@ -42,7 +42,10 @@ export default function Pipeline() {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [graph, setGraph] = useState<PipelineGraph | null>(null);
   const [stageScores, setStageScores] = useState<{ id: string; name: string; score: number }[]>([]);
-  const [finalInfo, setFinalInfo] = useState<{ score: number; label: string }>({ score: 0, label: '' });
+  const [finalInfo, setFinalInfo] = useState<{ score: number; label: string }>({
+    score: 0,
+    label: '',
+  });
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<Edge | null>(null);
 
@@ -51,9 +54,10 @@ export default function Pipeline() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [creationType, setCreationType] = useState<PromptType | null>(null);
 
+  // Wrapper für ELK-basiertes Layout
   const layoutNodes = useCallback(
       async (ns: Node[], es: Edge[]): Promise<Node[]> => layoutELK(ns, es),
-      []
+      [],
   );
 
   const handleLayout = useCallback(() => {
@@ -61,24 +65,26 @@ export default function Pipeline() {
   }, [nodes, edges, layoutNodes]);
 
   const autoConnect = useAutoConnect(nodes, edges);
-
   const simulate = useSimulation(
-      graph || { nodes: [], edges: [], stages: [], finalScoring: { scoreFormula: '0', labelRules: [] } }
+      graph || { nodes: [], edges: [], stages: [], finalScoring: { scoreFormula: '0', labelRules: [] } },
   );
 
+  // Node duplizieren und Layout aktualisieren
   const repeatNode = (id: string) => {
     setNodes((ns) => {
       const orig = ns.find((n) => n.id === id);
       if (!orig) return ns;
-      const newNode = {
+      const newNode: Node = {
         ...orig,
         id: crypto.randomUUID(),
-        position: { x: orig.position.x + 40, y: orig.position.y + 40 },
+        position: { x: 0, y: 0 },
       };
       setSelectedNode(newNode);
       setSelectedEdge(null);
       if (isMobile) setSidebarOpen(true);
-      return [...ns, newNode];
+      const nextNodes = [...ns, newNode];
+      layoutNodes(nextNodes, edges).then(setNodes);
+      return nextNodes;
     });
   };
 
@@ -95,21 +101,32 @@ export default function Pipeline() {
       </div>
   );
 
+  // Neue Verbindung und sofortiges Re-Layout
   const onConnect = useCallback(
       (params: Connection) => {
         const sourceNode = nodes.find((n) => n.id === params.source);
         const targetNode = nodes.find((n) => n.id === params.target);
         if (!sourceNode || !targetNode) return;
+
         const outId = `out${(sourceNode.data.outPorts?.length ?? 0) + 1}`;
         const inId = `in${(targetNode.data.inPorts?.length ?? 0) + 1}`;
+
         sourceNode.data.outPorts = [...(sourceNode.data.outPorts ?? []), { id: outId, side: 'right' }];
         targetNode.data.inPorts = [...(targetNode.data.inPorts ?? []), { id: inId, side: 'left' }];
-        setNodes([...nodes]);
-        setEdges((es) => addEdge({ ...params, sourceHandle: outId, targetHandle: inId }, es));
+
+        const nextEdges = addEdge(
+            { ...params, sourceHandle: outId, targetHandle: inId },
+            edges,
+        );
+
+        const resetNodes = nodes.map((n) => ({ ...n, position: { x: 0, y: 0 } }));
+        setEdges(nextEdges);
+        layoutNodes(resetNodes, nextEdges).then(setNodes);
       },
-      [nodes]
+      [nodes, edges, layoutNodes],
   );
 
+  // Pipeline ausführen
   const runPipeline = () => {
     const g: PipelineGraph = buildGraphFromElements(nodes, edges);
     setGraph(g);
@@ -124,13 +141,18 @@ export default function Pipeline() {
           ns.map((n) => {
             const h = res.history.find((h: any) => h.prompt_id === (n.data as any).promptId);
             return h
-                ? { ...n, data: { ...n.data, score: h.score, answer: h.answer, source: h.answer_source } }
+                ? {
+                  ...n,
+                  data: { ...n.data, score: h.score, answer: h.answer, source: h.answer_source },
+                }
                 : n;
-          })
+          }),
       );
       const stageMap = g.stages.map((s) => {
         const rel = res.history.filter((h: any) => s.promptIds.includes(h.prompt_id));
-        const sc = rel.length ? rel.reduce((a: number, h: any) => a + (h.score || 0), 0) / rel.length : 0;
+        const sc = rel.length
+            ? rel.reduce((a: number, h: any) => a + (h.score || 0), 0) / rel.length
+            : 0;
         return { id: s.id, name: s.name, score: sc };
       });
       setStageScores(stageMap);
@@ -139,6 +161,7 @@ export default function Pipeline() {
     });
   };
 
+  // Pipeline speichern
   const savePipeline = () => {
     const g: PipelineGraph = buildGraphFromElements(nodes, edges);
     fetch('/pipelines', {
@@ -148,16 +171,13 @@ export default function Pipeline() {
     }).then(() => toast.success('💾 Pipeline gespeichert'));
   };
 
+  // Neuen Node erstellen und automatisch verbinden + Layout
   const createNode = useCallback(
       (type: PromptType, data: Partial<NodeCreationData> = {}) => {
-        let pos = { x: 0, y: 0 };
-        if (selectedNode) {
-          pos = { x: selectedNode.position.x + 40, y: selectedNode.position.y + 40 };
-        }
         const newNode: Node = {
           id: crypto.randomUUID(),
           type: 'default',
-          position: pos,
+          position: { x: 0, y: 0 },
           data: {
             label: data.label ?? type,
             type,
@@ -168,6 +188,7 @@ export default function Pipeline() {
             outPorts: [{ id: 'out1', side: 'right' }],
           },
         };
+
         const autoEdges = autoConnect(newNode, selectedNode);
         const newNodes = [...nodes, newNode];
         const updatedEdges = [...edges];
@@ -177,25 +198,22 @@ export default function Pipeline() {
           if (!sourceNode || !targetNode) return;
           const outId = `out${(sourceNode.data.outPorts?.length ?? 0) + 1}`;
           const inId = `in${(targetNode.data.inPorts?.length ?? 0) + 1}`;
-          sourceNode.data.outPorts = [
-            ...(sourceNode.data.outPorts ?? []),
-            { id: outId, side: 'right' },
-          ];
-          targetNode.data.inPorts = [
-            ...(targetNode.data.inPorts ?? []),
-            { id: inId, side: 'left' },
-          ];
+          sourceNode.data.outPorts = [...(sourceNode.data.outPorts ?? []), { id: outId, side: 'right' }];
+          targetNode.data.inPorts = [...(targetNode.data.inPorts ?? []), { id: inId, side: 'left' }];
           e.sourceHandle = outId;
           e.targetHandle = inId;
           updatedEdges.push(e);
         });
+
         setEdges(updatedEdges);
-        layoutNodes(newNodes, updatedEdges).then(setNodes);
+        const resetNodes = newNodes.map((n) => ({ ...n, position: { x: 0, y: 0 } }));
+        layoutNodes(resetNodes, updatedEdges).then(setNodes);
+
         setSelectedNode(newNode);
         setSelectedEdge(null);
         if (isMobile) setSidebarOpen(true);
       },
-      [isMobile, nodes, edges, autoConnect, layoutNodes, selectedNode]
+      [isMobile, nodes, edges, autoConnect, layoutNodes, selectedNode],
   );
 
   const onNodeClick = useCallback(
@@ -204,7 +222,7 @@ export default function Pipeline() {
         setSelectedEdge(null);
         if (isMobile) setSidebarOpen(true);
       },
-      [isMobile]
+      [isMobile],
   );
 
   const onEdgeClick = useCallback(
@@ -213,15 +231,16 @@ export default function Pipeline() {
         setSelectedNode(null);
         if (isMobile) setSidebarOpen(true);
       },
-      [isMobile]
+      [isMobile],
   );
 
   const handleSaveNode = (
       id: string,
-      data: { label?: string; weight?: number; confidenceThreshold?: number; text?: string; promptId?: string | number; }
-  ) => setNodes((ns) => {
-    return ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...data } } : n));
-  });
+      data: { label?: string; weight?: number; confidenceThreshold?: number; text?: string; promptId?: string | number },
+  ) =>
+      setNodes((ns) =>
+          ns.map((n) => (n.id === id ? { ...n, data: { ...n.data, ...data } } : n)),
+      );
 
   const handleSaveEdge = (id: string, type: string, condition: string) => {
     setEdges((es) =>
@@ -233,11 +252,12 @@ export default function Pipeline() {
                   animated: ['onTrue', 'onScore'].includes(type),
                   label: type === 'onScore' ? condition : undefined,
                 }
-                : e
-        )
+                : e,
+        ),
     );
   };
 
+  // Delete-Key Handler
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Delete') {
@@ -245,9 +265,11 @@ export default function Pipeline() {
           setEdges((prev) => prev.filter((ed) => ed.id !== selectedEdge.id));
           setSelectedEdge(null);
         } else if (selectedNode) {
-          const remainingNodes = nodes.filter((n) => n.id !== selectedNode.id);
+          const remainingNodes = nodes
+          .filter((n) => n.id !== selectedNode.id)
+          .map((n) => ({ ...n, position: { x: 0, y: 0 } }));
           const remainingEdges = edges.filter(
-              (e) => e.source !== selectedNode.id && e.target !== selectedNode.id
+              (e) => e.source !== selectedNode.id && e.target !== selectedNode.id,
           );
           setEdges(remainingEdges);
           layoutNodes(remainingNodes, remainingEdges).then(setNodes);
@@ -259,27 +281,40 @@ export default function Pipeline() {
     return () => window.removeEventListener('keydown', handler);
   }, [selectedEdge, selectedNode, nodes, edges, layoutNodes]);
 
+  // Simulation step highlighting
   useEffect(() => {
     setNodes((ns) =>
         ns.map((n, i) => ({
           ...n,
           style: i === simulate.currentStep ? { boxShadow: '0 0 0 2px red' } : {},
-        }))
+        })),
     );
   }, [simulate.currentStep]);
 
+  // Initial & length-based Layout
   useEffect(() => {
-    layoutNodes(nodes, edges).then(setNodes);
+    const reset = nodes.map((n) => ({ ...n, position: { x: 0, y: 0 } }));
+    layoutNodes(reset, edges).then(setNodes);
   }, [nodes.length, edges.length, layoutNodes]);
 
+  // Load existing pipeline
   useEffect(() => {
     fetch(`/pipelines/${pipelineId}`)
     .then((r) => r.json())
     .then((g: PipelineGraph) => {
       const ns: Node[] = g.nodes.map((n) => ({
         id: n.id,
-        data: { label: (n as any).metadata?.label ?? n.text, text: n.text, type: n.type, weight: n.weight, confidenceThreshold: n.confidenceThreshold, promptId: n.id, inPorts: [], outPorts: [] },
-        position: { x: Math.random() * 400, y: Math.random() * 400 },
+        data: {
+          label: (n as any).metadata?.label ?? n.text,
+          text: n.text,
+          type: n.type,
+          weight: n.weight,
+          confidenceThreshold: n.confidenceThreshold,
+          promptId: n.id,
+          inPorts: [],
+          outPorts: [],
+        },
+        position: { x: 0, y: 0 },
         type: 'default',
       }));
       const es: Edge[] = g.edges.map((e) => ({
@@ -290,6 +325,7 @@ export default function Pipeline() {
         label: e.condition ?? undefined,
         data: { edge_type: e.type, label: e.condition },
       }));
+
       const inCount: Record<string, number> = {};
       const outCount: Record<string, number> = {};
       es.forEach((e) => {
@@ -302,10 +338,12 @@ export default function Pipeline() {
         sn.data.outPorts!.push({ id: e.sourceHandle!, side: 'right' });
         tn.data.inPorts!.push({ id: e.targetHandle!, side: 'left' });
       });
+
       ns.forEach((n) => {
         if (!n.data.inPorts!.length) n.data.inPorts!.push({ id: 'in1', side: 'left' });
         if (!n.data.outPorts!.length) n.data.outPorts!.push({ id: 'out1', side: 'right' });
       });
+
       setEdges(es);
       layoutNodes(ns, es).then(setNodes);
     });
@@ -318,9 +356,15 @@ export default function Pipeline() {
           <Button variant="contained" onClick={runPipeline} sx={{ mr: 1 }}>
             ▶️ Run Pipeline
           </Button>
-          <Button variant="outlined" onClick={savePipeline}>💾 Save</Button>
-          <Button onClick={handleLayout} sx={{ ml: 1 }}>📐 Layout</Button>
-          <Button onClick={simulate.play} sx={{ ml: 1 }}>▶️ Simulate</Button>
+          <Button variant="outlined" onClick={savePipeline}>
+            💾 Save
+          </Button>
+          <Button onClick={handleLayout} sx={{ ml: 1 }}>
+            📐 Layout
+          </Button>
+          <Button onClick={simulate.play} sx={{ ml: 1 }}>
+            ▶️ Simulate
+          </Button>
           <Button onClick={simulate.pause}>⏸️ Pause</Button>
           <Button onClick={simulate.prev}>⏮️ Prev</Button>
           <Button onClick={simulate.next}>⏭️ Next</Button>
@@ -337,15 +381,18 @@ export default function Pipeline() {
         >
           {/* Palette (Desktop) */}
           {!isMobile && (
-              <aside className="palette" style={{
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.5rem',
-                overflowY: 'auto',
-                height: '100%',
-                padding: '0.5rem',
-                borderRight: '1px solid rgba(0,0,0,0.12)',
-              }}>
+              <aside
+                  className="palette"
+                  style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.5rem',
+                    overflowY: 'auto',
+                    height: '100%',
+                    padding: '0.5rem',
+                    borderRight: '1px solid rgba(0,0,0,0.12)',
+                  }}
+              >
                 {[
                   ['TriggerPrompt', '🟡 Trigger'],
                   ['AnalysisPrompt', '🟢 Analysis'],
@@ -354,11 +401,20 @@ export default function Pipeline() {
                   ['FinalPrompt', '🟣 Final'],
                   ['MetaPrompt', '⚙️ Meta'],
                 ].map(([t, label]) => (
-                    <div key={t} className="palette-item" role="listitem" aria-label={label} tabIndex={0} onClick={() => {
-                      setCreationType(t as PromptType);
-                      setPaletteOpen(false);
-                      setSidebarOpen(false);
-                    }}>{label}</div>
+                    <div
+                        key={t}
+                        className="palette-item"
+                        role="listitem"
+                        aria-label={label}
+                        tabIndex={0}
+                        onClick={() => {
+                          setCreationType(t as PromptType);
+                          setPaletteOpen(false);
+                          setSidebarOpen(false);
+                        }}
+                    >
+                      {label}
+                    </div>
                 ))}
               </aside>
           )}
@@ -403,7 +459,10 @@ export default function Pipeline() {
                 open
                 type={creationType}
                 onCancel={() => setCreationType(null)}
-                onCreate={(data) => { createNode(creationType, data); setCreationType(null); }}
+                onCreate={(data) => {
+                  createNode(creationType, data);
+                  setCreationType(null);
+                }}
             />
         )}
 
@@ -411,22 +470,52 @@ export default function Pipeline() {
         {isMobile && (
             <>
               <Drawer anchor="left" open={paletteOpen} onClose={() => setPaletteOpen(false)}>
-                <aside style={{ width:120, display:'flex', flexDirection:'column', gap:'0.5rem', overflowY:'auto', height:'100%', padding:'0.5rem', borderRight:'1px solid rgba(0,0,0,0.12)' }}>
+                <aside
+                    style={{
+                      width: 120,
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                      overflowY: 'auto',
+                      height: '100%',
+                      padding: '0.5rem',
+                      borderRight: '1px solid rgba(0,0,0,0.12)',
+                    }}
+                >
                   {[
-                    ['TriggerPrompt','🟡 Trigger'],
-                    ['AnalysisPrompt','🟢 Analysis'],
-                    ['FollowUpPrompt','🔁 Follow‑Up'],
-                    ['DecisionPrompt','⚖️ Decision'],
-                    ['FinalPrompt','🟣 Final'],
-                    ['MetaPrompt','⚙️ Meta'],
-                  ].map(([t,label])=>(<div key={t} className="palette-item" role="listitem" aria-label={label} tabIndex={0} onClick={()=>{setCreationType(t as PromptType);setPaletteOpen(false);setSidebarOpen(false);}}>{label}</div>))}
+                    ['TriggerPrompt', '🟡 Trigger'],
+                    ['AnalysisPrompt', '🟢 Analysis'],
+                    ['FollowUpPrompt', '🔁 Follow‑Up'],
+                    ['DecisionPrompt', '⚖️ Decision'],
+                    ['FinalPrompt', '🟣 Final'],
+                    ['MetaPrompt', '⚙️ Meta'],
+                  ].map(([t, label]) => (
+                      <div
+                          key={t}
+                          className="palette-item"
+                          role="listitem"
+                          aria-label={label}
+                          tabIndex={0}
+                          onClick={() => {
+                            setCreationType(t as PromptType);
+                            setPaletteOpen(false);
+                            setSidebarOpen(false);
+                          }}
+                      >
+                        {label}
+                      </div>
+                  ))}
                 </aside>
               </Drawer>
               <Drawer anchor="right" open={sidebarOpen} onClose={() => setSidebarOpen(false)}>
-                <Box sx={{ width:300, p:1 }}>
-                  {selectedNode ? <NodeEditPanel key={selectedNode.id} node={selectedNode} onSave={handleSaveNode}/>
-                      : selectedEdge ? <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge}/>
-                          : <Typography>Wähle ein Element</Typography>}
+                <Box sx={{ width: 300, p: 1 }}>
+                  {selectedNode ? (
+                      <NodeEditPanel key={selectedNode.id} node={selectedNode} onSave={handleSaveNode} />
+                  ) : selectedEdge ? (
+                      <EdgeEditPanel edge={selectedEdge} onSave={handleSaveEdge} />
+                  ) : (
+                      <Typography>Wähle ein Element</Typography>
+                  )}
                 </Box>
               </Drawer>
             </>

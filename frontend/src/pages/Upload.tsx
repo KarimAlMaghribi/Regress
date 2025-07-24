@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { Box, Button, LinearProgress, Typography } from '@mui/material';
-import { useNavigate } from 'react-router-dom';
+import React, {useEffect, useState} from 'react';
+import {Box, Button, LinearProgress, Typography} from '@mui/material';
+import {useNavigate} from 'react-router-dom';
 import DropZone from '../components/DropZone';
 import DocumentPreview from '../components/DocumentPreview';
 
@@ -9,7 +9,10 @@ interface LayoutPage {
   height: number;
   blocks: { bbox: [number, number, number, number]; text: string }[];
 }
-interface Layout { pages: LayoutPage[] }
+
+interface Layout {
+  pages: LayoutPage[]
+}
 
 export default function Upload() {
   const [uploadId, setUploadId] = useState<number | null>(null);
@@ -21,7 +24,7 @@ export default function Upload() {
   const handleFile = async (file: File) => {
     const form = new FormData();
     form.append('file', file);
-    const res = await fetch(`${ingest}/upload`, { method: 'POST', body: form });
+    const res = await fetch(`${ingest}/upload`, {method: 'POST', body: form});
     const data = await res.json();
     setUploadId(Number(data.id));
     setStatus('uploading');
@@ -47,22 +50,23 @@ export default function Upload() {
   }, [uploadId]);
 
   return (
-    <Box>
-      {!uploadId && <DropZone onUpload={handleFile} />}
-      {uploadId && status !== 'ocr_done' && (
-        <Box sx={{ mt: 4 }}>
-          <LinearProgress />
-          <Typography sx={{ mt: 1 }}>🔄 OCR läuft…</Typography>
-        </Box>
-      )}
-      {layout && uploadId && (
-        <Box sx={{ mt: 2 }}>
-          <DocumentPreview pdfUrl={`${ingest}/pdf/${uploadId}`} page={layout.pages[0]} />
-          <Button variant="contained" sx={{ mt: 2 }} onClick={() => navigate(`/analyse?id=${uploadId}`)}>
-            ➡️ Pipeline starten
-          </Button>
-        </Box>
-      )}
-    </Box>
+      <Box>
+        {!uploadId && <DropZone onUpload={handleFile}/>}
+        {uploadId && status !== 'ocr_done' && (
+            <Box sx={{mt: 4}}>
+              <LinearProgress/>
+              <Typography sx={{mt: 1}}>🔄 OCR läuft…</Typography>
+            </Box>
+        )}
+        {layout && uploadId && (
+            <Box sx={{mt: 2}}>
+              <DocumentPreview pdfUrl={`${ingest}/pdf/${uploadId}`} page={layout.pages[0]}/>
+              <Button variant="contained" sx={{mt: 2}}
+                      onClick={() => navigate(`/pipeline?pdf=${uploadId}`)}>
+                ➡️ Pipeline starten
+              </Button>
+            </Box>
+        )}
+      </Box>
   );
 }
