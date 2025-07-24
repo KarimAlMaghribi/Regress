@@ -16,8 +16,6 @@ evalexpr = "12"
 regex = "1"
 anyhow.workspace = true
 chrono = { version = "0.4", features = ["serde"] }
-uuid = { version = "1.17.0", features = ["v4"] }
-petgraph = "0.8.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
