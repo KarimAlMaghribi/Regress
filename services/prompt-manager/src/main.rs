@@ -21,7 +21,6 @@ use model::{
         Model as GroupPromptModel,
     },
     prompt::Entity as Prompt,
-    pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel, Model as PipelineModel},
 };
 use tracing::{error, info};
 
@@ -65,18 +64,6 @@ struct GroupInput {
     favorite: bool,
 }
 
-#[derive(Serialize)]
-struct PipelineData {
-    id: i32,
-    name: String,
-    data: serde_json::Value,
-}
-
-#[derive(Deserialize)]
-struct PipelineInput {
-    name: String,
-    data: serde_json::Value,
-}
 
 #[derive(Serialize, Debug)]
 struct ErrorResponse {
@@ -515,103 +502,6 @@ async fn set_favorite(
     }))
 }
 
-async fn list_pipelines(
-    State(db): State<Arc<DatabaseConnection>>,
-) -> Result<Json<Vec<PipelineData>>, (StatusCode, Json<ErrorResponse>)> {
-    info!("listing pipelines");
-    let items = PipelineEntity::find().all(&*db).await.map_err(|e| {
-        error!("failed to list pipelines: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
-        )
-    })?;
-    Ok(Json(
-        items
-            .into_iter()
-            .map(|p| PipelineData { id: p.id, name: p.name, data: p.data })
-            .collect(),
-    ))
-}
-
-async fn create_pipeline(
-    State(db): State<Arc<DatabaseConnection>>,
-    Json(input): Json<PipelineInput>,
-) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
-    info!("creating pipeline");
-    let mut model: PipelineActiveModel = Default::default();
-    model.name = Set(input.name);
-    model.data = Set(input.data);
-    let res = model.insert(&*db).await.map_err(|e| {
-        error!("failed to create pipeline: {}", e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
-        )
-    })?;
-    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.data }))
-}
-
-async fn update_pipeline(
-    Path(id): Path<i32>,
-    State(db): State<Arc<DatabaseConnection>>,
-    Json(input): Json<PipelineInput>,
-) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
-    info!(id, "updating pipeline");
-    let Some(mut model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("failed to find pipeline {}: {}", id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
-        )
-    })?
-    else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse { error: "Not found".into() }),
-        ));
-    };
-    model.name = input.name;
-    model.data = input.data;
-    let active: PipelineActiveModel = model.into();
-    let res = active.update(&*db).await.map_err(|e| {
-        error!("failed to update pipeline {}: {}", id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
-        )
-    })?;
-    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.data }))
-}
-
-async fn delete_pipeline(
-    Path(id): Path<i32>,
-    State(db): State<Arc<DatabaseConnection>>,
-) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    info!(id, "deleting pipeline");
-    let Some(model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("failed to find pipeline {}: {}", id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
-        )
-    })?
-    else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse { error: "Not found".into() }),
-        ));
-    };
-    let active: PipelineActiveModel = model.into();
-    active.delete(&*db).await.map_err(|e| {
-        error!("failed to delete pipeline {}: {}", id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse { error: e.to_string() }),
-        )
-    })?;
-    Ok(())
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -672,11 +562,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ))
     .await?;
 
-    db.execute(sea_orm::Statement::from_string(
-        db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS pipelines (id SERIAL PRIMARY KEY, name TEXT NOT NULL, data JSONB NOT NULL)",
-    ))
-    .await?;
 
     let app = Router::new()
         .route("/health", get(health))
@@ -686,8 +571,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/prompt-groups", get(list_groups).post(create_group))
         .route("/prompt-groups/:id", put(update_group))
         .route("/prompt-groups/:id/favorite", put(set_group_favorite))
-        .route("/pipelines", get(list_pipelines).post(create_pipeline))
-        .route("/pipelines/:id", put(update_pipeline).delete(delete_pipeline))
         .with_state(db.clone())
         .layer(CorsLayer::permissive());
     info!("starting prompt-manager");
@@ -898,45 +781,4 @@ mod tests {
         assert!(res.0.favorite);
     }
 
-    #[tokio::test]
-    async fn create_update_pipeline_route() {
-        let db = Arc::new(
-            MockDatabase::new(DbBackend::Postgres)
-                .append_exec_results([MockExecResult { last_insert_id: 1, rows_affected: 1 }])
-                .append_query_results([[model::PipelineModel {
-                    id: 1,
-                    name: "p".into(),
-                    data: serde_json::json!({"a":1}),
-                }]])
-                .append_query_results([[model::PipelineModel {
-                    id: 1,
-                    name: "p".into(),
-                    data: serde_json::json!({"a":1}),
-                }]])
-                .append_exec_results([MockExecResult { last_insert_id: 0, rows_affected: 1 }])
-                .append_query_results([[model::PipelineModel {
-                    id: 1,
-                    name: "p2".into(),
-                    data: serde_json::json!({"b":2}),
-                }]])
-                .into_connection(),
-        );
-
-        let res = create_pipeline(
-            State(db.clone()),
-            Json(PipelineInput { name: "p".into(), data: serde_json::json!({"a":1}) }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(res.0.name, "p");
-
-        let res = update_pipeline(
-            Path(1),
-            State(db.clone()),
-            Json(PipelineInput { name: "p2".into(), data: serde_json::json!({"b":2}) }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(res.0.name, "p2");
-    }
 }

@@ -8,7 +8,7 @@ fn default_message_broker_url() -> String {
     "kafka:9092".into()
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Settings {
     #[serde(default = "default_database_url")]
     pub database_url: String,

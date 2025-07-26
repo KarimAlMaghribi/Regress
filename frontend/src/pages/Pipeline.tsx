@@ -16,6 +16,12 @@ import {
   Modal,
   IconButton,
   Skeleton,
+  Table,
+  TableHead,
+  TableRow,
+  TableCell,
+  TableBody,
+  Chip,
 } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
@@ -93,6 +99,7 @@ export default function PipelineFlow() {
   const [pdfIds, setPdfIds] = useState<number[]>([]);
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [groups, setGroups] = useState<PromptGroup[]>([]);
+  const [pipelineList, setPipelineList] = useState<{ id: number; name: string; data: any }[]>([]);
   const ungroupedPrompts = useMemo(
     () => prompts.filter(p => !groups.some(g => g.promptIds.includes(p.id))),
     [prompts, groups],
@@ -291,6 +298,10 @@ export default function PipelineFlow() {
       )
       .then(setGroups)
       .catch(() => undefined);
+    fetch('http://localhost:8087/pipelines')
+      .then(r => r.json())
+      .then(setPipelineList)
+      .catch(() => undefined);
   }, []);
 
   const { nodes, edges } = useMemo(() => {
@@ -351,6 +362,40 @@ export default function PipelineFlow() {
         breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Pipeline' }]}
         actions={<Button variant="contained" onClick={activate}>Pipeline aktivieren</Button>}
       />
+      {pipelineList.length > 0 && (
+        <Paper sx={{ p: 2, mb: 2 }}>
+          <Typography variant="h6" gutterBottom>Gespeicherte Pipelines</Typography>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Name</TableCell>
+                <TableCell>PDFs</TableCell>
+                <TableCell>Prompts/Gruppen</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {pipelineList.map(p => (
+                <TableRow key={p.id}>
+                  <TableCell>{p.name}</TableCell>
+                  <TableCell>
+                    {(p.data.pdfs || p.data.pdf_ids || []).map((id: any, i: number) => (
+                      <Chip key={i} label={id} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+                    ))}
+                  </TableCell>
+                  <TableCell>
+                    {(p.data.prompts || []).map((pr: any, i: number) => (
+                      <Chip key={`p${i}`} label={pr} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+                    ))}
+                    {(p.data.groups || []).map((gr: any, i: number) => (
+                      <Chip key={`g${i}`} label={gr} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+                    ))}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </Paper>
+      )}
       <Paper sx={{ p: 2, mb: 2 }}>
         <Typography variant="h6" gutterBottom>
           PDF Stage

@@ -32,13 +32,20 @@ services:
       DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
     ports:
       - "8082:8082"
-  classifier:
+  pipeline-manager:
     build:
       context: .
-      dockerfile: services/classifier/Dockerfile
+      dockerfile: services/pipeline-manager/Dockerfile
     environment:
       DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
-      OPENAI_API_KEY: "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"
+    ports:
+      - "8087:8087"
+  pipeline-runner:
+    build:
+      context: .
+      dockerfile: services/pipeline-runner/Dockerfile
+    environment:
+      DATABASE_URL: "postgres://regressdb:nITj%22%2B0%28f89F@regress-db-develop.postgres.database.azure.com:5432/allianz?sslmode=require"
     ports:
       - "8084:8084"
   metrics:
@@ -92,6 +99,7 @@ services:
         VITE_CLASSIFIER_URL: http://localhost:8084
         VITE_INGEST_URL: http://localhost:8081
         VITE_HISTORY_WS: ws://localhost:8090
+        VITE_PROMPT_MANAGER_URL: http://localhost:8082
     ports:
       - "3001:80"
 

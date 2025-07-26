@@ -12,3 +12,10 @@ tracing.workspace = true
 awc = "3"
 openai.workspace = true
 actix-web = "4"
+evalexpr = "12"
+regex = "1"
+anyhow.workspace = true
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

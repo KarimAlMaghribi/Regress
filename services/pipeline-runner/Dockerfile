@@ -12,7 +12,7 @@ RUN apt-get update \
         libssl-dev \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && cargo build --release --package classifier --manifest-path services/classifier/Cargo.toml
+    && cargo build --release --package pipeline-runner --manifest-path services/pipeline-runner/Cargo.toml
 
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -20,5 +20,5 @@ RUN apt-get update \
         libssl3 \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/classifier /usr/local/bin/classifier
-CMD ["classifier"]
+COPY --from=builder /app/target/release/pipeline-runner /usr/local/bin/pipeline-runner
+CMD ["pipeline-runner"]
