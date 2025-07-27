@@ -7,12 +7,12 @@ processed by backend services and where they are stored.
 - **file** (`File`): selected PDF uploaded from the browser.
 
 The file is sent to the `pdf-ingest` service at `/upload`. It stores the bytes
-and publishes a `pdf-uploaded` event. The other services react on this event:
+and publishes a `pdf-merged` event. The other services react on this event:
 
 1. `text-extraction` retrieves the PDF, performs OCR and publishes a
    `text-extracted` message.
-2. `classifier` consumes that message, calls OpenAI and writes to the
-   `classifications` table before emitting `classification-result`.
+2. `pipeline-runner` consumes that message, executes the pipeline and writes to
+   the `analysis_history` table before emitting `pipeline-result`.
 
 The `classifications` table contains:
 
@@ -26,7 +26,7 @@ The `classifications` table contains:
 | `metrics`    | JSONB     | analysis metrics                |
 | `error`      | TEXT      | error message if classification failed |
 
-A result can be polled via `GET /results/{id}` from the classifier service.
+Results can be polled via `GET /results/{id}` from the pipeline API.
 While processing, the endpoint responds with HTTP `202 Accepted` so callers
 should retry until a `200 OK` payload is returned. If an error occurs during
 classification the endpoint responds with `500` and includes an `error`
@@ -41,8 +41,8 @@ field in the JSON body.
 ## Frontend Integration
 - The ingestion service base URL is read from `VITE_INGEST_URL` and defaults to
   `http://localhost:8081`.
-- The classifier service base URL is configured via `VITE_CLASSIFIER_URL` and
-  defaults to `http://localhost:8084`.
+- The pipeline API base URL is configured via `VITE_API_URL` and
+  defaults to `http://localhost:8090`.
 
 ## Example Request
 ```

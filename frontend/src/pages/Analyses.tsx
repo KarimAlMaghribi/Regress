@@ -61,9 +61,6 @@ export default function Analyses() {
   };
 
   useEffect(load, []);
-  useEffect(() => {
-    loadPromptGroupMap().then(setPromptGroups).catch(() => undefined);
-  }, []);
 
   const filteredDone = done.filter(e => {
     const ts = dayjs(e.timestamp);
