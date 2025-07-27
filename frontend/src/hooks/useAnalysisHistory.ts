@@ -40,10 +40,8 @@ export default function useAnalysisHistory(options: HistoryOptions) {
 
     try {
       setLoading(true);
-      const backend = import.meta.env.VITE_CLASSIFIER_URL || 'http://localhost:8084';
-      const res = await fetch(
-        `${backend}/history?${params.toString()}`
-      );
+      const backend = import.meta.env.VITE_API_URL || 'http://localhost:8090';
+      const res = await fetch(`${backend}/history?${params.toString()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const parsed = z.array(AnalysisResultSchema).parse(json);

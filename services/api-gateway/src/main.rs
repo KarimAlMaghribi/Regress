@@ -12,7 +12,6 @@ async fn health() -> impl Responder {
         "http://pdf-ingest:8081/health",
         "http://text-extraction:8083/health",
         "http://prompt-manager:8082/health",
-        "http://classifier:8084/health",
         "http://metrics:8085/health",
     ];
     let checks = urls.iter().map(|u| client.get(*u).send());
@@ -74,10 +73,6 @@ async fn prompts(req: HttpRequest, body: Payload) -> impl Responder {
     proxy(req, body, url).await
 }
 
-async fn classify(req: HttpRequest, body: Payload) -> impl Responder {
-    info!("forwarding classify request");
-    proxy(req, body, "http://classifier:8084/classify".into()).await
-}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -88,7 +83,6 @@ async fn main() -> std::io::Result<()> {
             .wrap(Cors::permissive())
             .route("/health", web::get().to(health))
             .route("/upload", web::post().to(upload))
-            .service(web::resource("/classify").route(web::to(classify)))
             .service(web::resource("/prompts/{tail:.*}").route(web::to(prompts)))
     })
     .bind(("0.0.0.0", 8080))?
