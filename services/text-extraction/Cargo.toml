@@ -28,3 +28,4 @@ tokio-postgres.workspace = true
 rdkafka.workspace = true
 postgres-native-tls.workspace = true
 native-tls.workspace = true
+anyhow = { workspace = true }
