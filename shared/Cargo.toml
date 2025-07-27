@@ -15,4 +15,4 @@ actix-web = "4"
 rhai = { workspace = true }
 anyhow = { workspace = true }
 uuid = { version = "1", features=["serde", "v4"] }
-json-repair = "0.4"
+jsonrepair = { package = "json-repair", version = "0.3.0" }
