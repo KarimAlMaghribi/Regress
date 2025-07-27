@@ -16,3 +16,4 @@ rhai = { workspace = true }
 anyhow = { workspace = true }
 uuid = { version = "1", features=["serde", "v4"] }
 jsonrepair = { package = "json-repair", version = "0.3.0" }
+tokio = { workspace = true }

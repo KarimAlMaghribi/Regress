@@ -1,9 +1,11 @@
 use actix_web::{http::header, Error};
 use awc::Client;
+use jsonrepair;
 use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
 use serde::Serialize;
-use tracing::error;
 use std::time::Duration;
+use tokio::time;
+use tracing::error;
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
@@ -56,7 +58,10 @@ pub async fn call_openai_chat(
     let key = std::env::var("OPENAI_API_KEY")
         .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
 
-    let req = ChatRequest { model, messages: &messages };
+    let req = ChatRequest {
+        model,
+        messages: &messages,
+    };
 
     let base = std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| "https://api.openai.com".into());
     let mut res = client
@@ -87,7 +92,9 @@ pub async fn call_openai_chat(
             body = %String::from_utf8_lossy(&body_bytes),
             "openai error",
         );
-        Err(actix_web::error::ErrorInternalServerError("openai request failed"))
+        Err(actix_web::error::ErrorInternalServerError(
+            "openai request failed",
+        ))
     }
 }
 
@@ -109,14 +116,17 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<serde_json::Value, P
     let system = "You are an extraction engine. Extract exactly one JSON value";
     let user = format!("{}\n{}", prompt, input);
     for i in 0..=3 {
-        let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
+        let msgs = vec![
+            msg(ChatCompletionMessageRole::System, system),
+            msg(ChatCompletionMessageRole::User, &user),
+        ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(fixed) = json_repair::repair(&ans) {
-                if let Ok(v) = serde_json::from_str(&fixed) { return Ok(v); }
+            if let Ok(v) = jsonrepair::repair_json_string(&ans) {
+                return Ok(v);
             }
         }
         let wait = 100 * (1u64 << i).min(8);
-        tokio::time::sleep(Duration::from_millis(wait)).await;
+        time::sleep(Duration::from_millis(wait)).await;
     }
     Err(PromptError::Parse)
 }
@@ -125,40 +135,73 @@ pub async fn score(prompt_id: i32, args: &[(&str, serde_json::Value)]) -> Result
     let client = Client::default();
     let prompt = fetch_prompt(prompt_id).await?;
     let system = "You are a scoring engine. Return only a floating point number between 0 and 1";
-    let user = format!("{}\n{}", prompt, serde_json::to_string(args).unwrap_or_default());
+    let user = format!(
+        "{}\n{}",
+        prompt,
+        serde_json::to_string(args).unwrap_or_default()
+    );
     for i in 0..=3 {
-        let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
+        let msgs = vec![
+            msg(ChatCompletionMessageRole::System, system),
+            msg(ChatCompletionMessageRole::User, &user),
+        ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(fixed) = json_repair::repair(&ans) {
-                if let Ok(v) = serde_json::from_str::<f64>(&fixed) { return Ok(v); }
+            if let Ok(val) = jsonrepair::repair_json_string(&ans) {
+                if let Some(v) = val.as_f64() {
+                    return Ok(v);
+                }
+                if let Some(s) = val.as_str() {
+                    if let Ok(v) = s.parse::<f64>() {
+                        return Ok(v);
+                    }
+                }
             }
         }
         let wait = 100 * (1u64 << i).min(8);
-        tokio::time::sleep(Duration::from_millis(wait)).await;
+        time::sleep(Duration::from_millis(wait)).await;
     }
     Err(PromptError::Parse)
 }
 
-pub async fn decide(prompt_id: i32, state: &std::collections::HashMap<String, serde_json::Value>) -> Result<serde_json::Value, PromptError> {
+pub async fn decide(
+    prompt_id: i32,
+    state: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<serde_json::Value, PromptError> {
     let client = Client::default();
     let prompt = fetch_prompt(prompt_id).await?;
     let system = "Return only the word TRUE or FALSE";
-    let user = format!("{}\n{}", prompt, serde_json::to_string(state).unwrap_or_default());
+    let user = format!(
+        "{}\n{}",
+        prompt,
+        serde_json::to_string(state).unwrap_or_default()
+    );
     for i in 0..=3 {
-        let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
+        let msgs = vec![
+            msg(ChatCompletionMessageRole::System, system),
+            msg(ChatCompletionMessageRole::User, &user),
+        ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(fixed) = json_repair::repair(&ans) {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&fixed) { return Ok(v); }
-                if let Ok(b) = serde_json::from_str::<bool>(&fixed) { return Ok(serde_json::json!(b)); }
+            if let Ok(val) = jsonrepair::repair_json_string(&ans) {
+                if val.is_boolean() {
+                    return Ok(val);
+                }
+                if let Some(s) = val.as_str() {
+                    if let Ok(b) = s.parse::<bool>() {
+                        return Ok(serde_json::json!(b));
+                    }
+                }
+                return Ok(val);
             }
         }
         let wait = 100 * (1u64 << i).min(8);
-        tokio::time::sleep(Duration::from_millis(wait)).await;
+        time::sleep(Duration::from_millis(wait)).await;
     }
     Err(PromptError::Parse)
 }
 
-pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> { Ok(serde_json::json!(null)) }
+pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> {
+    Ok(serde_json::json!(null))
+}
 
 async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
     let client = Client::default();
@@ -172,7 +215,7 @@ async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
             }
             _ => {
                 let wait = 100 * (1u64 << i).min(8);
-                tokio::time::sleep(Duration::from_millis(wait)).await;
+                time::sleep(Duration::from_millis(wait)).await;
             }
         }
     }
