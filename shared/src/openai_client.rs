@@ -1,13 +1,22 @@
 use actix_web::{http::header, Error};
 use awc::Client;
-use openai::chat::{ChatCompletion, ChatCompletionMessage};
+use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
 use serde::Serialize;
 use tracing::error;
+use std::time::Duration;
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
     messages: &'a [ChatCompletionMessage],
+}
+
+fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
+    ChatCompletionMessage {
+        role,
+        content: Some(txt.to_string()),
+        ..Default::default()
+    }
 }
 
 /// Send chat messages to OpenAI and return the assistant's answer.
@@ -49,8 +58,9 @@ pub async fn call_openai_chat(
 
     let req = ChatRequest { model, messages: &messages };
 
+    let base = std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| "https://api.openai.com".into());
     let mut res = client
-        .post("https://api.openai.com/v1/chat/completions")
+        .post(format!("{}/v1/chat/completions", base))
         .insert_header((header::AUTHORIZATION, format!("Bearer {}", key)))
         .send_json(&req)
         .await
@@ -79,4 +89,92 @@ pub async fn call_openai_chat(
         );
         Err(actix_web::error::ErrorInternalServerError("openai request failed"))
     }
+}
+
+#[derive(thiserror::Error, Debug)]
+pub enum PromptError {
+    #[error("extraction failed")]
+    ExtractionFailed,
+    #[error("scoring failed")]
+    ScoringFailed,
+    #[error("decision failed")]
+    DecisionFailed,
+    #[error("parse error")]
+    Parse,
+}
+
+pub async fn extract(prompt_id: i32, input: &str) -> Result<serde_json::Value, PromptError> {
+    let client = Client::default();
+    let prompt = fetch_prompt(prompt_id).await?;
+    let system = "You are an extraction engine. Extract exactly one JSON value";
+    let user = format!("{}\n{}", prompt, input);
+    for i in 0..=3 {
+        let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
+        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
+            if let Ok(fixed) = jsonrepair::repair(&ans) {
+                if let Ok(v) = serde_json::from_str(&fixed) { return Ok(v); }
+            }
+        }
+        let wait = 100 * (1u64 << i).min(8);
+        tokio::time::sleep(Duration::from_millis(wait)).await;
+    }
+    Err(PromptError::Parse)
+}
+
+pub async fn score(prompt_id: i32, args: &[(&str, serde_json::Value)]) -> Result<f64, PromptError> {
+    let client = Client::default();
+    let prompt = fetch_prompt(prompt_id).await?;
+    let system = "You are a scoring engine. Return only a floating point number between 0 and 1";
+    let user = format!("{}\n{}", prompt, serde_json::to_string(args).unwrap_or_default());
+    for i in 0..=3 {
+        let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
+        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
+            if let Ok(fixed) = jsonrepair::repair(&ans) {
+                if let Ok(v) = serde_json::from_str::<f64>(&fixed) { return Ok(v); }
+            }
+        }
+        let wait = 100 * (1u64 << i).min(8);
+        tokio::time::sleep(Duration::from_millis(wait)).await;
+    }
+    Err(PromptError::Parse)
+}
+
+pub async fn decide(prompt_id: i32, state: &std::collections::HashMap<String, serde_json::Value>) -> Result<serde_json::Value, PromptError> {
+    let client = Client::default();
+    let prompt = fetch_prompt(prompt_id).await?;
+    let system = "Return only the word TRUE or FALSE";
+    let user = format!("{}\n{}", prompt, serde_json::to_string(state).unwrap_or_default());
+    for i in 0..=3 {
+        let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
+        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
+            if let Ok(fixed) = jsonrepair::repair(&ans) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&fixed) { return Ok(v); }
+                if let Ok(b) = serde_json::from_str::<bool>(&fixed) { return Ok(serde_json::json!(b)); }
+            }
+        }
+        let wait = 100 * (1u64 << i).min(8);
+        tokio::time::sleep(Duration::from_millis(wait)).await;
+    }
+    Err(PromptError::Parse)
+}
+
+pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> { Ok(serde_json::json!(null)) }
+
+async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
+    let client = Client::default();
+    let url = format!("http://localhost:8082/prompts/{}", id);
+    for i in 0..=3 {
+        match client.get(url.clone()).send().await {
+            Ok(mut resp) if resp.status().is_success() => {
+                if let Ok(text) = resp.body().await {
+                    return Ok(String::from_utf8_lossy(&text).to_string());
+                }
+            }
+            _ => {
+                let wait = 100 * (1u64 << i).min(8);
+                tokio::time::sleep(Duration::from_millis(wait)).await;
+            }
+        }
+    }
+    Err(PromptError::Parse)
 }

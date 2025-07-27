@@ -1,0 +1,23 @@
+[package]
+name = "pipeline-runner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+actix-cors = "0.6"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+rdkafka = { version = "0.36", features = ["tokio"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "uuid"] }
+tracing-subscriber = { workspace = true }
+rhai = { workspace = true }
+anyhow = "1"
+openai = { workspace = true }
+shared = { path = "../../shared" }
+
+[dev-dependencies]
+wiremock = "0.6"

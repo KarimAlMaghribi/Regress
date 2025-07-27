@@ -1,546 +1,213 @@
-import React, { useState, useMemo, useCallback, useRef } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
-import Selecto from 'react-selecto';
+import { useState, useEffect } from 'react';
 import {
-  Box,
-  Paper,
-  Typography,
-  Card,
-  CardContent,
-  Button,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
-  Grid,
-  Pagination,
-  Modal,
-  IconButton,
-  Skeleton,
+  Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton, Button,
+  Drawer, TextField, Select, MenuItem, Checkbox
 } from '@mui/material';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
-import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
-import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-import CloseIcon from '@mui/icons-material/Close';
-import ReactFlow, {
-  MiniMap,
-  Controls,
-  Handle,
-  Position,
-  NodeProps,
-  Connection,
-  ReactFlowProvider,
-  Node,
-  Edge,
-} from 'react-flow-renderer';
-import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
-import dagre from 'dagre';
-import PageHeader from '../components/PageHeader';
+import DeleteIcon from '@mui/icons-material/Delete';
+import AddIcon from '@mui/icons-material/Add';
+import { DragDropContext, Droppable, Draggable } from 'react-beautiful-dnd';
+import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
 
-pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8090';
 
-const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+export default function Pipeline() {
+  const {
+    steps,
+    name,
+    currentPipelineId,
+    addStepAt,
+    updateStep,
+    removeStep,
+    moveStep,
+    loadSteps,
+    setName,
+  } = usePipelineStore();
+  const [edit, setEdit] = useState<PipelineStep | null>(null);
+  const [promptOptions, setPromptOptions] = useState<{ id: number; text: string }[]>([]);
+  const [list, setList] = useState<{ id: string; name: string }[]>([]);
 
-interface Step { id: string; label: string; type: 'pdf' | 'prompt'; }
-interface Stage { id: string; name: string; steps: Step[]; }
-interface Prompt { id: number; text: string; }
-interface PromptGroup { id: number; name: string; promptIds: number[]; }
-
-type NodeData = { label: string; type: 'pdf' | 'prompt'; onOpen?: () => void };
-
-const CardNode = ({ data, id }: NodeProps<NodeData>) => {
-  const handleClick = () => {
-    if (data.type === 'pdf') {
-      data.onOpen ? data.onOpen() : window.open(`${ingest}/pdf/${id.replace('pdf-', '')}`);
-    }
-  };
-
-  return (
-    <Card variant="outlined" sx={{ minWidth: 170, textAlign: 'center', cursor: 'pointer' }} onClick={handleClick}>
-      <Handle type="target" position={Position.Top} />
-      <CardContent sx={{ p: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1, pointerEvents: 'none' }}>
-        {data.type === 'pdf' ? (
-          <PictureAsPdfIcon fontSize="small" color="error" />
-        ) : (
-          <ChatBubbleOutlineIcon fontSize="small" color="primary" />
-        )}
-        <Typography variant="body2">{data.label}</Typography>
-      </CardContent>
-      <Handle type="source" position={Position.Bottom} />
-    </Card>
-  );
-};
-
-const nodeTypes = { card: CardNode };
-
-function applyLayout(nodes: Node<NodeData>[], edges: Edge[]) {
-  const dagreGraph = new dagre.graphlib.Graph();
-  dagreGraph.setDefaultEdgeLabel(() => ({}));
-  dagreGraph.setGraph({ rankdir: 'LR' });
-
-  nodes.forEach(n => dagreGraph.setNode(n.id, { width: 170, height: 48 }));
-  edges.forEach(e => dagreGraph.setEdge(e.source, e.target));
-
-  dagre.layout(dagreGraph);
-
-  return nodes.map(n => {
-    const { x, y } = dagreGraph.node(n.id);
-    n.position = { x, y };
-    return n;
-  });
-}
-
-export default function PipelineFlow() {
-  const [pdfIds, setPdfIds] = useState<number[]>([]);
-  const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [groups, setGroups] = useState<PromptGroup[]>([]);
-  const ungroupedPrompts = useMemo(
-    () => prompts.filter(p => !groups.some(g => g.promptIds.includes(p.id))),
-    [prompts, groups],
-  );
-  const [pdfPage, setPdfPage] = useState(1);
-  const [promptPages, setPromptPages] = useState<Record<number, number>>({});
-  const [previewId, setPreviewId] = useState<number | null>(null);
-  const pdfGridRef = useRef<HTMLDivElement | null>(null);
-  const [pipeline, setPipeline] = useState<Stage[]>([
-    { id: 'pdf', name: 'PDF Stage', steps: [] },
-    { id: 'prompt', name: 'Prompt Stage', steps: [] },
-  ]);
-  const pdfPerPage = 8;
-  const promptsPerPage = 8;
-
-  const togglePdf = (id: number) => {
-    setPipeline(p => {
-      const idx = p.findIndex(s => s.id === 'pdf');
-      if (idx === -1) return p;
-      const stage = p[idx];
-      const exists = stage.steps.some(s => s.id === `pdf-${id}`);
-      const steps = exists
-        ? stage.steps.filter(s => s.id !== `pdf-${id}`)
-        : [...stage.steps, { id: `pdf-${id}`, label: `PDF ${id}`, type: 'pdf' }];
-      const np = [...p];
-      np[idx] = { ...stage, steps };
-      return np;
-    });
-  };
-
-  const selectPdfIds = (ids: number[]) => {
-    setPipeline(p => {
-      const idx = p.findIndex(s => s.id === 'pdf');
-      if (idx === -1) return p;
-      const stage = p[idx];
-      const steps = [...stage.steps];
-      ids.forEach(id => {
-        if (!steps.some(s => s.id === `pdf-${id}`)) {
-          steps.push({ id: `pdf-${id}`, label: `PDF ${id}`, type: 'pdf' });
-        }
-      });
-      const np = [...p];
-      np[idx] = { ...stage, steps };
-      return np;
-    });
-  };
-
-  const pagedPdfIds = useMemo(
-    () => pdfIds.slice((pdfPage - 1) * pdfPerPage, pdfPage * pdfPerPage),
-    [pdfIds, pdfPage],
-  );
-
-  const pagedPrompts = (g?: PromptGroup) => {
-    const gid = g ? g.id : 0;
-    const list = g ? g.promptIds : ungroupedPrompts.map(p => p.id);
-    const page = promptPages[gid] || 1;
-    const ids = list.slice((page - 1) * promptsPerPage, page * promptsPerPage);
-    return { page, ids, total: Math.ceil(list.length / promptsPerPage), gid };
-  };
-
-  const selectAllPdfs = () => {
-    setPipeline(p => {
-      const idx = p.findIndex(s => s.id === 'pdf');
-      if (idx === -1) return p;
-      const stage = p[idx];
-      const steps = [...stage.steps];
-      pdfIds.forEach(id => {
-        if (!steps.some(s => s.id === `pdf-${id}`)) {
-          steps.push({ id: `pdf-${id}`, label: `PDF ${id}`, type: 'pdf' });
-        }
-      });
-      const np = [...p];
-      np[idx] = { ...stage, steps };
-      return np;
-    });
-  };
-
-  const deselectAllPdfs = () => {
-    setPipeline(p => p.map(s => (s.id === 'pdf' ? { ...s, steps: [] } : s)));
-  };
-
-  const togglePrompt = (id: number) => {
-    const pr = prompts.find(p => p.id === id);
-    if (!pr) return;
-    setPipeline(p => {
-      const idx = p.findIndex(s => s.id === 'prompt');
-      if (idx === -1) return p;
-      const stage = p[idx];
-      const exists = stage.steps.some(s => s.id === `prompt-${id}`);
-      const steps = exists
-        ? stage.steps.filter(s => s.id !== `prompt-${id}`)
-        : [...stage.steps, { id: `prompt-${id}`, label: pr.text, type: 'prompt' }];
-      const np = [...p];
-      np[idx] = { ...stage, steps };
-      return np;
-    });
-  };
-
-  const selectAllGroup = (gid: number) => {
-    const ids = groups.find(g => g.id === gid)?.promptIds || [];
-    setPipeline(p => {
-      const idx = p.findIndex(s => s.id === 'prompt');
-      if (idx === -1) return p;
-      const stage = p[idx];
-      const steps = [...stage.steps];
-      ids.forEach(id => {
-        const pr = prompts.find(pr => pr.id === id);
-        if (!pr) return;
-        if (!steps.some(s => s.id === `prompt-${id}`)) {
-          steps.push({ id: `prompt-${id}`, label: pr.text, type: 'prompt' });
-        }
-      });
-      const np = [...p];
-      np[idx] = { ...stage, steps };
-      return np;
-    });
-  };
-
-  const deselectAllGroup = (gid: number) => {
-    const ids = groups.find(g => g.id === gid)?.promptIds || [];
-    setPipeline(p => {
-      const idx = p.findIndex(s => s.id === 'prompt');
-      if (idx === -1) return p;
-      const stage = p[idx];
-      const steps = stage.steps.filter(s => !ids.includes(Number(s.id.replace('prompt-', ''))));
-      const np = [...p];
-      np[idx] = { ...stage, steps };
-      return np;
-    });
-  };
-
-  const selectAllUngrouped = () => {
-    const ids = ungroupedPrompts.map(p => p.id);
-    setPipeline(p => {
-      const idx = p.findIndex(s => s.id === 'prompt');
-      if (idx === -1) return p;
-      const stage = p[idx];
-      const steps = [...stage.steps];
-      ids.forEach(id => {
-        const pr = prompts.find(pr => pr.id === id);
-        if (!pr) return;
-        if (!steps.some(s => s.id === `prompt-${id}`)) {
-          steps.push({ id: `prompt-${id}`, label: pr.text, type: 'prompt' });
-        }
-      });
-      const np = [...p];
-      np[idx] = { ...stage, steps };
-      return np;
-    });
-  };
-
-  const deselectAllUngrouped = () => {
-    const ids = ungroupedPrompts.map(p => p.id);
-    setPipeline(p => {
-      const idx = p.findIndex(s => s.id === 'prompt');
-      if (idx === -1) return p;
-      const stage = p[idx];
-      const steps = stage.steps.filter(s => !ids.includes(Number(s.id.replace('prompt-', ''))));
-      const np = [...p];
-      np[idx] = { ...stage, steps };
-      return np;
-    });
-  };
-
-  const onDragEnd = (result: DropResult) => {
+  const handleDrag = (result: any) => {
     if (!result.destination) return;
-    const gId = Number(result.source.droppableId);
-    if (gId !== Number(result.destination.droppableId)) return;
-    if (gId === 0) return;
-    setGroups(gs =>
-      gs.map(g => {
-        if (g.id === gId) {
-          const list = Array.from(g.promptIds);
-          const [removed] = list.splice(result.source.index, 1);
-          list.splice(result.destination.index, 0, removed);
-          return { ...g, promptIds: list };
-        }
-        return g;
-      }),
-    );
+    moveStep(result.source.index, result.destination.index);
   };
 
-  React.useEffect(() => {
-    fetch('http://localhost:8083/texts')
-      .then(r => r.json())
-      .then((list: { id: number }[]) => setPdfIds(list.map(i => i.id)))
-      .catch(() => undefined);
-    fetch('http://localhost:8082/prompts')
-      .then(r => r.json())
-      .then(setPrompts)
-      .catch(() => undefined);
-    fetch('http://localhost:8082/prompt-groups')
-      .then(r => r.json())
-      .then((list: any[]) =>
-        list.map(g => ({ id: g.id, name: g.name, promptIds: g.prompt_ids as number[] })),
-      )
-      .then(setGroups)
-      .catch(() => undefined);
-  }, []);
-
-  const { nodes, edges } = useMemo(() => {
-    const ns: Node<NodeData>[] = [];
-    const es: Edge[] = [];
-
-    pipeline.forEach((stage, i) => {
-      stage.steps.forEach(step => {
-        const idNum = step.type === 'pdf' ? Number(step.id.replace('pdf-', '')) : undefined;
-        ns.push({
-          id: step.id,
-          type: 'card',
-          data: {
-            label: step.label,
-            type: step.type,
-            onOpen: step.type === 'pdf' && idNum !== undefined ? () => setPreviewId(idNum) : undefined,
-          },
-          position: { x: 0, y: 0 },
-        });
-      });
-      if (i < pipeline.length - 1) {
-        stage.steps.forEach(a => {
-          pipeline[i + 1].steps.forEach(b => {
-            es.push({ id: `${a.id}-${b.id}`, source: a.id, target: b.id, animated: true, style: { stroke: '#6C5DD3' } });
-          });
-        });
-      }
-    });
-
-    return { nodes: applyLayout(ns, es), edges: es };
-  }, [pipeline]);
-
-  const onConnect = useCallback((c: Connection) => {
-    console.log('connect', c);
-  }, []);
-
-  const onNodeClick = useCallback((_: any, node: Node<NodeData>) => {
-    if (node.data.type === 'pdf') {
-      const id = Number(node.id.replace('pdf-', ''));
-      setPreviewId(id);
+  useEffect(() => {
+    if (edit?.type) {
+      fetch(`${API}/prompts?type=${edit.type}`)
+        .then(r => r.json())
+        .then(setPromptOptions)
+        .catch(() => setPromptOptions([]));
     }
-  }, []);
+  }, [edit?.type]);
 
-  const pdfStage = pipeline.find(s => s.id === 'pdf');
-  const promptStage = pipeline.find(s => s.id === 'prompt');
+  const save = () => {
+    fetch(`${API}/pipelines${currentPipelineId ? '/' + currentPipelineId : ''}`, {
+      method: currentPipelineId ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, steps }),
+    })
+      .then(r => r.json())
+      .then((res: any) => loadSteps(res.steps, res.id, res.name))
+      .catch(e => console.error('save pipeline', e));
+  };
 
-  const selectedPdfs = pdfStage?.steps.map(s => Number(s.id.replace('pdf-', ''))) || [];
-  const selectedPrompts = promptStage?.steps.map(s => Number(s.id.replace('prompt-', ''))) || [];
-
-  const activate = () => {
-    console.log('activate pipeline');
+  const load = () => {
+    fetch(`${API}/pipelines`)
+      .then(r => r.json())
+      .then((l: any[]) => {
+        setList(l);
+        const id = window.prompt('Pipeline ID', l[0]?.id || '');
+        if (id) {
+          fetch(`${API}/pipelines/${id}`)
+            .then(r => r.json())
+            .then((cfg: any) => loadSteps(cfg.steps, id, cfg.name));
+        }
+      })
+      .catch(e => console.error('load list', e));
   };
 
   return (
     <Box>
-      <PageHeader
-        title="Pipeline"
-        breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Pipeline' }]}
-        actions={<Button variant="contained" onClick={activate}>Pipeline aktivieren</Button>}
-      />
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <Typography variant="h6" gutterBottom>
-          PDF Stage
-        </Typography>
-        <Box sx={{ mb: 2 }} className="pdf-grid" ref={pdfGridRef}>
-          <Grid container spacing={1}>
-            {pagedPdfIds.map(id => {
-              const selected = selectedPdfs.includes(id);
-              return (
-                <Grid item xs={6} sm={4} md={3} lg={2} key={id}>
-                  <Card
-                    className="pdf-item"
-                    data-id={id}
-                    onClick={() => togglePdf(id)}
-                    sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer', userSelect: 'none' }}
-                  >
-                    <CardContent sx={{ p: 1 }}>
-                      <Typography variant="body2">PDF {id}</Typography>
-                    </CardContent>
-                  </Card>
-                </Grid>
-              );
-            })}
-          </Grid>
-          <Selecto
-            container={() => pdfGridRef.current!}
-            selectableTargets={[ '.pdf-item' ]}
-            selectByClick={false}
-            onSelectEnd={e => {
-              const ids = e.selected.map(el => Number(el.getAttribute('data-id')));
-              if (ids.length) selectPdfIds(ids);
-            }}
-          />
-        </Box>
-        <Pagination
-          count={Math.ceil(pdfIds.length / pdfPerPage)}
-          page={pdfPage}
-          onChange={(_, p) => setPdfPage(p)}
-          size="small"
-          sx={{ mb: 1 }}
-        />
-        <Button size="small" onClick={selectAllPdfs} sx={{ mr: 1 }}>
-          Alle auswählen
-        </Button>
-        <Button size="small" onClick={deselectAllPdfs}>
-          Alle abwählen
-        </Button>
-      </Paper>
-      <Paper sx={{ p: 2, mb: 2 }}>
-        <Typography variant="h6" gutterBottom>
-          Prompt Stage
-        </Typography>
-        {ungroupedPrompts.length > 0 && (() => {
-          const { page, ids, total, gid } = pagedPrompts();
-          return (
-            <Box sx={{ mb: 2 }}>
-              <Typography variant="subtitle1" gutterBottom>
-                Ungruppierte Prompts
-              </Typography>
-              <Grid container spacing={1}>
-                {ids.map(id => {
-                  const p = prompts.find(pr => pr.id === id);
-                  if (!p) return null;
-                  const selected = selectedPrompts.includes(id);
-                  return (
-                    <Grid item xs={6} sm={4} md={3} lg={2} key={id}>
-                      <Card
-                        onClick={() => togglePrompt(id)}
-                        sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer', userSelect: 'none' }}
-                      >
-                        <CardContent sx={{ p: 1 }}>
-                          <Typography variant="body2">{p.text}</Typography>
-                        </CardContent>
-                      </Card>
-                    </Grid>
-                  );
-                })}
-              </Grid>
-              <Pagination
-                count={total}
-                page={page}
-                onChange={(_,p)=> setPromptPages(ps=>({ ...ps, [gid]: p }))}
-                size="small"
-                sx={{ mt:1 }}
-              />
-              <Box sx={{ mt: 1 }}>
-                <Button size="small" onClick={selectAllUngrouped} sx={{ mr: 1 }}>
-                  Alle auswählen
-                </Button>
-                <Button size="small" onClick={deselectAllUngrouped}>Alle abwählen</Button>
-              </Box>
-            </Box>
-          );
-        })()}
-        <DragDropContext onDragEnd={onDragEnd}>
-          {groups.map(g => (
-            <Accordion key={g.id} defaultExpanded>
-              <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                <Typography>{g.name}</Typography>
-                <Box sx={{ ml: 'auto' }}>
-                  <Button
-                    size="small"
-                    onClick={e => {
-                      e.stopPropagation();
-                      selectAllGroup(g.id);
-                    }}
-                  >
-                    Alle auswählen
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={e => {
-                      e.stopPropagation();
-                      deselectAllGroup(g.id);
-                    }}
-                  >
-                    Alle abwählen
-                  </Button>
-                </Box>
-              </AccordionSummary>
-              <AccordionDetails>
-                <Droppable droppableId={String(g.id)}>
-                  {prov => {
-                    const { page, ids, total } = pagedPrompts(g);
-                    return (
-                    <Box ref={prov.innerRef} {...prov.droppableProps}>
-                      <Grid container spacing={1}>
-                      {ids.map((pid, idx) => {
-                        const p = prompts.find(pr => pr.id === pid);
-                        if (!p) return null;
-                        const selected = selectedPrompts.includes(pid);
-                        return (
-                          <Draggable key={pid} draggableId={String(pid)} index={idx}>
-                            {drag => (
-                              <Grid item xs={6} sm={4} md={3} lg={2} ref={drag.innerRef} {...drag.draggableProps} {...drag.dragHandleProps}>
-                                <Card
-                                  onClick={() => togglePrompt(pid)}
-                                  sx={{ bgcolor: selected ? 'action.selected' : 'background.paper', cursor: 'pointer', userSelect: 'none' }}
-                                >
-                                  <CardContent sx={{ p: 1 }}>
-                                    <Typography variant="body2">{p.text}</Typography>
-                                  </CardContent>
-                                </Card>
-                              </Grid>
-                            )}
-                          </Draggable>
-                        );
-                      })}
-                      </Grid>
-                      <Pagination
-                        count={total}
-                        page={page}
-                        onChange={(_,p)=> setPromptPages(ps=>({ ...ps, [g.id]: p }))}
-                        size="small"
-                        sx={{ mt:1 }}
-                      />
-                      {prov.placeholder}
-                    </Box>
-                    );
-                  }}
-                </Droppable>
-              </AccordionDetails>
-            </Accordion>
-          ))}
-        </DragDropContext>
-      </Paper>
-      <Box sx={{ height: 600 }}>
-        <ReactFlowProvider>
-          <ReactFlow nodes={nodes} edges={edges} nodeTypes={nodeTypes} onNodeClick={onNodeClick}>
-            <MiniMap />
-            <Controls />
-          </ReactFlow>
-        </ReactFlowProvider>
+      <Box sx={{ mb:2, display:'flex', gap:1, alignItems:'center' }}>
+        <TextField size="small" label="Name" value={name} onChange={e=>setName(e.target.value)} />
+        <Button startIcon={<AddIcon />} onClick={() => addStepAt(steps.length)}>Step</Button>
+        <Button variant="outlined" onClick={save}>Save</Button>
+        <Button variant="outlined" onClick={load}>Load</Button>
+        <Button variant="outlined" onClick={() => {
+          const blob = new Blob([JSON.stringify(steps, null, 2)], {type:'application/json'});
+          const a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = 'pipeline.json';
+          a.click();
+        }}>Export</Button>
+        <Button variant="outlined" component="label">Import<input hidden type="file" accept="application/json" onChange={e=>{
+          const f=e.target.files?.[0]; if(!f) return; const r=new FileReader();
+          r.onload=ev=>{ try{ const s=JSON.parse(ev.target?.result as string); loadSteps(s); }catch(err){ console.error(err);} }; r.readAsText(f);
+        }}/></Button>
       </Box>
-      <Modal open={previewId !== null} onClose={() => setPreviewId(null)}>
-        <Box sx={{ position:'absolute', top:'50%', left:'50%', transform:'translate(-50%, -50%)', bgcolor:'background.paper', p:2 }}>
-          <IconButton onClick={() => setPreviewId(null)} sx={{ position:'absolute', top:8, right:8 }}>
-            <CloseIcon />
-          </IconButton>
-          {previewId !== null && (
-            <Document
-              file={`${ingest}/pdf/${previewId}`}
-              loading={<Skeleton variant="rectangular" height={400} />}
-              onLoadError={console.error}
-            >
-              <Page pageNumber={1} width={600} />
-            </Document>
+      <DragDropContext onDragEnd={handleDrag}>
+        <Droppable droppableId="steps">
+          {p => (
+            <Table ref={p.innerRef} {...p.droppableProps}>
+              <TableHead>
+                <TableRow>
+                  <TableCell>#</TableCell>
+                  <TableCell></TableCell>
+                  <TableCell>Label</TableCell>
+                  <TableCell>Type</TableCell>
+                  <TableCell>Prompt</TableCell>
+                  <TableCell>Input Source</TableCell>
+                  <TableCell>Alias</TableCell>
+                  <TableCell>Inputs</TableCell>
+                  <TableCell>Condition</TableCell>
+                  <TableCell>Active</TableCell>
+                  <TableCell></TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {steps.map((s, i) => (
+                  <Draggable draggableId={s.id} index={i} key={s.id}>
+                    {prov => (
+                      <TableRow ref={prov.innerRef} {...prov.draggableProps} {...prov.dragHandleProps}>
+                        <TableCell>{i + 1}</TableCell>
+                        <TableCell>
+                          <IconButton size="small" onClick={() => addStepAt(i+1)}><AddIcon fontSize="small"/></IconButton>
+                        </TableCell>
+                        <TableCell>{s.label || ''}</TableCell>
+                        <TableCell>{s.type || ''}</TableCell>
+                        <TableCell>{s.promptId}</TableCell>
+                        <TableCell>{s.input_source}</TableCell>
+                        <TableCell>{s.alias}</TableCell>
+                        <TableCell>{(s.inputs||[]).join(',')}</TableCell>
+                        <TableCell>{s.condition?.slice(0,24) || ''}</TableCell>
+                        <TableCell><Checkbox checked={s.active !== false} onChange={e=>updateStep(s.id,{active:e.target.checked})}/></TableCell>
+                        <TableCell>
+                          <IconButton onClick={() => removeStep(s.id)}><DeleteIcon /></IconButton>
+                          <Button size="small" onClick={() => setEdit(s)}>Edit</Button>
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </Draggable>
+                ))}
+                {p.placeholder}
+              </TableBody>
+            </Table>
           )}
-        </Box>
-      </Modal>
+        </Droppable>
+      </DragDropContext>
+      <Drawer open={!!edit} onClose={() => setEdit(null)} anchor="right">
+        {edit && (
+          <Box sx={{ p:2, width: 300, display:'flex', flexDirection:'column', gap:2 }}>
+            <TextField label="Label" value={edit.label||''} onChange={e=>updateStep(edit.id,{label:e.target.value})}/>
+            <Select fullWidth value={edit.type || ''} onChange={e => updateStep(edit.id, { type: e.target.value as string })}>
+              <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
+              <MenuItem value="ScoringPrompt">ScoringPrompt</MenuItem>
+              <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
+            </Select>
+            <Select fullWidth value={edit.promptId||''} onChange={e=>updateStep(edit.id,{promptId: Number(e.target.value)})}>
+              {promptOptions.map(p => (
+                <MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>
+              ))}
+            </Select>
+            {edit.type === 'ExtractionPrompt' && (
+              <>
+                <Select fullWidth value={edit.input_source||'document'} onChange={e=>updateStep(edit.id,{input_source:e.target.value})}>
+                  <MenuItem value="document">document</MenuItem>
+                  {steps.filter(s=>s.alias).map(s=> (
+                    <MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>
+                  ))}
+                </Select>
+                <TextField fullWidth label="Alias" value={edit.alias||''} onChange={e=>updateStep(edit.id,{alias:e.target.value})}/>
+              </>
+            )}
+            {edit.type === 'ScoringPrompt' && (
+              <>
+                <Select
+                  multiple
+                  fullWidth
+                  value={edit.inputs||[]}
+                  onChange={e=>updateStep(edit.id,{inputs: Array.from(e.target.value as any)})}
+                >
+                  {steps.filter(s=>s.alias).map(s=> (
+                    <MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>
+                  ))}
+                </Select>
+                <TextField label="Formula" fullWidth value={edit.formula_override||''} onChange={e=>updateStep(edit.id,{formula_override:e.target.value})}/>
+              </>
+            )}
+            {edit.type === 'DecisionPrompt' && (
+              <>
+                <TextField label="Condition" fullWidth value={edit.condition||''} onChange={e=>updateStep(edit.id,{condition:e.target.value})}/>
+                {edit.enum_targets ? (
+                  Object.entries(edit.enum_targets).map(([k,v]) => (
+                    <Select key={k} fullWidth value={v} onChange={e=>updateStep(edit.id,{enum_targets:{...edit.enum_targets!,[k]:e.target.value as string}})}>
+                      {steps.map(s=> (
+                        <MenuItem key={s.id} value={s.id}>{s.label||s.id}</MenuItem>
+                      ))}
+                    </Select>
+                  ))
+                ) : (
+                  <>
+                    <Select fullWidth value={edit.true_target||''} onChange={e=>updateStep(edit.id,{true_target:e.target.value})}>
+                      {steps.map(s=> (
+                        <MenuItem key={s.id} value={s.id}>{s.label||s.id}</MenuItem>
+                      ))}
+                    </Select>
+                    <Select fullWidth value={edit.false_target||''} onChange={e=>updateStep(edit.id,{false_target:e.target.value})}>
+                      {steps.map(s=> (
+                        <MenuItem key={s.id} value={s.id}>{s.label||s.id}</MenuItem>
+                      ))}
+                    </Select>
+                  </>
+                )}
+              </>
+            )}
+            <Box>
+              <Checkbox checked={edit.active !== false} onChange={e=>updateStep(edit.id,{active:e.target.checked})}/> Active
+            </Box>
+          </Box>
+        )}
+      </Drawer>
     </Box>
   );
 }

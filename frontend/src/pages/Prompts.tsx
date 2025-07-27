@@ -1,792 +1,91 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from 'react';
 import {
-  Typography,
   Box,
   TextField,
   Button,
-  IconButton,
-  Grid,
+  Slider,
   Card,
   CardContent,
-  List,
-  ListItem,
-  Drawer,
-  useMediaQuery,
-  Slider,
-  Checkbox,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  ListItemText,
   Dialog,
   DialogTitle,
   DialogContent,
-  Paper,
-} from "@mui/material";
-import DeleteIcon from "@mui/icons-material/Delete";
-import StarIcon from "@mui/icons-material/Star";
-import InfoIcon from "@mui/icons-material/Info";
-import { motion } from "framer-motion";
-import PageHeader from "../components/PageHeader";
-import { usePromptNotifications } from "../context/PromptNotifications";
-import { useTheme } from "@mui/material/styles";
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+} from '@mui/material';
+import DeleteIcon from '@mui/icons-material/Delete';
+import PageHeader from '../components/PageHeader';
 
+type PromptType = 'ExtractionPrompt' | 'ScoringPrompt' | 'DecisionPrompt';
 interface Prompt {
   id: number;
   text: string;
   weight: number;
   favorite: boolean;
-}
-
-interface PromptGroup {
-  id: number;
-  name: string;
-  promptIds: number[];
-  favorite: boolean;
+  type: PromptType;
 }
 
 export default function Prompts() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
-  const [newText, setNewText] = useState("");
+  const [newText, setNewText] = useState('');
   const [newWeight, setNewWeight] = useState(1);
-  const [search, setSearch] = useState("");
-  const [sortBy, setSortBy] = useState<"date" | "weight" | "alphabet">("date");
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
-  const [edit, setEdit] = useState<Prompt | null>(null);
-  const [editGroups, setEditGroups] = useState<number[]>([]);
-  const [selectedIds, setSelectedIds] = useState<number[]>([]);
-  const [bulkWeight, setBulkWeight] = useState(1);
-  const [helpOpen, setHelpOpen] = useState(false);
-  const [groups, setGroups] = useState<PromptGroup[]>([]);
-  const [groupName, setGroupName] = useState("");
-  const [groupPromptIds, setGroupPromptIds] = useState<number[]>([]);
-  const [newPromptGroupIds, setNewPromptGroupIds] = useState<number[]>([]);
-  const [groupEdit, setGroupEdit] = useState<PromptGroup | null>(null);
-  const [editGroupPromptIds, setEditGroupPromptIds] = useState<number[]>([]);
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
-  const { markAllRead } = usePromptNotifications();
+  const [newType, setNewType] = useState<PromptType>('ExtractionPrompt');
 
   const load = () => {
-    fetch("http://localhost:8082/prompts")
-      .then(async (r) => {
-        const json = await r.json();
-        if (!r.ok) throw new Error(json.error || r.statusText);
-        return json as any[];
-      })
-      .then((d: any[]) => {
-        const data = d.map((p) => ({
-          ...p,
-          weight: p.weight ?? 1,
-          favorite: !!p.favorite,
-        }));
-        setPrompts(data);
-        markAllRead(d.map((p) => p.id));
-      })
-      .catch((e) => console.error("load prompts", e));
-
-    fetch("http://localhost:8082/prompt-groups")
-      .then((r) => r.json())
-      .then((list: any[]) =>
-        list.map((g) => ({
-          id: g.id,
-          name: g.name,
-          favorite: g.favorite,
-          promptIds: g.prompt_ids as number[],
-        })),
-      )
-      .then(setGroups)
-      .catch((e) => console.error("load groups", e));
+    fetch('http://localhost:8082/prompts')
+      .then(r => r.json())
+      .then(setPrompts)
+      .catch(e => console.error('load prompts', e));
   };
 
-  useEffect(() => {
-    load();
-    const saved = JSON.parse(localStorage.getItem("promptsSettings") || "{}");
-    if (saved.search) setSearch(saved.search);
-    if (saved.sortBy) setSortBy(saved.sortBy);
-    if (saved.view) setViewMode(saved.view);
-  }, []);
-
-  useEffect(() => {
-    localStorage.setItem(
-      "promptsSettings",
-      JSON.stringify({
-        search,
-        sortBy,
-        view: viewMode,
-      }),
-    );
-  }, [search, sortBy, viewMode]);
+  useEffect(load, []);
 
   const create = () => {
-    fetch("http://localhost:8082/prompts", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: newText,
-        weight: newWeight,
-        favorite: false,
-        group_ids: newPromptGroupIds,
-      }),
+    fetch('http://localhost:8082/prompts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: newText, weight: newWeight, type: newType }),
     })
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = await r.json();
-          throw new Error(j.error || r.statusText);
-        }
-        setNewText("");
+      .then(() => {
+        setNewText('');
         setNewWeight(1);
-        setNewPromptGroupIds([]);
         load();
       })
-      .catch((e) => console.error("create prompt", e));
+      .catch(e => console.error('create prompt', e));
   };
 
-  const update = (
-    id: number,
-    text: string,
-    weight: number,
-    groupIds: number[],
-  ) => {
-    const fav = prompts.find((p) => p.id === id)?.favorite ?? false;
-    fetch(`http://localhost:8082/prompts/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text,
-        weight,
-        favorite: fav,
-        group_ids: groupIds,
-      }),
-    })
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = await r.json();
-          throw new Error(j.error || r.statusText);
-        }
-        load();
-      })
-      .catch((e) => console.error("update prompt", e));
-  };
-
-  const remove = (id: number) => {
-    fetch(`http://localhost:8082/prompts/${id}`, { method: "DELETE" })
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = await r.json();
-          throw new Error(j.error || r.statusText);
-        }
-        load();
-      })
-      .catch((e) => console.error("remove prompt", e));
-  };
-
-  const createGroup = () => {
-    fetch("http://localhost:8082/prompt-groups", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: groupName,
-        prompt_ids: groupPromptIds,
-        favorite: false,
-      }),
-    })
-      .then(() => {
-        setGroupName("");
-        setGroupPromptIds([]);
-        load();
-      })
-      .catch((e) => console.error("create group", e));
-  };
-
-  const updateGroup = (
-    id: number,
-    name: string,
-    promptIds: number[],
-    favorite: boolean,
-  ) => {
-    fetch(`http://localhost:8082/prompt-groups/${id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, prompt_ids: promptIds, favorite }),
-    })
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = await r.json();
-          throw new Error(j.error || r.statusText);
-        }
-        load();
-      })
-      .catch((e) => console.error("update group", e));
-  };
-
-  const toggleFav = (id: number) => {
-    const p = prompts.find((pr) => pr.id === id);
-    if (!p) return;
-    fetch(`http://localhost:8082/prompts/${id}/favorite`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ favorite: !p.favorite }),
-    })
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = await r.json();
-          throw new Error(j.error || r.statusText);
-        }
-        return r.json();
-      })
-      .then(() => load())
-      .catch((e) => console.error("toggle favorite", e));
-  };
-
-  const toggleGroupFav = (id: number) => {
-    const g = groups.find((gr) => gr.id === id);
-    if (!g) return;
-    fetch(`http://localhost:8082/prompt-groups/${id}/favorite`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ favorite: !g.favorite }),
-    })
-      .then(async (r) => {
-        if (!r.ok) {
-          const j = await r.json();
-          throw new Error(j.error || r.statusText);
-        }
-        return r.json();
-      })
-      .then(() => load())
-      .catch((e) => console.error("toggle group favorite", e));
-  };
-
-  const applyBulkWeight = () => {
-    Promise.all(
-      selectedIds.map((id) => {
-        const p = prompts.find((pr) => pr.id === id);
-        if (!p) return Promise.resolve();
-        const gids = groups
-          .filter((g) => g.promptIds.includes(id))
-          .map((g) => g.id);
-        return fetch(`http://localhost:8082/prompts/${id}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text: p.text,
-            weight: bulkWeight,
-            favorite: p.favorite,
-            group_ids: gids,
-          }),
-        }).then(async (r) => {
-          if (!r.ok) {
-            const j = await r.json();
-            throw new Error(j.error || r.statusText);
-          }
-        });
-      }),
-    )
-      .then(() => {
-        setSelectedIds([]);
-        load();
-      })
-      .catch((e) => console.error("bulk weight", e));
-  };
-
-  const bulkDelete = () => {
-    Promise.all(
-      selectedIds.map((id) =>
-        fetch(`http://localhost:8082/prompts/${id}`, { method: "DELETE" }).then(
-          async (r) => {
-            if (!r.ok) {
-              const j = await r.json();
-              throw new Error(j.error || r.statusText);
-            }
-          },
-        ),
-      ),
-    )
-      .then(() => {
-        setSelectedIds([]);
-        load();
-      })
-      .catch((e) => console.error("bulk delete", e));
-  };
-
-  const displayed = prompts.filter((p) => {
-    if (search && !p.text.toLowerCase().includes(search.toLowerCase()))
-      return false;
-    return true;
-  });
-
-  const sorted = useMemo(() => {
-    const arr = [...displayed];
-    if (sortBy === "weight") arr.sort((a, b) => b.weight - a.weight);
-    else if (sortBy === "alphabet")
-      arr.sort((a, b) => a.text.localeCompare(b.text));
-    else arr.sort((a, b) => b.id - a.id);
-    return arr;
-  }, [displayed, sortBy]);
-
-  const favPrompts = sorted.filter((p) => p.favorite);
-  const others = sorted.filter((p) => !p.favorite);
-
-  const renderPrompt = (p: Prompt) => {
-    const isSelected = selectedIds.includes(p.id);
-    const toggle = (checked: boolean) =>
-      setSelectedIds((s) =>
-        checked ? [...s, p.id] : s.filter((i) => i !== p.id),
-      );
-
-    return (
-      <Box
-        key={p.id}
-        sx={{ position: "relative" }}
-        component={motion.div}
-        whileHover={{ y: -2 }}
-      >
-        {isMobile ? (
-          <ListItem
-            onClick={() => {
-              setEdit(p);
-              setEditGroups(
-                groups
-                  .filter((g) => g.promptIds.includes(p.id))
-                  .map((g) => g.id),
-              );
-            }}
-            sx={{ flexDirection: "column", alignItems: "flex-start" }}
-          >
-            <Box sx={{ display: "flex", alignItems: "center", width: "100%" }}>
-              <Checkbox
-                checked={isSelected}
-                onChange={(e) => {
-                  e.stopPropagation();
-                  toggle(e.target.checked);
-                }}
-              />
-              <Box
-                sx={{
-                  flexGrow: 1,
-                  display: "flex",
-                  justifyContent: "space-between",
-                }}
-              >
-                <Typography variant="subtitle1">
-                  {p.text.slice(0, 40)}
-                </Typography>
-                <IconButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleFav(p.id);
-                  }}
-                  size="small"
-                >
-                  <StarIcon color={p.favorite ? "warning" : "disabled"} />
-                </IconButton>
-              </Box>
-            </Box>
-            <Box sx={{ mt: 0.5 }} />
-          </ListItem>
-        ) : (
-          <Card
-            onClick={() => {
-              setEdit(p);
-              setEditGroups(
-                groups
-                  .filter((g) => g.promptIds.includes(p.id))
-                  .map((g) => g.id),
-              );
-            }}
-            sx={{ height: "100%", position: "relative" }}
-            component={motion.div}
-            whileHover={{ scale: 1.02 }}
-          >
-            <Checkbox
-              checked={isSelected}
-              onChange={(e) => {
-                e.stopPropagation();
-                toggle(e.target.checked);
-              }}
-              sx={{ position: "absolute", top: 0, left: 0 }}
-            />
-            <CardContent>
-              <Box
-                sx={{ display: "flex", justifyContent: "space-between", mb: 1 }}
-              >
-                <Typography variant="subtitle1">
-                  {p.text.slice(0, 40)}
-                </Typography>
-                <IconButton
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    toggleFav(p.id);
-                  }}
-                  size="small"
-                >
-                  <StarIcon color={p.favorite ? "warning" : "disabled"} />
-                </IconButton>
-              </Box>
-            </CardContent>
-          </Card>
-        )}
-      </Box>
-    );
+  const del = (id: number) => {
+    fetch(`http://localhost:8082/prompts/${id}`, { method: 'DELETE' })
+      .then(load)
+      .catch(e => console.error('delete prompt', e));
   };
 
   return (
     <Box>
-      <PageHeader
-        title="Prompts"
-        breadcrumb={[{ label: "Dashboard", to: "/" }, { label: "Prompts" }]}
-      />
-      <Box
-        sx={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 1,
-          mb: 2,
-          alignItems: "center",
-        }}
-      >
-        <TextField
-          size="small"
-          value={newText}
-          onChange={(e) => setNewText(e.target.value)}
-          label="New prompt"
-        />
-        <TextField
-          size="small"
-          label="Weight"
-          type="number"
-          inputProps={{ min: 1, max: 10 }}
-          value={newWeight}
-          onChange={(e) =>
-            setNewWeight(Math.max(1, Math.min(10, +e.target.value)))
-          }
-        />
-        <FormControl size="small" sx={{ minWidth: 150 }}>
-          <InputLabel id="new-prompt-groups">Groups</InputLabel>
-          <Select
-            labelId="new-prompt-groups"
-            multiple
-            value={newPromptGroupIds}
-            onChange={(e) =>
-              setNewPromptGroupIds(
-                typeof e.target.value === "string"
-                  ? e.target.value.split(",").map(Number)
-                  : (e.target.value as number[]),
-              )
-            }
-            renderValue={(sel) =>
-              (sel as number[])
-                .map((id) => groups.find((g) => g.id === id)?.name)
-                .join(", ")
-            }
-          >
-            {groups.map((g) => (
-              <MenuItem key={g.id} value={g.id}>
-                <Checkbox checked={newPromptGroupIds.indexOf(g.id) > -1} />
-                <ListItemText primary={g.name} />
-              </MenuItem>
-            ))}
+      <PageHeader title="Prompts" />
+      <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
+        <TextField value={newText} onChange={e => setNewText(e.target.value)} label="Text" fullWidth />
+        <FormControl sx={{ minWidth: 160 }}>
+          <InputLabel>Typ</InputLabel>
+          <Select label="Typ" value={newType} onChange={e => setNewType(e.target.value as PromptType)}>
+            <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
+            <MenuItem value="ScoringPrompt">ScoringPrompt</MenuItem>
+            <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
           </Select>
         </FormControl>
-        <Button
-          variant="contained"
-          onClick={create}
-          component={motion.button}
-          whileHover={{ y: -2 }}
-        >
-          Add
-        </Button>
-        <Box sx={{ flexGrow: 1 }} />
-        <FormControl size="small" sx={{ minWidth: 120 }}>
-          <InputLabel id="sort-label">Sort by</InputLabel>
-          <Select
-            labelId="sort-label"
-            value={sortBy}
-            label="Sort by"
-            onChange={(e) => setSortBy(e.target.value as any)}
-          >
-            <MenuItem value="date">Datum</MenuItem>
-            <MenuItem value="weight">Gewicht</MenuItem>
-            <MenuItem value="alphabet">Alphabet</MenuItem>
-          </Select>
-        </FormControl>
-        <TextField
-          size="small"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          label="Search"
-        />
-        <IconButton onClick={() => setHelpOpen(true)} size="small">
-          <InfoIcon />
-        </IconButton>
-      </Box>
-
-      <Box sx={{ display: "flex", flexWrap: "wrap", gap: 1, mb: 2 }}>
-        <TextField
-          size="small"
-          label="Group name"
-          value={groupName}
-          onChange={(e) => setGroupName(e.target.value)}
-        />
-        <FormControl size="small" sx={{ minWidth: 180 }}>
-          <InputLabel id="group-prompts">Prompts</InputLabel>
-          <Select
-            labelId="group-prompts"
-            multiple
-            value={groupPromptIds}
-            onChange={(e) =>
-              setGroupPromptIds(
-                typeof e.target.value === "string"
-                  ? e.target.value.split(",").map(Number)
-                  : (e.target.value as number[]),
-              )
-            }
-            renderValue={(sel) =>
-              (sel as number[])
-                .map((id) => prompts.find((p) => p.id === id)?.text)
-                .join(", ")
-            }
-          >
-            {prompts.map((p) => (
-              <MenuItem key={p.id} value={p.id}>
-                <Checkbox checked={groupPromptIds.indexOf(p.id) > -1} />
-                <ListItemText primary={p.text} />
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        <Button variant="contained" onClick={createGroup}>
-          Add Group
-        </Button>
-      </Box>
-
-      {selectedIds.length > 0 && (
-        <Paper
-          sx={{ p: 1, mb: 2, display: "flex", alignItems: "center", gap: 2 }}
-        >
-          <Typography>{selectedIds.length} selected</Typography>
-          <Slider
-            value={bulkWeight}
-            onChange={(_, v) => setBulkWeight(v as number)}
-            min={0}
-            max={10}
-            step={1}
-            valueLabelDisplay="auto"
-            sx={{ width: 160 }}
-          />
-          <Button variant="contained" onClick={applyBulkWeight}>
-            Set weight
-          </Button>
-          <Button color="error" variant="outlined" onClick={bulkDelete}>
-            Delete selected
-          </Button>
-        </Paper>
-      )}
-
-      {favPrompts.length > 0 && (
-        <Box sx={{ mb: 2 }}>
-          <Typography variant="h6" sx={{ mb: 1 }}>
-            Meine Favoriten
-          </Typography>
-          {isMobile ? (
-            <List>{favPrompts.map(renderPrompt)}</List>
-          ) : (
-            <Grid container spacing={2}>
-              {favPrompts.map((p) => (
-                <Grid item xs={12} sm={6} md={4} key={p.id}>
-                  {renderPrompt(p)}
-                </Grid>
-              ))}
-            </Grid>
-          )}
+        <Box sx={{ width: 120 }}>
+          <Slider min={0} max={5} step={0.1} value={newWeight} onChange={(_,v)=>setNewWeight(v as number)} />
         </Box>
-      )}
-
-      {isMobile ? (
-        <List>{others.map(renderPrompt)}</List>
-      ) : (
-        <Grid container spacing={2}>
-          {others.map((p) => (
-            <Grid item xs={12} sm={6} md={4} key={p.id}>
-              {renderPrompt(p)}
-            </Grid>
-          ))}
-        </Grid>
-      )}
-
-      <Box sx={{ mt: 2 }}>
-        <Typography variant="h6" sx={{ mb: 1 }}>
-          Gruppen
-        </Typography>
-        {groups.map((g) => (
-          <Box key={g.id} sx={{ display: "flex", alignItems: "center", mb: 1 }}>
-            <Typography
-              sx={{ flexGrow: 1, cursor: "pointer" }}
-              onClick={() => {
-                setGroupEdit(g);
-                setEditGroupPromptIds(g.promptIds);
-              }}
-            >
-              {g.name}
-            </Typography>
-            <IconButton onClick={() => toggleGroupFav(g.id)} size="small">
-              <StarIcon color={g.favorite ? "warning" : "disabled"} />
-            </IconButton>
-          </Box>
-        ))}
+        <Button variant="contained" onClick={create}>Add</Button>
       </Box>
-
-      <Drawer
-        anchor="right"
-        open={!!edit}
-        onClose={() => {
-          setEdit(null);
-          setEditGroups([]);
-        }}
-      >
-        {edit && (
-          <Box sx={{ width: { xs: 280, sm: 400 }, p: 2 }}>
-            <TextField
-              label="Prompt"
-              multiline
-              minRows={3}
-              fullWidth
-              value={edit.text}
-              onChange={(e) => setEdit({ ...edit, text: e.target.value })}
-              sx={{ mb: 1 }}
-            />
-            <FormControl size="small" fullWidth sx={{ mb: 1 }}>
-              <InputLabel id="edit-groups">Groups</InputLabel>
-              <Select
-                labelId="edit-groups"
-                multiple
-                value={editGroups}
-                onChange={(e) =>
-                  setEditGroups(
-                    typeof e.target.value === "string"
-                      ? e.target.value.split(",").map(Number)
-                      : (e.target.value as number[]),
-                  )
-                }
-                renderValue={(sel) =>
-                  (sel as number[])
-                    .map((id) => groups.find((g) => g.id === id)?.name)
-                    .join(", ")
-                }
-              >
-                {groups.map((g) => (
-                  <MenuItem key={g.id} value={g.id}>
-                    <Checkbox checked={editGroups.indexOf(g.id) > -1} />
-                    <ListItemText primary={g.name} />
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Typography gutterBottom>Gewichtung</Typography>
-            <Slider
-              value={edit.weight}
-              onChange={(_, v) => setEdit({ ...edit, weight: v as number })}
-              step={1}
-              min={0}
-              max={10}
-              valueLabelDisplay="on"
-              sx={{ mb: 1 }}
-            />
-            <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1 }}>
-              <IconButton onClick={() => edit && remove(edit.id)}>
-                <DeleteIcon />
-              </IconButton>
-              <Button
-                variant="contained"
-                onClick={() =>
-                  edit && update(edit.id, edit.text, edit.weight, editGroups)
-                }
-              >
-                Save
-              </Button>
-            </Box>
-          </Box>
-        )}
-      </Drawer>
-
-      <Drawer
-        anchor="right"
-        open={!!groupEdit}
-        onClose={() => {
-          setGroupEdit(null);
-          setEditGroupPromptIds([]);
-        }}
-      >
-        {groupEdit && (
-          <Box sx={{ width: { xs: 280, sm: 400 }, p: 2 }}>
-            <TextField
-              label="Group name"
-              fullWidth
-              value={groupEdit.name}
-              onChange={(e) =>
-                setGroupEdit({ ...groupEdit, name: e.target.value })
-              }
-              sx={{ mb: 1 }}
-            />
-            <FormControl size="small" fullWidth sx={{ mb: 1 }}>
-              <InputLabel id="edit-group-prompts">Prompts</InputLabel>
-              <Select
-                labelId="edit-group-prompts"
-                multiple
-                value={editGroupPromptIds}
-                onChange={(e) =>
-                  setEditGroupPromptIds(
-                    typeof e.target.value === "string"
-                      ? e.target.value.split(",").map(Number)
-                      : (e.target.value as number[]),
-                  )
-                }
-                renderValue={(sel) =>
-                  (sel as number[])
-                    .map((id) => prompts.find((p) => p.id === id)?.text)
-                    .join(", ")
-                }
-              >
-                {prompts.map((p) => (
-                  <MenuItem key={p.id} value={p.id}>
-                    <Checkbox checked={editGroupPromptIds.indexOf(p.id) > -1} />
-                    <ListItemText primary={p.text} />
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
-              <Button
-                variant="contained"
-                onClick={() =>
-                  groupEdit &&
-                  updateGroup(
-                    groupEdit.id,
-                    groupEdit.name,
-                    editGroupPromptIds,
-                    groupEdit.favorite,
-                  )
-                }
-              >
-                Save
-              </Button>
-            </Box>
-          </Box>
-        )}
-      </Drawer>
-
-      <Dialog open={helpOpen} onClose={() => setHelpOpen(false)}>
-        <DialogTitle>Tipps für gute Prompts</DialogTitle>
-        <DialogContent>
-          <ul>
-            <li>Use action verbs</li>
-            <li>Be specific</li>
-            <li>Keep under 140 characters</li>
-          </ul>
-        </DialogContent>
-      </Dialog>
+      {prompts.map(p => (
+        <Card key={p.id} sx={{ mb:1 }}>
+          <CardContent>
+            {p.text} ({p.type}) <Button onClick={()=>del(p.id)}><DeleteIcon/></Button>
+          </CardContent>
+        </Card>
+      ))}
     </Box>
   );
 }

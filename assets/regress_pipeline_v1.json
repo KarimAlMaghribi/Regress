@@ -1,0 +1,8 @@
+{
+  "name": "regress_pipeline_v1",
+  "steps": [
+    {"id": "s1", "type": "ExtractionPrompt", "promptId": 1, "alias": "a"},
+    {"id": "s2", "type": "ScoringPrompt", "promptId": 2, "inputs": ["a"], "alias": "score"},
+    {"id": "s3", "type": "DecisionPrompt", "promptId": 3, "condition": "score > 0.5", "true_target": "end", "false_target": "end"}
+  ]
+}

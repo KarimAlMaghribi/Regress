@@ -29,20 +29,15 @@ import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
-import { loadPromptGroupMap } from '../utils/promptGroups';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
-interface Response { answer: string; source?: string }
-interface Rule { prompt: string; result: boolean; weight?: number }
-
 interface ResultData {
-  regress: boolean | null;
-  metrics: { rules: Rule[]; [key: string]: any };
-  responses: Response[];
-  error: string | null;
-  score: number;
-  result_label: string;
+  pdf_id: number;
+  pipeline_id: string;
+  state: Record<string, any>;
+  score: number | null;
+  label: string | null;
 }
 
 function OverviewCard({ data }: { data: ResultData }) {
@@ -68,81 +63,28 @@ function OverviewCard({ data }: { data: ResultData }) {
         />
       </Box>
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
-        <Chip
-          label={data.result_label}
-          color={data.result_label === 'KEIN_REGRESS' ? 'success' : 'error'}
-        />
-        <Chip
-          label={`Regress: ${data.regress ? 'Ja' : 'Nein'}`}
-          color={data.regress ? 'error' : 'success'}
-        />
+        {data.label && <Chip label={data.label} color="info" />}
       </Box>
-      {data.error && <Alert severity="error">{data.error}</Alert>}
     </Paper>
   );
 }
 
-function ResponsesList({ responses }: { responses: Response[] }) {
-  if (!responses.length) return <Typography>Keine Antworten</Typography>;
-  return (
-    <Box>
-      {responses.map((r, i) => (
-        <Accordion key={i}>
-          <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-            <Typography noWrap>{r.answer}</Typography>
-          </AccordionSummary>
-          <AccordionDetails>
-            <Typography sx={{ whiteSpace: 'pre-wrap', mb: 0.5 }}>
-              {r.answer}
-            </Typography>
-            {r.source && (
-              <Typography variant="caption" display="block">
-                Quelle: {r.source}
-              </Typography>
-            )}
-          </AccordionDetails>
-        </Accordion>
-      ))}
-    </Box>
-  );
-}
-
-function MetricsTable({ rules, groupMap }: { rules: Rule[]; groupMap: Record<string, string[]> }) {
+function StateTable({ state }: { state: Record<string, any> }) {
   return (
     <Table size="small">
-      <TableHead>
-        <TableRow>
-          <TableCell>Prompt</TableCell>
-          <TableCell>Gruppen</TableCell>
-          <TableCell align="center">Ergebnis</TableCell>
-          <TableCell align="right">Gewicht</TableCell>
-        </TableRow>
-      </TableHead>
       <TableBody>
-        {rules.map((r, i) => (
-          <TableRow key={i}>
-            <TableCell>{r.prompt}</TableCell>
-            <TableCell>
-              {(groupMap[r.prompt] || []).map((g, idx) => (
-                <Chip key={idx} label={g} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
-              ))}
-            </TableCell>
-            <TableCell align="center">
-              {r.result ? (
-                <CheckIcon color="success" fontSize="small" />
-              ) : (
-                <CloseIcon color="error" fontSize="small" />
-              )}
-            </TableCell>
-            <TableCell align="right">
-              {r.weight != null ? r.weight.toFixed(2) : '-'}
-            </TableCell>
+        {Object.entries(state).map(([k, v]) => (
+          <TableRow key={k}>
+            <TableCell>{k}</TableCell>
+            <TableCell>{String(v)}</TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
   );
 }
+
+
 
 function PdfViewer({ url }: { url: string }) {
   const [numPages, setNumPages] = useState(0);
@@ -187,21 +129,16 @@ function PdfViewer({ url }: { url: string }) {
 export default function Result() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<ResultData | null>(null);
-  const [tab, setTab] = useState(0);
-  const [promptGroups, setPromptGroups] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     if (!id) return;
-    const backend = import.meta.env.VITE_CLASSIFIER_URL || 'http://localhost:8084';
-    fetch(`${backend}/results/${id}`)
+    const api = import.meta.env.VITE_API_URL || 'http://localhost:8090';
+    fetch(`${api}/results/${id}`)
       .then(r => r.json())
       .then(setData)
       .catch(e => console.error('load result', e));
   }, [id]);
 
-  useEffect(() => {
-    loadPromptGroupMap().then(setPromptGroups).catch(() => undefined);
-  }, []);
 
   const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
   const pdfUrl = `${ingest}/pdf/${id}`;
@@ -217,14 +154,7 @@ export default function Result() {
       ) : (
         <>
           <OverviewCard data={data} />
-          <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-            <Tab label="Antworten" />
-            <Tab label="Metriken" />
-          </Tabs>
-          {tab === 0 && <ResponsesList responses={data.responses} />}
-          {tab === 1 && (
-            <MetricsTable rules={data.metrics.rules || []} groupMap={promptGroups} />
-          )}
+          <StateTable state={data.state} />
           <Box sx={{ mt: 2 }}>
             <PdfViewer url={pdfUrl} />
           </Box>

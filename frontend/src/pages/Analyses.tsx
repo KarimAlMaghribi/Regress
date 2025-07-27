@@ -4,7 +4,6 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
 import { utils as XLSXUtils, writeFile } from 'xlsx';
 import PageHeader from '../components/PageHeader';
-import { loadPromptGroupMap } from '../utils/promptGroups';
 
 interface PromptCfg { text: string }
 
@@ -23,7 +22,6 @@ export default function Analyses() {
   const [tab, setTab] = useState(0);
   const [running, setRunning] = useState<Entry[]>([]);
   const [done, setDone] = useState<Entry[]>([]);
-  const [promptGroups, setPromptGroups] = useState<Record<string, string[]>>({});
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
 
@@ -104,15 +102,6 @@ const renderList = (items: Entry[], finished: boolean) => (
             <TableCell>
               {e.prompts.map((p, i) => (
                 <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
-              ))}
-              {Array.from(new Set(e.prompts.flatMap(p => promptGroups[p.text] || []))).map((g, i) => (
-                <Chip
-                  key={`g-${i}`}
-                  label={`Gruppe: ${g}`}
-                  size="small"
-                  color="secondary"
-                  sx={{ mr: 0.5, mb: 0.5 }}
-                />
               ))}
             </TableCell>
             {finished && (

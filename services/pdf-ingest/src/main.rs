@@ -10,6 +10,7 @@ use rdkafka::{
 };
 use shared::config::Settings;
 use shared::dto::{PdfUploaded, UploadResponse};
+use uuid::Uuid;
 use std::time::Duration;
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
@@ -161,6 +162,7 @@ async fn upload(
     let upload_id: i32 = row.get(0);
     let mut files: Vec<(Vec<u8>, String)> = Vec::new();
     let mut prompt = String::new();
+    let mut pipeline_id: Option<String> = None;
     while let Some(item) = payload.next().await {
         let mut field = item?;
         if field.name() == "file" {
@@ -197,6 +199,11 @@ async fn upload(
                 let bytes: Bytes = chunk?;
                 prompt.push_str(std::str::from_utf8(&bytes).unwrap_or_default());
             }
+        } else if field.name() == "pipeline_id" {
+            while let Some(chunk) = field.next().await {
+                let bytes: Bytes = chunk?;
+                pipeline_id = Some(std::str::from_utf8(&bytes).unwrap_or_default().to_string());
+            }
         }
     }
     if !files.is_empty() {
@@ -220,10 +227,14 @@ async fn upload(
             .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
         let id: i32 = row.get(0);
         info!(id, "pdf stored in database");
+        let pid = pipeline_id
+            .as_deref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .unwrap_or_else(|| uuid::Uuid::nil());
         db
             .execute(
-                "UPDATE uploads SET pdf_id=$1, status='ocr' WHERE id=$2",
-                &[&id, &upload_id],
+                "UPDATE uploads SET pdf_id=$1, pipeline_id=$2, status='ocr' WHERE id=$3",
+                &[&id, &pid, &upload_id],
             )
             .await
             .ok();
@@ -237,17 +248,17 @@ async fn upload(
             .await
             .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
         let payload = serde_json::to_string(&PdfUploaded {
-            id,
-            prompt: prompt.clone(),
+            pdf_id: id,
+            pipeline_id: pid,
         })
         .unwrap();
         let _ = producer
             .send(
-                FutureRecord::to("pdf-uploaded").payload(&payload).key(&()),
+                FutureRecord::to("pdf-merged").payload(&payload).key(&()),
                 Duration::from_secs(0),
             )
             .await;
-        info!(id, "published pdf-uploaded event");
+        info!(id, "published pdf-merged event");
         return Ok(HttpResponse::Ok().json(UploadResponse { id: id.to_string() }));
     }
     Ok(HttpResponse::BadRequest().finish())
@@ -257,7 +268,7 @@ async fn list_uploads(
     db: web::Data<tokio_postgres::Client>,
 ) -> Result<HttpResponse, Error> {
     let stmt = db
-        .prepare("SELECT id, pdf_id, status FROM uploads ORDER BY id DESC")
+        .prepare("SELECT id, pdf_id, pipeline_id, status FROM uploads ORDER BY id DESC")
         .await
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
     let rows = db
@@ -269,7 +280,7 @@ async fn list_uploads(
         .map(|r| UploadEntry {
             id: r.get(0),
             pdf_id: r.get(1),
-            status: r.get(2),
+            status: r.get(3),
         })
         .collect();
     Ok(HttpResponse::Ok().json(items))
@@ -354,7 +365,7 @@ async fn main() -> std::io::Result<()> {
     info!("ensured pdf_sources table exists");
     db_client
         .execute(
-            "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, status TEXT NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, pipeline_id UUID, status TEXT NOT NULL)",
             &[],
         )
         .await
@@ -421,7 +432,7 @@ mod tests {
                 .unwrap();
             client
                 .execute(
-                    "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, status TEXT NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, pipeline_id UUID, status TEXT NOT NULL)",
                     &[],
                 )
                 .await

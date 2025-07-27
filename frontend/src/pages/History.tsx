@@ -16,7 +16,6 @@ import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTheme } from '@mui/material/styles';
-import { loadPromptGroupMap } from '../utils/promptGroups';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -52,7 +51,6 @@ export default function History() {
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
   const theme = useTheme();
-  const [promptGroups, setPromptGroups] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
     const url = import.meta.env.VITE_HISTORY_WS || 'ws://localhost:8090';
@@ -71,9 +69,6 @@ export default function History() {
     return () => socket.close();
   }, []);
 
-  useEffect(() => {
-    loadPromptGroupMap().then(setPromptGroups).catch(() => undefined);
-  }, []);
 
   const filtered = entries.filter(e => {
     const ts = dayjs(e.timestamp);
@@ -118,15 +113,6 @@ export default function History() {
           {params.row.prompt && (
             <Chip label={params.row.prompt} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
           )}
-          {(promptGroups[params.row.prompt as string] || []).map((g, i) => (
-            <Chip
-              key={i}
-              label={`Gruppe: ${g}`}
-              size="small"
-              color="secondary"
-              sx={{ mr: 0.5, mb: 0.5 }}
-            />
-          ))}
         </Box>
       ),
     },

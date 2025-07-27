@@ -1,7 +1,7 @@
 import React, { useCallback, useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import {
-  Box, Typography, Paper, Button, IconButton,
+  Box, Typography, Paper, Button, IconButton, Select, MenuItem, FormControl, InputLabel,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -21,6 +21,8 @@ export default function Upload() {
   const [files, setFiles] = useState<File[]>([]);
   const [message, setMessage] = useState<string>('');
   const [entries, setEntries] = useState<UploadEntry[]>([]);
+  const [pipelines, setPipelines] = useState<{id:string,name:string}[]>([]);
+  const [pipelineId, setPipelineId] = useState('');
 
   const load = () => {
     const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
@@ -48,6 +50,12 @@ export default function Upload() {
   }, []);
 
   useEffect(load, []);
+  useEffect(() => {
+    fetch('/api/pipelines')
+      .then(r => r.json())
+      .then(setPipelines)
+      .catch(() => undefined);
+  }, []);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -60,6 +68,7 @@ export default function Upload() {
     console.log('Uploading files', files.map(f => f.name));
     const form = new FormData();
     files.forEach(f => form.append('file', f));
+    if (pipelineId) form.append('pipeline_id', pipelineId);
     const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
     fetch(`${ingest}/upload`, { method: 'POST', body: form })
       .then(async r => {
@@ -124,6 +133,14 @@ export default function Upload() {
         breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Upload' }]}
         actions={<Button variant="outlined" size="small" onClick={load}>Reload</Button>}
       />
+      <FormControl sx={{ mt:2, mb:2, minWidth:200 }}>
+        <InputLabel>Pipeline</InputLabel>
+        <Select label="Pipeline" value={pipelineId} onChange={e=>setPipelineId(e.target.value)} disabled={pipelines.length===0}>
+          {pipelines.map(p=> (
+            <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>
+          ))}
+        </Select>
+      </FormControl>
       <Paper
         component={motion.div}
         whileHover={{ scale: 1.03 }}
