@@ -111,7 +111,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<serde_json::Value, P
     for i in 0..=3 {
         let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(fixed) = jsonrepair::repair(&ans) {
+            if let Ok(fixed) = json_repair::repair(&ans) {
                 if let Ok(v) = serde_json::from_str(&fixed) { return Ok(v); }
             }
         }
@@ -129,7 +129,7 @@ pub async fn score(prompt_id: i32, args: &[(&str, serde_json::Value)]) -> Result
     for i in 0..=3 {
         let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(fixed) = jsonrepair::repair(&ans) {
+            if let Ok(fixed) = json_repair::repair(&ans) {
                 if let Ok(v) = serde_json::from_str::<f64>(&fixed) { return Ok(v); }
             }
         }
@@ -147,7 +147,7 @@ pub async fn decide(prompt_id: i32, state: &std::collections::HashMap<String, se
     for i in 0..=3 {
         let msgs = vec![msg(ChatCompletionMessageRole::System, system), msg(ChatCompletionMessageRole::User, &user)];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(fixed) = jsonrepair::repair(&ans) {
+            if let Ok(fixed) = json_repair::repair(&ans) {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&fixed) { return Ok(v); }
                 if let Ok(b) = serde_json::from_str::<bool>(&fixed) { return Ok(serde_json::json!(b)); }
             }
