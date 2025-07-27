@@ -29,3 +29,4 @@ rdkafka.workspace = true
 postgres-native-tls.workspace = true
 native-tls.workspace = true
 anyhow = { workspace = true }
+uuid = { version = "1", features = ["v4", "serde"] }

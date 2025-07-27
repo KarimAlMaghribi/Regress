@@ -13,7 +13,7 @@ use rdkafka::{
 use std::time::Duration;
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
-use tracing::info;
+use tracing::{info, error};
 use text_extraction::{extract_text, extract_text_layout};
 
 
