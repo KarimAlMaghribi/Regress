@@ -23,16 +23,6 @@ pub struct TextExtracted {
     pub text: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ClassificationResult {
-    pub id: i32,
-    pub regress: bool,
-    pub prompt: String,
-    /// Raw answer returned by the OpenAI API
-    pub answer: String,
-    pub score: f64,
-    pub result_label: String,
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PipelineRunResult {
