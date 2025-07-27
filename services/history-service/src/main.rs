@@ -15,6 +15,8 @@ use tokio::sync::broadcast;
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
 use tracing::{error, info};
+use uuid::Uuid;
+use shared::dto::PipelineRunResult;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HistoryEntry {
@@ -61,7 +63,7 @@ async fn init_db(db: &tokio_postgres::Client) {
 async fn mark_pending(
     db: &tokio_postgres::Client,
     pdf_id: i32,
-    pipeline_id: uuid::Uuid,
+    pipeline_id: Uuid,
     pdf_url: &str,
     timestamp: DateTime<Utc>,
 ) -> i32 {
@@ -108,7 +110,7 @@ async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) -> i32
                  VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
                 &[
                     &entry.pdf_id,
-                    &uuid::Uuid::nil(),
+                    &Uuid::nil(),
                     &entry.result,
                     &entry.pdf_url,
                     &entry.timestamp,

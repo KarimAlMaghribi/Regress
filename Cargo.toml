@@ -28,7 +28,7 @@ tracing-subscriber = "0.3.18"
 async-trait = "0.1.88"
 bindgen     = "=0.72.0"
 tokio       = { version = "1", features = ["macros", "rt-multi-thread", "fs"] }
-tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1"] }
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4", "with-serde_json-1", "with-uuid-1"] }
 rdkafka     = { version = "0.36", features = ["tokio"] }
 openai      = "1"
 anyhow      = "1"
