@@ -12,3 +12,7 @@ tracing.workspace = true
 awc = "3"
 openai.workspace = true
 actix-web = "4"
+rhai = { workspace = true }
+anyhow = { workspace = true }
+uuid = { version = "1", features=["serde", "v4"] }
+jsonrepair = "0.3"

@@ -13,38 +13,9 @@ use rdkafka::{
 use std::time::Duration;
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
-use tesseract::Tesseract;
-use tracing::{error, info};
-use std::path::Path;
-use pdf_extract::extract_text_from_mem;
+use tracing::info;
+use text_extraction::{extract_text, extract_text_layout};
 
-fn extract_text(path: &str) -> Result<String> {
-    info!(?path, "starting text extraction");
-    if Path::new(path).extension().map(|e| e == "pdf").unwrap_or(false) {
-        if let Ok(data) = std::fs::read(path) {
-            match extract_text_from_mem(&data) {
-                Ok(text) => {
-                    info!(len = text.len(), "pdf text extracted");
-                    return Ok(text);
-                }
-                Err(e) => {
-                    error!(%e, "pdf extraction failed, falling back to ocr");
-                }
-            }
-        }
-    }
-
-    let mut tess = Tesseract::new(None, Some("eng"))
-        .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
-    tess = tess
-        .set_image(path)
-        .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
-    let text = tess
-        .get_text()
-        .map_err(|e| shared::error::AppError::Io(e.to_string()))?;
-    info!(len = text.len(), "ocr finished");
-    Ok(text)
-}
 
 
 async fn health() -> impl Responder {
@@ -91,7 +62,7 @@ async fn start_analysis(
             .map_err(actix_web::error::ErrorInternalServerError)?;
         if let Ok(row) = db.query_one(&stmt, &[&id]).await {
             let text: String = row.get(0);
-            let evt = TextExtracted { id, text, prompt: req.prompt.clone() };
+            let evt = TextExtracted { pdf_id: id, pipeline_id: uuid::Uuid::nil(), text };
             let payload = serde_json::to_string(&evt).unwrap();
             let _ = prod
                 .send(
@@ -138,8 +109,8 @@ async fn main() -> std::io::Result<()> {
         .set("bootstrap.servers", &settings.message_broker_url)
         .create()
         .unwrap();
-    consumer.subscribe(&["pdf-uploaded"]).unwrap();
-    info!("kafka consumer subscribed to pdf-uploaded");
+    consumer.subscribe(&["pdf-merged"]).unwrap();
+    info!("kafka consumer subscribed to pdf-merged");
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &settings.message_broker_url)
         .create()
@@ -158,15 +129,15 @@ async fn main() -> std::io::Result<()> {
                 Ok(m) => {
                     if let Some(Ok(payload)) = m.payload_view::<str>() {
                         if let Ok(event) = serde_json::from_str::<PdfUploaded>(payload) {
-                            info!(id = event.id, "received pdf-uploaded event");
+                            info!(id = event.pdf_id, "received pdf-merged event");
                             let stmt = db.prepare("SELECT data FROM pdfs WHERE id = $1").await.unwrap();
-                            if let Ok(row) = db.query_one(&stmt, &[&event.id]).await {
+                            if let Ok(row) = db.query_one(&stmt, &[&event.pdf_id]).await {
                                 let data: Vec<u8> = row.get(0);
-                                let path = format!("/tmp/pdf_{}.pdf", event.id);
+                                let path = format!("/tmp/pdf_{}.pdf", event.pdf_id);
                                 tokio::fs::write(&path, &data).await.unwrap();
-                                if let Ok(text) = extract_text(&path) {
+                                if let Ok(text) = extract_text_layout(&path).await {
                                     let text = text.to_lowercase();
-                                    info!(id = event.id, "extracted text");
+                                    info!(id = event.pdf_id, "extracted text");
                                     let stmt = db
                                         .prepare(
                                             "INSERT INTO pdf_texts (pdf_id, text) VALUES ($1, $2) \
@@ -174,18 +145,18 @@ async fn main() -> std::io::Result<()> {
                                         )
                                         .await
                                         .unwrap();
-                                    if let Err(e) = db.execute(&stmt, &[&event.id, &text]).await {
-                                        error!(%e, id = event.id, "failed to store text");
+                                    if let Err(e) = db.execute(&stmt, &[&event.pdf_id, &text]).await {
+                                        error!(%e, id = event.pdf_id, "failed to store text");
                                         continue;
                                     }
-                                    info!(id = event.id, "stored ocr text");
+                                    info!(id = event.pdf_id, "stored ocr text");
                                     let _ = db
                                         .execute(
                                             "UPDATE uploads SET status='ready' WHERE pdf_id=$1",
-                                            &[&event.id],
+                                            &[&event.pdf_id],
                                         )
                                         .await;
-                                    let evt = TextExtracted { id: event.id, text, prompt: event.prompt.clone() };
+                                    let evt = TextExtracted { pdf_id: event.pdf_id, pipeline_id: event.pipeline_id, text };
                                     let payload = serde_json::to_string(&evt).unwrap();
                                     let _ = prod
                                         .send(
@@ -195,7 +166,7 @@ async fn main() -> std::io::Result<()> {
                                             Duration::from_secs(0),
                                         )
                                         .await;
-                                    info!(id = evt.id, "published text-extracted event");
+                                    info!(id = evt.pdf_id, "published text-extracted event");
                                     let _ = tokio::fs::remove_file(&path).await;
                                 }
                             }

@@ -9,6 +9,10 @@ name             = "text-extraction"
 version.workspace = true
 edition.workspace = true
 
+[lib]
+name = "text_extraction"
+path = "src/lib.rs"
+
 [dependencies]
 tesseract        = "0.15.2"
 pdf-extract      = "0.9"
