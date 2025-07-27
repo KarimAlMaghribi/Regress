@@ -22,7 +22,11 @@ pub fn extract_text(path: &str) -> Result<String> {
 }
 
 pub async fn extract_text_layout(path: &str) -> anyhow::Result<String> {
-    let txt = tokio::task::spawn_blocking(move || extract_text(path)).await??;
+    // `tokio::task::spawn_blocking` requires a `'static` future. Clone the
+    // provided path into an owned `String` so it can be moved into the
+    // blocking task without borrowing issues.
+    let path = path.to_owned();
+    let txt = tokio::task::spawn_blocking(move || extract_text(&path)).await??;
     let cleaned = txt
         .lines()
         .map(|l| l.trim())
