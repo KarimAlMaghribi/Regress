@@ -2,16 +2,17 @@ import create from 'zustand';
 
 export interface PipelineStep {
   id: string;
-  type?: string;
-  promptId?: number;
+  label?: string;
+  type: string;
+  promptId: number;
+  input_source?: string;
   alias?: string;
   inputs?: string[];
   formula_override?: string;
-  input_source?: string;
   condition?: string;
   true_target?: string;
   false_target?: string;
-  enum_targets?: Record<string,string>;
+  enum_targets?: Record<string, string>;
   active?: boolean;
 }
 
@@ -20,47 +21,145 @@ interface PipelineState {
   steps: PipelineStep[];
   currentPipelineId?: string;
   dirty: boolean;
-  addStepAt: (idx: number) => void;
-  updateStep: (id: string, data: Partial<PipelineStep>) => void;
-  moveStep: (src: number, dst: number) => void;
-  removeStep: (id: string) => void;
-  loadSteps: (steps: PipelineStep[], id?: string, name?: string) => void;
-  setName: (name: string) => void;
-  markDirty: (d: boolean) => void;
+  loadPipeline: (id: string) => Promise<void>;
+  createPipeline: (name: string) => Promise<void>;
+  updateName: (name: string) => Promise<void>;
+  addStepAt: (index: number, step: PipelineStep) => Promise<void>;
+  updateStep: (id: string, changes: Partial<PipelineStep>) => Promise<void>;
+  reorder: (order: string[]) => Promise<void>;
+  removeStep: (id: string) => Promise<void>;
 }
 
-export const usePipelineStore = create<PipelineState>(set => ({
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8090';
+
+async function publishUpdate(id: string) {
+  try {
+    await fetch(`${API}/pipeline-runner/event`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pipeline_id: id }),
+    });
+  } catch (err) {
+    console.error('publish update', err);
+  }
+}
+
+export const usePipelineStore = create<PipelineState>((set, get) => ({
   name: '',
   steps: [],
   dirty: false,
-  addStepAt: idx => set(state => {
-    const step: PipelineStep = { id: Math.random().toString(36).slice(2) };
-    const steps = [...state.steps];
-    steps.splice(idx, 0, step);
-    return { steps, dirty: true };
-  }),
-  updateStep: (id, data) => set(state => ({
-    steps: state.steps.map(s => s.id === id ? { ...s, ...data } : s),
-    dirty: true,
-  })),
-  moveStep: (src, dst) => set(state => {
-    const steps = [...state.steps];
-    const [s] = steps.splice(src, 1);
-    steps.splice(dst, 0, s);
-    return { steps, dirty: true };
-  }),
-  removeStep: id => set(state => ({
-    steps: state.steps.filter(s => s.id !== id),
-    dirty: true,
-  })),
-  loadSteps: (steps, id, name) => set({
-    steps,
-    currentPipelineId: id,
-    name: name || '',
-    dirty: false,
-  }),
-  setName: name => set({ name, dirty: true }),
-  markDirty: dirty => set({ dirty }),
+
+  async loadPipeline(id) {
+    const res = await fetch(`${API}/pipelines/${id}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    set({ name: json.name, steps: json.steps, currentPipelineId: id, dirty: false });
+  },
+
+  async createPipeline(name) {
+    const res = await fetch(`${API}/pipelines`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, steps: [] }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    set({ name: json.name, steps: json.steps, currentPipelineId: json.id, dirty: false });
+    await publishUpdate(json.id);
+  },
+
+  async updateName(name) {
+    const id = get().currentPipelineId;
+    if (!id) {
+      set({ name });
+      return;
+    }
+    const prev = get().name;
+    set({ name });
+    const res = await fetch(`${API}/pipelines/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      set({ name: prev });
+      throw new Error(`HTTP ${res.status}`);
+    }
+    await publishUpdate(id);
+  },
+
+  async addStepAt(index, step) {
+    const id = get().currentPipelineId;
+    if (!id) throw new Error('no pipeline loaded');
+    const prev = get().steps;
+    const next = [...prev];
+    next.splice(index, 0, step);
+    set({ steps: next });
+    const res = await fetch(`${API}/pipelines/${id}/steps`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ index, step }),
+    });
+    if (!res.ok) {
+      set({ steps: prev });
+      throw new Error(`HTTP ${res.status}`);
+    }
+    await publishUpdate(id);
+  },
+
+  async updateStep(stepId, changes) {
+    const id = get().currentPipelineId;
+    if (!id) throw new Error('no pipeline loaded');
+    const prev = get().steps;
+    const next = prev.map(s => (s.id === stepId ? { ...s, ...changes } : s));
+    set({ steps: next });
+    const res = await fetch(`${API}/pipelines/${id}/steps/${stepId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(changes),
+    });
+    if (!res.ok) {
+      set({ steps: prev });
+      throw new Error(`HTTP ${res.status}`);
+    }
+    await publishUpdate(id);
+  },
+
+  async removeStep(stepId) {
+    const id = get().currentPipelineId;
+    if (!id) throw new Error('no pipeline loaded');
+    const prev = get().steps;
+    const next = prev.filter(s => s.id !== stepId);
+    set({ steps: next });
+    const res = await fetch(`${API}/pipelines/${id}/steps/${stepId}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      set({ steps: prev });
+      throw new Error(`HTTP ${res.status}`);
+    }
+    await publishUpdate(id);
+  },
+
+  async reorder(order) {
+    const id = get().currentPipelineId;
+    if (!id) throw new Error('no pipeline loaded');
+    const prev = get().steps;
+    const map = new Map(prev.map(s => [s.id, s]));
+    const next: PipelineStep[] = [];
+    order.forEach(o => { const s = map.get(o); if (s) next.push(s); });
+    set({ steps: next });
+    const res = await fetch(`${API}/pipelines/${id}/steps/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    });
+    if (!res.ok) {
+      set({ steps: prev });
+      throw new Error(`HTTP ${res.status}`);
+    }
+    await publishUpdate(id);
+  },
 }));
 
 export function validatePipeline(steps: PipelineStep[]): string[] {
