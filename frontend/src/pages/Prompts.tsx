@@ -6,9 +6,6 @@ import {
   Slider,
   Card,
   CardContent,
-  Dialog,
-  DialogTitle,
-  DialogContent,
   Select,
   MenuItem,
   FormControl,
@@ -74,15 +71,92 @@ export default function Prompts() {
             <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
           </Select>
         </FormControl>
-        <Box sx={{ width: 120 }}>
-          <Slider min={0} max={5} step={0.1} value={newWeight} onChange={(_,v)=>setNewWeight(v as number)} />
+        <Box sx={{ width: 180, display:'flex', alignItems:'center' }}>
+          <Slider
+            min={0}
+            max={5}
+            step={0.1}
+            value={newWeight}
+            onChange={(_, v) => setNewWeight(v as number)}
+            sx={{ mr: 1, flexGrow: 1 }}
+          />
+          <TextField
+            type="number"
+            size="small"
+            value={newWeight}
+            onChange={e => setNewWeight(parseFloat(e.target.value))}
+            inputProps={{ step: 0.1, min: 0, max: 5 }}
+            sx={{ width: 60 }}
+          />
         </Box>
         <Button variant="contained" onClick={create}>Add</Button>
       </Box>
       {prompts.map(p => (
-        <Card key={p.id} sx={{ mb:1 }}>
-          <CardContent>
-            {p.text} ({p.type}) <Button onClick={()=>del(p.id)}><DeleteIcon/></Button>
+        <Card key={p.id} sx={{ mb: 1 }}>
+          <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Box sx={{ flexGrow: 1 }}>{p.text}</Box>
+            <FormControl sx={{ minWidth: 160 }} size="small">
+              <InputLabel>Typ</InputLabel>
+              <Select
+                label="Typ"
+                value={p.type}
+                onChange={e =>
+                  setPrompts(ps =>
+                    ps.map(it =>
+                      it.id === p.id ? { ...it, type: e.target.value as PromptType } : it
+                    )
+                  )
+                }
+              >
+                <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
+                <MenuItem value="ScoringPrompt">ScoringPrompt</MenuItem>
+                <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
+              </Select>
+            </FormControl>
+            <Box sx={{ width: 180, display: 'flex', alignItems: 'center' }}>
+              <Slider
+                min={0}
+                max={5}
+                step={0.1}
+                value={p.weight}
+                onChange={(_, v) =>
+                  setPrompts(ps =>
+                    ps.map(it => (it.id === p.id ? { ...it, weight: v as number } : it))
+                  )
+                }
+                sx={{ mr: 1, flexGrow: 1 }}
+              />
+              <TextField
+                type="number"
+                size="small"
+                value={p.weight}
+                onChange={e =>
+                  setPrompts(ps =>
+                    ps.map(it =>
+                      it.id === p.id ? { ...it, weight: parseFloat(e.target.value) } : it
+                    )
+                  )
+                }
+                inputProps={{ step: 0.1, min: 0, max: 5 }}
+                sx={{ width: 60 }}
+              />
+            </Box>
+            <Button
+              variant="outlined"
+              size="small"
+              onClick={() =>
+                fetch(`http://localhost:8082/prompts/${p.id}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ text: p.text, weight: p.weight, type: p.type }),
+                }).then(load)
+              }
+            >
+              Save
+            </Button>
+            <Button size="small" onClick={() => del(p.id)}>
+              <DeleteIcon />
+            </Button>
           </CardContent>
         </Card>
       ))}
