@@ -24,6 +24,7 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import { ColorModeContext } from '../ColorModeContext';
 import { motion } from 'framer-motion';
+import logo from '../imgs/jamiah_logo_color.png';
 
 export interface SidebarProps {
   open: boolean;
@@ -137,7 +138,20 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
         overflowX: 'hidden',
       }}
     >
-      <Box sx={{ display: 'flex', justifyContent: open ? 'flex-end' : 'center', p: 1 }}>
+      <Box
+        sx={{
+          display: 'flex',
+          justifyContent: open ? 'space-between' : 'center',
+          alignItems: 'center',
+          p: 1,
+        }}
+      >
+        <Box
+          component="img"
+          src={logo}
+          alt="Mansa logo"
+          sx={{ width: open ? 120 : 40, transition: 'width 0.2s' }}
+        />
         <IconButton onClick={onToggle} size="small">
           <MenuIcon />
         </IconButton>
