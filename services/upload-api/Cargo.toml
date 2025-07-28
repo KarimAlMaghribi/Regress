@@ -1,0 +1,17 @@
+[package]
+name = "upload-api"
+edition = "2021"
+
+[dependencies]
+actix-web = "4"
+actix-multipart = "0.6"
+futures-util = "0.3"
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono" ] }
+async-stream = "0.3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "json"] }
+tokio = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
