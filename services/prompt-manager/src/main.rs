@@ -200,11 +200,11 @@ async fn update_prompt(
             }),
         ));
     };
-    model.text = input.text;
-    model.prompt_type = input.prompt_type.to_string();
-    model.weight = input.weight;
-    model.favorite = input.favorite;
-    let active: model::ActiveModel = model.into();
+    let mut active: model::ActiveModel = model.into();
+    active.text = Set(input.text);
+    active.prompt_type = Set(input.prompt_type.to_string());
+    active.weight = Set(input.weight);
+    active.favorite = Set(input.favorite);
     let res = active.update(&*db).await.map_err(|e| {
         error!("failed to update prompt {}: {}", id, e);
         (

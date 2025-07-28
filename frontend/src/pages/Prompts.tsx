@@ -86,7 +86,7 @@ export default function Prompts() {
             value={newWeight}
             onChange={e => setNewWeight(parseFloat(e.target.value))}
             inputProps={{ step: 0.1, min: 0, max: 5 }}
-            sx={{ width: 60 }}
+            sx={{ width: 90 }}
           />
         </Box>
         <Button variant="contained" onClick={create}>Add</Button>
@@ -138,7 +138,7 @@ export default function Prompts() {
                   )
                 }
                 inputProps={{ step: 0.1, min: 0, max: 5 }}
-                sx={{ width: 60 }}
+                sx={{ width: 90 }}
               />
             </Box>
             <Button
@@ -148,7 +148,12 @@ export default function Prompts() {
                 fetch(`http://localhost:8082/prompts/${p.id}`, {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ text: p.text, weight: p.weight, type: p.type }),
+                  body: JSON.stringify({
+                    text: p.text,
+                    weight: p.weight,
+                    type: p.type,
+                    favorite: p.favorite,
+                  }),
                 }).then(load)
               }
             >
