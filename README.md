@@ -68,6 +68,8 @@ If the variable is not supplied it defaults to
 `/prompts` exposes all stored prompts and the table is created automatically if
 it does not exist. The same service now also manages pipelines. Use `/pipelines`
 to list and create pipelines or `/pipelines/{id}` to update and delete them.
+The `pipeline-api` also checks for the `pipelines` table on startup and creates
+it if necessary, so migrations do not need to be run manually.
 
 ## Running with Docker
 
