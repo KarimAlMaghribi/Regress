@@ -13,7 +13,10 @@ export default function PipelineList() {
   const navigate = useNavigate();
 
   const load = () => listPipelines().then(setRows).catch(() => {});
-  useEffect(load, []);
+  // call load on mount without returning the Promise as a cleanup function
+  useEffect(() => {
+    load();
+  }, []);
 
   const handleNew = async () => {
     const name = window.prompt('Name eingeben');
