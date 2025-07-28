@@ -45,7 +45,9 @@ field in the JSON body.
 - The ingestion service base URL is read from `VITE_INGEST_URL` and defaults to
   `http://localhost:8081`.
 - The pipeline API base URL is configured via `VITE_API_URL` and
-  defaults to `http://localhost:8090`.
+  defaults to `http://localhost:8084`.
+- History queries use `VITE_HISTORY_URL` which defaults to
+  `http://localhost:8090`.
 
 ## Example Request
 ```

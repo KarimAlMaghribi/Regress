@@ -11,7 +11,7 @@ import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautif
 import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
 
 interface PromptOption { id: number; text: string; }
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8090';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
 
 export default function PipelineEditor() {

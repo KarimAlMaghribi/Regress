@@ -88,6 +88,7 @@ After the build completes, open <http://localhost:3000> in your browser to use t
 
 The frontend expects these environment variables:
 `VITE_INGEST_URL` for the upload service (defaults to `http://localhost:8081`),
-`VITE_API_URL` for the pipeline API (defaults to `http://localhost:8090`) and
+`VITE_API_URL` for the pipeline API (defaults to `http://localhost:8084`),
+`VITE_HISTORY_URL` for the history API (defaults to `http://localhost:8090`) and
 `VITE_HISTORY_WS` for the history WebSocket (defaults to `ws://localhost:8090`).
 

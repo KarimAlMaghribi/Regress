@@ -5,10 +5,12 @@ RUN npm install
 COPY frontend/ .
 ARG VITE_INGEST_URL=http://localhost:8081
 ARG VITE_HISTORY_WS=ws://localhost:8090
-ARG VITE_API_URL=http://localhost:8090
+ARG VITE_API_URL=http://localhost:8084
+ARG VITE_HISTORY_URL=http://localhost:8090
 ENV VITE_INGEST_URL=$VITE_INGEST_URL \
     VITE_HISTORY_WS=$VITE_HISTORY_WS \
-    VITE_API_URL=$VITE_API_URL
+    VITE_API_URL=$VITE_API_URL \
+    VITE_HISTORY_URL=$VITE_HISTORY_URL
 RUN npm run build
 
 FROM nginx:alpine

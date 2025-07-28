@@ -132,7 +132,7 @@ export default function Result() {
 
   useEffect(() => {
     if (!id) return;
-    const api = import.meta.env.VITE_API_URL || 'http://localhost:8090';
+    const api = import.meta.env.VITE_HISTORY_URL || 'http://localhost:8090';
     fetch(`${api}/results/${id}`)
       .then(r => r.json())
       .then(setData)
