@@ -188,6 +188,7 @@ async fn delete_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> im
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StepInput {
     index: usize,
     step: PipelineStep,
@@ -214,6 +215,7 @@ async fn add_step(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct StepPatch {
     label: Option<Option<String>>,
     #[serde(rename = "type")]

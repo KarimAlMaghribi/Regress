@@ -117,7 +117,7 @@ export default function PipelineEditor() {
                         <TableCell>{s.label}</TableCell>
                         <TableCell>{s.type}</TableCell>
                         <TableCell>{s.promptId}</TableCell>
-                        <TableCell>{s.input_source}</TableCell>
+                        <TableCell>{s.inputSource}</TableCell>
                         <TableCell>{s.alias}</TableCell>
                         <TableCell>{(s.inputs||[]).join(',')}</TableCell>
                         <TableCell>{s.condition}</TableCell>
@@ -144,7 +144,7 @@ export default function PipelineEditor() {
             </Select>
             {edit.type==='ExtractionPrompt' && (
               <>
-                <Select fullWidth value={edit.input_source||'document'} onChange={e=>updateStep(edit.id,{input_source:e.target.value as string}).catch(er=>setError(String(er)))}>
+                <Select fullWidth value={edit.inputSource||'document'} onChange={e=>updateStep(edit.id,{inputSource:e.target.value as string}).catch(er=>setError(String(er)))}>
                   <MenuItem value="document">document</MenuItem>
                   {steps.filter(s=>s.alias).map(s=>(<MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>))}
                 </Select>
@@ -156,7 +156,7 @@ export default function PipelineEditor() {
                 <Select multiple fullWidth value={edit.inputs||[]} onChange={e=>updateStep(edit.id,{inputs:Array.from(e.target.value as any)}).catch(er=>setError(String(er)))}>
                   {steps.filter(s=>s.alias).map(s=>(<MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>))}
                 </Select>
-                <TextField label="Formula" fullWidth value={edit.formula_override||''} onChange={e=>updateStep(edit.id,{formula_override:e.target.value}).catch(er=>setError(String(er)))} />
+                <TextField label="Formula" fullWidth value={edit.formulaOverride||''} onChange={e=>updateStep(edit.id,{formulaOverride:e.target.value}).catch(er=>setError(String(er)))} />
               </>
             )}
             {edit.type==='DecisionPrompt' && (
@@ -181,7 +181,7 @@ export default function PipelineEditor() {
             </Select>
             {draft.type==='ExtractionPrompt' && (
               <>
-                <Select fullWidth value={draft.input_source||'document'} onChange={e=>setDraft({...draft,input_source:e.target.value as string})}>
+                <Select fullWidth value={draft.inputSource||'document'} onChange={e=>setDraft({...draft,inputSource:e.target.value as string})}>
                   <MenuItem value="document">document</MenuItem>
                   {steps.filter(s=>s.alias).map(s=>(<MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>))}
                 </Select>
@@ -193,7 +193,7 @@ export default function PipelineEditor() {
                 <Select multiple fullWidth value={draft.inputs||[]} onChange={e=>setDraft({...draft, inputs:Array.from(e.target.value as any)})}>
                   {steps.filter(s=>s.alias).map(s=>(<MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>))}
                 </Select>
-                <TextField label="Formula" fullWidth value={draft.formula_override||''} onChange={e=>setDraft({...draft, formula_override:e.target.value})} />
+                <TextField label="Formula" fullWidth value={draft.formulaOverride||''} onChange={e=>setDraft({...draft, formulaOverride:e.target.value})} />
               </>
             )}
             {draft.type==='DecisionPrompt' && (
