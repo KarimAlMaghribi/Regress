@@ -12,6 +12,7 @@ import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
 
 interface PromptOption { id: number; text: string; }
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8090';
+const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
 
 export default function PipelineEditor() {
   const {
@@ -25,7 +26,7 @@ export default function PipelineEditor() {
 
   const fetchPrompts = (t: string) => {
     if (promptOptions[t]) return;
-    fetch(`${API}/prompt-manager/prompts?type=${t}`)
+    fetch(`${PROMPT_API}/prompts?type=${t}`)
       .then(r => r.ok ? r.json() : [])
       .then((list: PromptOption[]) => setPromptOptions(o => ({ ...o, [t]: list })))
       .catch(() => setPromptOptions(o => ({ ...o, [t]: [] })));
@@ -67,7 +68,17 @@ export default function PipelineEditor() {
       <Box sx={{ mb:2, display:'flex', gap:1, alignItems:'center' }}>
         <TextField size="small" label="Name" value={name}
           onChange={e=>updateName(e.target.value).catch(err=>setError(String(err)))} />
-        <Button startIcon={<AddIcon/>} onClick={() => setDraft({ id: crypto.randomUUID(), type:'ExtractionPrompt', promptId:0, active:true, index: steps.length } as any)}>Step</Button>
+        {currentPipelineId ? (
+          <Button startIcon={<AddIcon/>}
+            onClick={() => setDraft({ id: crypto.randomUUID(), type:'ExtractionPrompt', promptId:0, active:true, index: steps.length } as any)}>
+            Step
+          </Button>
+        ) : (
+          <Button variant="contained" startIcon={<AddIcon/>}
+            onClick={() => createPipeline(name).catch(err=>setError(String(err)))}>
+            Create
+          </Button>
+        )}
       </Box>
       <DragDropContext onDragEnd={handleDrag}>
         <Droppable droppableId="steps">
