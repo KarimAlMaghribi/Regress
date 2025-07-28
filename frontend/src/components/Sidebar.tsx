@@ -149,7 +149,7 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
         <Box
           component="img"
           src={logo}
-          alt="Mansa logo"
+          alt="Regress logo"
           sx={{ width: open ? 120 : 40, transition: 'width 0.2s' }}
         />
         <IconButton onClick={onToggle} size="small">
