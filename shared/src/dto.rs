@@ -1,4 +1,13 @@
 use serde::{Deserialize, Serialize};
+use strum_macros::{EnumString, Display};
+
+#[derive(Debug, Clone, PartialEq, Eq, EnumString, Display, Serialize, Deserialize)]
+#[strum(serialize_all = "PascalCase")]
+pub enum PromptType {
+    ExtractionPrompt,
+    ScoringPrompt,
+    DecisionPrompt,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UploadRequest {
@@ -37,7 +46,7 @@ pub struct PipelineRunResult {
 pub struct PipelineStep {
     pub id: String,
     #[serde(rename = "type")]
-    pub step_type: String,
+    pub step_type: PromptType,
     pub prompt_id: i32,
     pub label: Option<String>,
     pub alias: Option<String>,

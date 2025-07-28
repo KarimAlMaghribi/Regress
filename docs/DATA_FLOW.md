@@ -34,7 +34,10 @@ field in the JSON body.
 
 ## Prompts
 - **text** (`string`): managed in the Prompts page and persisted by the
-  `prompt-manager` service in table `prompts(id SERIAL, text TEXT, weight REAL)`.
+  `prompt-manager` service in table `prompts(id SERIAL, text TEXT,
+  prompt_type TEXT, weight REAL, favorite BOOLEAN)`.
+- **type** (`ExtractionPrompt` | `ScoringPrompt` | `DecisionPrompt`): defines the
+  role of a prompt and is stored persistently.
 - **weight** (`float`): controls how strongly a prompt influences the overall
   classification score. Higher values increase the prompt's impact.
 
