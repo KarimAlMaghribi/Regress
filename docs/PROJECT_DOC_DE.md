@@ -15,6 +15,7 @@ Das System besteht aus mehreren Diensten, die über Docker Compose gestartet wer
 - **text-extraction** – führt OCR aus und übergibt den erkannten Text an den Pipeline-Runner.
 - **pipeline-runner** – führt die Pipeline aus und speichert das Ergebnis in der Datenbank.
 - **prompt-manager** – verwaltet Prompt-Vorlagen und Pipelines.
+- **pipeline-api** – stellt REST-Endpunkte für die Verwaltung von Pipelines bereit.
 - **metrics** – stellt Metriken und eine Health-Route bereit.
 - **history-service** – liefert via WebSocket den Verlauf vergangener Klassifikationen.
 
