@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use serde_json::Value;
-use shared::{dto::PipelineConfig, utils::{rhai_eval_bool, eval_formula}, openai_client};
+use shared::{dto::{PipelineConfig, PromptType}, utils::{rhai_eval_bool, eval_formula}, openai_client};
 use rhai;
 
 fn to_dyn(v: &Value) -> rhai::Dynamic {
@@ -35,8 +35,17 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
         hops += 1;
         if hops > exec.len() * 3 { return Err(anyhow::anyhow!("pipeline exceeded max steps")); }
         if step.step.active == Some(false) { idx = step.next_idx.unwrap_or(exec.len()); continue; }
-        match step.step.step_type.as_str() {
-            "ExtractionPrompt" => {
+        if let Some(r) = &step.step.route {
+            let current = state.get("route").and_then(|v| v.as_str());
+            if current != Some(r.as_str()) { idx = step.next_idx.unwrap_or(exec.len()); continue; }
+        }
+        if let Some(expr) = &step.step.condition {
+            let mut ctx = HashMap::new();
+            for (k,v) in &state { ctx.insert(k.clone(), to_dyn(v)); }
+            if !rhai_eval_bool(expr, &ctx)? { idx = step.next_idx.unwrap_or(exec.len()); continue; }
+        }
+        match step.step.step_type {
+            PromptType::ExtractionPrompt => {
                 let input = if let Some(src) = step.step.input_source.as_ref() {
                     if src == "document" { pdf_text.to_string() } else { state.get(src).cloned().unwrap_or(Value::Null).to_string() }
                 } else { pdf_text.to_string() };
@@ -44,7 +53,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                 if let Some(alias) = &step.step.alias { state.insert(alias.clone(), val); }
                 idx = step.next_idx.unwrap_or(exec.len());
             }
-            "ScoringPrompt" => {
+            PromptType::ScoringPrompt => {
                 let mut args = Vec::new();
                 if let Some(ins) = &step.step.inputs {
                     for a in ins {
@@ -66,9 +75,10 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                 if let Some(alias) = &step.step.alias { state.insert(alias.clone(), value); }
                 idx = step.next_idx.unwrap_or(exec.len());
             }
-            "DecisionPrompt" => {
+            PromptType::DecisionPrompt => {
                 let decision = openai_client::decide(step.step.prompt_id, &state).await?;
                 state.insert("result".into(), decision.clone());
+                state.insert("route".into(), decision.clone());
                 let cond = step.step.condition.as_deref().unwrap_or("result == true");
                 let mut ctx = HashMap::new();
                 for (k,v) in &state { ctx.insert(k.clone(), to_dyn(v)); }
@@ -88,7 +98,6 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     idx = if ok { step.true_idx } else { step.false_idx }.unwrap_or(exec.len());
                 }
             }
-            _ => { idx = step.next_idx.unwrap_or(exec.len()); }
         }
         if idx >= exec.len() { break; }
     }
@@ -103,16 +112,29 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shared::dto::PipelineStep;
+    use shared::dto::{PipelineStep, PromptType};
 
     #[tokio::test]
     async fn run_simple() {
         let steps = vec![
-            PipelineStep{ id:"s1".into(), step_type:"ExtractionPrompt".into(), prompt_id:0,label:None,alias:Some("a".into()),inputs:None,formula_override:None,input_source:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
-            PipelineStep{ id:"s2".into(), step_type:"ScoringPrompt".into(), prompt_id:0,label:None,alias:Some("b".into()),inputs:Some(vec!["a".into()]),formula_override:Some("1+1".into()),input_source:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep{ id:"s1".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("a".into()),inputs:None,formula_override:Some("1".into()),input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep{ id:"s2".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("b".into()),inputs:Some(vec!["a".into()]),formula_override:Some("1+1".into()),input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
         ];
         let cfg = PipelineConfig{ name:"t".into(), steps};
         let state = execute(&cfg, "doc").await.unwrap();
-        assert!(state.contains_key("b"));
+        assert!(state.state.contains_key("b"));
+    }
+
+    #[tokio::test]
+    async fn route_skip() {
+        let steps = vec![
+            PipelineStep{ id:"set".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("route".into()),inputs:None,formula_override:Some("\"\\\"true\\\"\"".into()),input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep{ id:"p1".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("x".into()),inputs:None,formula_override:Some("1".into()),input_source:None,route:Some("true".into()),condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep{ id:"p2".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("y".into()),inputs:None,formula_override:Some("2".into()),input_source:None,route:Some("false".into()),condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+        ];
+        let cfg = PipelineConfig{ name:"t".into(), steps};
+        let result = execute(&cfg, "doc").await.unwrap();
+        assert!(result.state.contains_key("x"));
+        assert!(!result.state.contains_key("y"));
     }
 }

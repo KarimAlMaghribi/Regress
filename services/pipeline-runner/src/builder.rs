@@ -37,15 +37,15 @@ pub fn build_exec_steps(cfg: &PipelineConfig) -> anyhow::Result<Vec<ExecStep>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use shared::dto::PipelineStep;
+    use shared::dto::{PipelineStep, PromptType};
 
     #[test]
     fn build_ok() {
         let steps = vec![
-            PipelineStep{ id:"s1".into(), step_type:"ExtractionPrompt".into(), prompt_id:1,label:None,alias:Some("a".into()),inputs:None,formula_override:None,input_source:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
-            PipelineStep{ id:"s2".into(), step_type:"DecisionPrompt".into(), prompt_id:2,label:None,alias:None,inputs:None,formula_override:None,input_source:None,condition:Some("true".into()),true_target:Some("s3".into()),false_target:Some("s4".into()),enum_targets:None,active:Some(true)},
-            PipelineStep{ id:"s3".into(), step_type:"ScoringPrompt".into(), prompt_id:3,label:None,alias:Some("b".into()),inputs:Some(vec!["a".into()]),formula_override:None,input_source:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
-            PipelineStep{ id:"s4".into(), step_type:"ScoringPrompt".into(), prompt_id:4,label:None,alias:Some("c".into()),inputs:Some(vec!["a".into()]),formula_override:None,input_source:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep{ id:"s1".into(), step_type:PromptType::ExtractionPrompt, prompt_id:1,label:None,alias:Some("a".into()),inputs:None,formula_override:None,input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep{ id:"s2".into(), step_type:PromptType::DecisionPrompt, prompt_id:2,label:None,alias:None,inputs:None,formula_override:None,input_source:None,route:None,condition:Some("true".into()),true_target:Some("s3".into()),false_target:Some("s4".into()),enum_targets:None,active:Some(true)},
+            PipelineStep{ id:"s3".into(), step_type:PromptType::ScoringPrompt, prompt_id:3,label:None,alias:Some("b".into()),inputs:Some(vec!["a".into()]),formula_override:None,input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep{ id:"s4".into(), step_type:PromptType::ScoringPrompt, prompt_id:4,label:None,alias:Some("c".into()),inputs:Some(vec!["a".into()]),formula_override:None,input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
         ];
         let cfg = PipelineConfig{ name:"t".into(), steps};
         let exec = build_exec_steps(&cfg).unwrap();

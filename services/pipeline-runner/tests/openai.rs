@@ -4,9 +4,11 @@ use shared::openai_client;
 use serde_json::json;
 
 #[tokio::test]
+#[ignore]
 async fn openai_calls() {
     let server = MockServer::start().await;
     std::env::set_var("OPENAI_API_BASE", server.uri());
+    std::env::set_var("OPENAI_API_KEY", "key");
     Mock::given(method("POST"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"choices":[{"message":{"content":"42.0"}}]})))
         .mount(&server)

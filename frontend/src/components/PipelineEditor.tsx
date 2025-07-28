@@ -100,6 +100,7 @@ export default function PipelineEditor() {
                   <TableCell>Input Source</TableCell>
                   <TableCell>Alias</TableCell>
                   <TableCell>Inputs</TableCell>
+                  <TableCell>Route</TableCell>
                   <TableCell>Condition</TableCell>
                   <TableCell>Active</TableCell>
                   <TableCell></TableCell>
@@ -120,6 +121,7 @@ export default function PipelineEditor() {
                         <TableCell>{s.inputSource}</TableCell>
                         <TableCell>{s.alias}</TableCell>
                         <TableCell>{(s.inputs||[]).join(',')}</TableCell>
+                        <TableCell>{s.route || '—'}</TableCell>
                         <TableCell>{s.condition}</TableCell>
                         <TableCell><Checkbox checked={s.active !== false} onChange={e=>updateStep(s.id,{active:e.target.checked}).catch(err=>setError(String(err)))} /></TableCell>
                         <TableCell>
@@ -142,6 +144,8 @@ export default function PipelineEditor() {
             <Select fullWidth value={edit.promptId} onChange={e=>updateStep(edit.id,{promptId:Number(e.target.value)}).catch(er=>setError(String(er)))}>
               {(promptOptions[edit.type]||[]).map(p=>(<MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>))}
             </Select>
+            <TextField label="Route" fullWidth value={edit.route || ''}
+              onChange={e=>updateStep(edit.id,{route:e.target.value || null}).catch(er=>setError(String(er)))} />
             {edit.type==='ExtractionPrompt' && (
               <>
                 <Select fullWidth value={edit.inputSource||'document'} onChange={e=>updateStep(edit.id,{inputSource:e.target.value as string}).catch(er=>setError(String(er)))}>
@@ -179,6 +183,7 @@ export default function PipelineEditor() {
             <Select fullWidth value={draft.promptId} onChange={e=>setDraft({...draft, promptId:Number(e.target.value)})}>
               {(promptOptions[draft.type]||[]).map(p=>(<MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>))}
             </Select>
+            <TextField label="Route" fullWidth value={draft.route||''} onChange={e=>setDraft({...draft, route: e.target.value || undefined})} />
             {draft.type==='ExtractionPrompt' && (
               <>
                 <Select fullWidth value={draft.inputSource||'document'} onChange={e=>setDraft({...draft,inputSource:e.target.value as string})}>
