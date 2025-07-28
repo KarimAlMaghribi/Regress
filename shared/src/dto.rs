@@ -54,6 +54,7 @@ pub struct PipelineStep {
     pub inputs: Option<Vec<String>>,
     pub formula_override: Option<String>,
     pub input_source: Option<String>,
+    pub route: Option<String>,
     pub condition: Option<String>,
     pub true_target: Option<String>,
     pub false_target: Option<String>,

@@ -9,6 +9,7 @@ export interface PipelineStep {
   alias?: string;
   inputs?: string[];
   formulaOverride?: string;
+  route?: string;
   condition?: string;
   trueTarget?: string;
   falseTarget?: string;
