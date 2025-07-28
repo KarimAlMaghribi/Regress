@@ -30,7 +30,7 @@ interface PipelineState {
   removeStep: (id: string) => Promise<void>;
 }
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8090';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 
 async function publishUpdate(id: string) {
   try {

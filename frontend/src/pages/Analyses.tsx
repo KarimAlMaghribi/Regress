@@ -26,9 +26,10 @@ export default function Analyses() {
   const [end, setEnd] = useState<Dayjs | null>(null);
 
   const load = () => {
+    const base = import.meta.env.VITE_HISTORY_URL || 'http://localhost:8090';
     Promise.all([
-      fetch('http://localhost:8090/analyses?status=running').then(r => r.json()),
-      fetch('http://localhost:8090/analyses?status=completed').then(r => r.json()),
+      fetch(`${base}/analyses?status=running`).then(r => r.json()),
+      fetch(`${base}/analyses?status=completed`).then(r => r.json()),
     ])
       .then(([runningData, doneData]: [any[], any[]]) => {
         const map = (d: any): Entry => {
