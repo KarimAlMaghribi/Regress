@@ -5,14 +5,14 @@ export interface PipelineStep {
   label: string;
   type: 'ExtractionPrompt' | 'ScoringPrompt' | 'DecisionPrompt';
   promptId: number;
-  input_source?: string;
+  inputSource?: string;
   alias?: string;
   inputs?: string[];
-  formula_override?: string;
+  formulaOverride?: string;
   condition?: string;
-  true_target?: string;
-  false_target?: string;
-  enum_targets?: Record<string, string>;
+  trueTarget?: string;
+  falseTarget?: string;
+  enumTargets?: Record<string, string>;
   active?: boolean;
 }
 
@@ -180,8 +180,8 @@ export function validatePipeline(steps: PipelineStep[]): string[] {
   steps.forEach((s, idx) => {
     if (!s.type) errors.push(`Step ${idx + 1}: type missing`);
     if (s.type === 'ExtractionPrompt' && !s.alias) errors.push(`Step ${idx + 1}: alias required`);
-    if (s.type === 'DecisionPrompt' && !s.condition && !s.enum_targets) {
-      errors.push(`Step ${idx + 1}: condition or enum_targets required`);
+    if (s.type === 'DecisionPrompt' && !s.condition && !s.enumTargets) {
+      errors.push(`Step ${idx + 1}: condition or enumTargets required`);
     }
     if (s.alias) {
       if (aliases.has(s.alias)) errors.push(`duplicate alias ${s.alias}`);

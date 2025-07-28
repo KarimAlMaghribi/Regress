@@ -43,6 +43,7 @@ pub struct PipelineRunResult {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct PipelineStep {
     pub id: String,
     #[serde(rename = "type")]
