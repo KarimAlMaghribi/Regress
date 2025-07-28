@@ -17,3 +17,5 @@ anyhow = { workspace = true }
 uuid = { version = "1", features=["serde", "v4"] }
 jsonrepair = { package = "json-repair", version = "0.3.0" }
 tokio = { workspace = true }
+strum = { workspace = true }
+strum_macros = { workspace = true }

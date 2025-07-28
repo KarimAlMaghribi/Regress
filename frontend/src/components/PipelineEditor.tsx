@@ -18,6 +18,7 @@ export default function PipelineEditor() {
     name, steps, updateName, createPipeline, loadPipeline,
     addStepAt, updateStep, reorder, removeStep, currentPipelineId
   } = usePipelineStore();
+  const [newName, setNewName] = useState('');
   const [edit, setEdit] = useState<PipelineStep | null>(null);
   const [draft, setDraft] = useState<PipelineStep | null>(null);
   const [promptOptions, setPromptOptions] = useState<Record<string, PromptOption[]>>({});
@@ -61,6 +62,18 @@ export default function PipelineEditor() {
   useEffect(() => {
     if (edit?.type) fetchPrompts(edit.type);
   }, [edit?.type]);
+
+  if (!currentPipelineId) {
+    return (
+      <Box sx={{ display:'flex', gap:1 }}>
+        <TextField label="Name" value={newName} onChange={e=>setNewName(e.target.value)} />
+        <Button variant="contained" onClick={()=>createPipeline(newName).catch(e=>setError(String(e)))}>Create</Button>
+        <Snackbar open={!!error} autoHideDuration={6000} onClose={()=>setError('')}>
+          <Alert severity="error" onClose={()=>setError('')}>{error}</Alert>
+        </Snackbar>
+      </Box>
+    );
+  }
 
   return (
     <Box>

@@ -36,6 +36,8 @@ log         = "0.4"
 postgres-native-tls = "0.5"
 native-tls = "0.2"
 rhai        = "1"
+strum = "0.26"
+strum_macros = "0.26"
 
 [workspace.metadata.vcpkg]
 git          = "https://github.com/microsoft/vcpkg"

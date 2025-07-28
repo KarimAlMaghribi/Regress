@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, State, Query},
     http::StatusCode,
     routing::{get, put},
     Json, Router,
@@ -9,6 +9,7 @@ use sea_orm::{
     QueryFilter, Set,
 };
 use serde::{Deserialize, Serialize};
+use shared::dto::PromptType;
 use shared::config::Settings;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
@@ -34,6 +35,8 @@ async fn health() -> &'static str {
 struct PromptData {
     id: i32,
     text: String,
+    #[serde(rename = "type")]
+    prompt_type: PromptType,
     weight: f64,
     favorite: bool,
 }
@@ -43,6 +46,8 @@ struct PromptInput {
     text: String,
     #[serde(default = "default_weight")]
     weight: f64,
+    #[serde(default = "default_prompt_type", rename = "type")]
+    prompt_type: PromptType,
     #[serde(default)]
     favorite: bool,
     #[serde(default)]
@@ -87,11 +92,26 @@ fn default_weight() -> f64 {
     1.0
 }
 
+fn default_prompt_type() -> PromptType {
+    PromptType::ExtractionPrompt
+}
+
+#[derive(Deserialize)]
+struct ListParams {
+    #[serde(rename = "type")]
+    r#type: Option<PromptType>,
+}
+
 async fn list_prompts(
     State(db): State<Arc<DatabaseConnection>>,
+    Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<PromptData>>, (StatusCode, Json<ErrorResponse>)> {
     info!("listing prompts");
-    let items = Prompt::find().all(&*db).await.map_err(|e| {
+    let mut query = Prompt::find();
+    if let Some(t) = params.r#type {
+        query = query.filter(model::prompt::Column::PromptType.eq(t.to_string()));
+    }
+    let items = query.all(&*db).await.map_err(|e| {
         error!("failed to list prompts: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -105,6 +125,7 @@ async fn list_prompts(
         .map(|p| PromptData {
             id: p.id,
             text: p.text,
+            prompt_type: p.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
             weight: p.weight,
             favorite: p.favorite,
         })
@@ -120,6 +141,7 @@ async fn create_prompt(
     info!("creating prompt");
     let mut model: model::ActiveModel = Default::default();
     model.text = Set(input.text);
+    model.prompt_type = Set(input.prompt_type.to_string());
     model.weight = Set(input.weight);
     model.favorite = Set(input.favorite);
     let res = model.insert(&*db).await.map_err(|e| {
@@ -149,6 +171,7 @@ async fn create_prompt(
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
+        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
         weight: res.weight,
         favorite: res.favorite,
     }))
@@ -178,6 +201,7 @@ async fn update_prompt(
         ));
     };
     model.text = input.text;
+    model.prompt_type = input.prompt_type.to_string();
     model.weight = input.weight;
     model.favorite = input.favorite;
     let active: model::ActiveModel = model.into();
@@ -222,6 +246,7 @@ async fn update_prompt(
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
+        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
         weight: res.weight,
         favorite: res.favorite,
     }))
@@ -510,6 +535,7 @@ async fn set_favorite(
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
+        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
         weight: res.weight,
         favorite: res.favorite,
     }))
@@ -632,6 +658,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
+        "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS prompt_type TEXT DEFAULT 'ExtractionPrompt'",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
         "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS weight DOUBLE PRECISION DEFAULT 1",
     ))
     .await?;
@@ -647,6 +678,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
+        "UPDATE prompts SET prompt_type = 'ExtractionPrompt' WHERE prompt_type IS NULL",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
         "ALTER TABLE prompts ALTER COLUMN favorite SET NOT NULL",
     ))
     .await?;
@@ -658,6 +694,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "ALTER TABLE prompts ALTER COLUMN weight SET NOT NULL",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
+        "ALTER TABLE prompts ALTER COLUMN prompt_type SET NOT NULL",
     ))
     .await?;
 
@@ -700,7 +741,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::Router;
+    use axum::{Router, extract::Query};
     use sea_orm::{DbBackend, MockDatabase, MockExecResult};
     use tower::ServiceExt; // for `oneshot`
 
@@ -730,12 +771,14 @@ mod tests {
                 .append_query_results([[model::Model {
                     id: 1,
                     text: "hello".into(),
+                    prompt_type: "ExtractionPrompt".into(),
                     weight: 2.0,
                     favorite: false,
                 }]])
                 .append_query_results([[model::Model {
                     id: 1,
                     text: "hello".into(),
+                    prompt_type: "ExtractionPrompt".into(),
                     weight: 2.0,
                     favorite: false,
                 }]])
@@ -746,6 +789,7 @@ mod tests {
                 .append_query_results([[model::Model {
                     id: 1,
                     text: "world".into(),
+                    prompt_type: "ScoringPrompt".into(),
                     weight: 3.0,
                     favorite: true,
                 }]])
@@ -756,6 +800,7 @@ mod tests {
             State(db.clone()),
             Json(PromptInput {
                 text: "hello".into(),
+                prompt_type: PromptType::ExtractionPrompt,
                 weight: 2.0,
                 favorite: false,
                 group_ids: vec![],
@@ -771,6 +816,7 @@ mod tests {
             State(db.clone()),
             Json(PromptInput {
                 text: "world".into(),
+                prompt_type: PromptType::ScoringPrompt,
                 weight: 3.0,
                 favorite: true,
                 group_ids: vec![],
@@ -783,12 +829,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn filter_by_type() {
+        let db = Arc::new(
+            MockDatabase::new(DbBackend::Postgres)
+                .append_query_results([[model::Model {
+                    id: 1,
+                    text: "t".into(),
+                    prompt_type: "ExtractionPrompt".into(),
+                    weight: 1.0,
+                    favorite: false,
+                }]])
+                .into_connection(),
+        );
+
+        let res = list_prompts(State(db.clone()), Query(ListParams { r#type: Some(PromptType::ExtractionPrompt) })).await.unwrap();
+        assert_eq!(res.0.len(), 1);
+        assert_eq!(res.0[0].prompt_type, PromptType::ExtractionPrompt);
+    }
+
+    #[tokio::test]
     async fn set_favorite_route() {
         let db = Arc::new(
             MockDatabase::new(DbBackend::Postgres)
                 .append_query_results([[model::Model {
                     id: 1,
                     text: "test".into(),
+                    prompt_type: "ExtractionPrompt".into(),
                     weight: 1.0,
                     favorite: false,
                 }]])
@@ -799,6 +865,7 @@ mod tests {
                 .append_query_results([[model::Model {
                     id: 1,
                     text: "test".into(),
+                    prompt_type: "ExtractionPrompt".into(),
                     weight: 1.0,
                     favorite: true,
                 }]])

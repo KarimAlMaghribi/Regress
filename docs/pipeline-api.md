@@ -52,3 +52,11 @@ Request body: { "pipeline_id": UUID }
 ```
 
 A `pipeline-updated` event is sent after every successful save (name, step or order change).
+
+## Prompt Manager Endpoints
+
+### List prompts
+`GET /prompts?type=TYPE`
+
+Optional query parameter `type` filters the returned prompts by their stored `PromptType`.
+Each prompt item contains `text`, `type` and `weight` fields.

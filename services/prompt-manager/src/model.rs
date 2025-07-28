@@ -9,6 +9,7 @@ pub mod prompt {
         #[sea_orm(primary_key)]
         pub id: i32,
         pub text: String,
+        pub prompt_type: String,
         pub weight: f64,
         pub favorite: bool,
     }
