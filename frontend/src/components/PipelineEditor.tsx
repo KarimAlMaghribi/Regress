@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useContext } from 'react';
 import {
   Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
-  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert
+  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
-import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
+import debounce from 'lodash.debounce';
 import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
+import { useNavigate, UNSAFE_NavigationContext } from 'react-router-dom';
 
 interface PromptOption { id: number; text: string; }
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
@@ -16,14 +17,40 @@ const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
 
 export default function PipelineEditor() {
   const {
-    name, steps, updateName, createPipeline, loadPipeline,
-    addStepAt, updateStep, reorder, removeStep, currentPipelineId
+    name, steps, updateName,
+    addStepAt, updateStep, reorder, removeStep,
+    currentPipelineId, dirty, confirmIfDirty
   } = usePipelineStore();
-  const [newName, setNewName] = useState('');
+  const navigate = useNavigate();
   const [edit, setEdit] = useState<PipelineStep | null>(null);
   const [draft, setDraft] = useState<PipelineStep | null>(null);
+  const [insertPos, setInsertPos] = useState<number>(steps.length);
   const [promptOptions, setPromptOptions] = useState<Record<string, PromptOption[]>>({});
   const [error, setError] = useState('');
+  const debounced = useMemo(() => debounce(updateName, 300), [updateName]);
+
+  const { navigator } = useContext(UNSAFE_NavigationContext);
+  useEffect(() => {
+    if (!dirty) return;
+    const unblock = navigator.block((tx: any) => {
+      if (window.confirm('Ungespeicherte Änderungen verwerfen?')) {
+        unblock();
+        tx.retry();
+      }
+    });
+    return unblock;
+  }, [navigator, dirty]);
+
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirty) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
 
   const fetchPrompts = (t: string) => {
     if (promptOptions[t]) return;
@@ -33,17 +60,10 @@ export default function PipelineEditor() {
       .catch(() => setPromptOptions(o => ({ ...o, [t]: [] })));
   };
 
-  const handleDrag = (res: DropResult) => {
-    if (!res.destination) return;
-    const ids = Array.from(steps);
-    const [m] = ids.splice(res.source.index, 1);
-    ids.splice(res.destination.index, 0, m);
-    reorder(ids.map(s => s.id)).catch(e => setError(String(e)));
-  };
 
   const saveNewStep = () => {
     if (!draft) return;
-    addStepAt(draft.index!, draft)
+    addStepAt(insertPos, draft)
       .then(() => setDraft(null))
       .catch(e => setError(String(e)));
   };
@@ -65,43 +85,26 @@ export default function PipelineEditor() {
   }, [edit?.type]);
 
   if (!currentPipelineId) {
-    return (
-      <Box sx={{ display:'flex', gap:1 }}>
-        <TextField label="Name" value={newName} onChange={e=>setNewName(e.target.value)} />
-        <Button variant="contained" onClick={()=>createPipeline(newName).catch(e=>setError(String(e)))}>Create</Button>
-        <Snackbar open={!!error} autoHideDuration={6000} onClose={()=>setError('')}>
-          <Alert severity="error" onClose={()=>setError('')}>{error}</Alert>
-        </Snackbar>
-      </Box>
-    );
+    return <Typography>Select or create a pipeline</Typography>;
   }
 
   return (
     <Box>
       <Box sx={{ mb:2, display:'flex', gap:1, alignItems:'center' }}>
+        <Button onClick={() => { if (confirmIfDirty()) navigate('/pipeline'); }}>Zur Liste</Button>
         <TextField size="small" label="Name" value={name}
-          onChange={e=>updateName(e.target.value).catch(err=>setError(String(err)))} />
-        {currentPipelineId ? (
-          <Button startIcon={<AddIcon/>}
-            onClick={() => setDraft({ id: crypto.randomUUID(), type:'ExtractionPrompt', promptId:0, active:true, index: steps.length } as any)}>
-            Step
-          </Button>
-        ) : (
-          <Button variant="contained" startIcon={<AddIcon/>}
-            onClick={() => createPipeline(name).catch(err=>setError(String(err)))}>
-            Create
-          </Button>
-        )}
+          onChange={e=>debounced(e.target.value)} />
+        <Button startIcon={<AddIcon/>}
+          onClick={() => { setInsertPos(steps.length); setDraft({ id: crypto.randomUUID(), label:'', type:'ExtractionPrompt', promptId:0, active:true }); }}>
+          Step
+        </Button>
       </Box>
-      <DragDropContext onDragEnd={handleDrag}>
-        <Droppable droppableId="steps">
-          {p => (
-            <Table ref={p.innerRef} {...p.droppableProps}>
-              <TableHead>
-                <TableRow>
-                  <TableCell>#</TableCell>
-                  <TableCell></TableCell>
-                  <TableCell>Label</TableCell>
+      <Table>
+            <TableHead>
+              <TableRow>
+                <TableCell>#</TableCell>
+                <TableCell></TableCell>
+                <TableCell>Label</TableCell>
                   <TableCell>Type</TableCell>
                   <TableCell>Prompt</TableCell>
                   <TableCell>Input Source</TableCell>
@@ -114,14 +117,12 @@ export default function PipelineEditor() {
               </TableHead>
               <TableBody>
                 {steps.map((s, i) => (
-                  <Draggable draggableId={s.id} index={i} key={s.id}>
-                    {prov => (
-                      <TableRow ref={prov.innerRef} {...prov.draggableProps} {...prov.dragHandleProps}>
+                      <TableRow key={s.id}>
                         <TableCell>{i + 1}</TableCell>
                         <TableCell>
                           <IconButton size="small" onClick={() => moveStep(i, i-1)}><ArrowUpwardIcon fontSize="small"/></IconButton>
                           <IconButton size="small" onClick={() => moveStep(i, i+1)}><ArrowDownwardIcon fontSize="small"/></IconButton>
-                          <IconButton size="small" onClick={() => setDraft({ ...s, id: crypto.randomUUID(), index: i+1 })}><AddIcon fontSize="small"/></IconButton>
+                          <IconButton size="small" onClick={() => { setInsertPos(i+1); setDraft({ ...s, id: crypto.randomUUID() }); }}><AddIcon fontSize="small"/></IconButton>
                         </TableCell>
                         <TableCell>{s.label}</TableCell>
                         <TableCell>{s.type}</TableCell>
@@ -136,15 +137,9 @@ export default function PipelineEditor() {
                           <Button size="small" onClick={() => setEdit(s)}>Edit</Button>
                         </TableCell>
                       </TableRow>
-                    )}
-                  </Draggable>
                 ))}
-                {p.placeholder}
               </TableBody>
-            </Table>
-          )}
-        </Droppable>
-      </DragDropContext>
+      </Table>
       <Drawer open={!!edit} onClose={() => setEdit(null)} anchor="right">
         {edit && (
           <Box sx={{ p:2, width: 320, display:'flex', flexDirection:'column', gap:2 }}>
