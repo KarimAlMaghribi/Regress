@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useContext } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
   Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography
@@ -9,7 +9,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import debounce from 'lodash.debounce';
 import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
-import { useNavigate, UNSAFE_NavigationContext } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import uuid from '../utils/uuid';
 
 interface PromptOption { id: number; text: string; }
@@ -30,17 +30,6 @@ export default function PipelineEditor() {
   const [error, setError] = useState('');
   const debounced = useMemo(() => debounce(updateName, 300), [updateName]);
 
-  const { navigator } = useContext(UNSAFE_NavigationContext);
-  useEffect(() => {
-    if (!dirty) return;
-    const unblock = navigator.block((tx: any) => {
-      if (window.confirm('Ungespeicherte Änderungen verwerfen?')) {
-        unblock();
-        tx.retry();
-      }
-    });
-    return unblock;
-  }, [navigator, dirty]);
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
