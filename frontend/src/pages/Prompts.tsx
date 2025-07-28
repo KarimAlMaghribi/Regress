@@ -85,8 +85,8 @@ export default function Prompts() {
             size="small"
             value={newWeight}
             onChange={e => setNewWeight(parseFloat(e.target.value))}
-            inputProps={{ step: 0.1, min: 0, max: 5 }}
-            sx={{ width: 90 }}
+            inputProps={{ step: 1, min: 0, max: 10 }}
+            sx={{ width: 130 }}
           />
         </Box>
         <Button variant="contained" onClick={create}>Add</Button>
@@ -137,8 +137,8 @@ export default function Prompts() {
                     )
                   )
                 }
-                inputProps={{ step: 0.1, min: 0, max: 5 }}
-                sx={{ width: 90 }}
+                inputProps={{ step: 1, min: 0, max: 10 }}
+                sx={{ width: 130 }}
               />
             </Box>
             <Button
