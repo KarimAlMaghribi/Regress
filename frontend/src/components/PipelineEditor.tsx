@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useContext } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import {
   Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
   Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography
@@ -9,7 +9,8 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import debounce from 'lodash.debounce';
 import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
-import { useNavigate, UNSAFE_NavigationContext } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
+import uuid from '../utils/uuid';
 
 interface PromptOption { id: number; text: string; }
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
@@ -29,17 +30,6 @@ export default function PipelineEditor() {
   const [error, setError] = useState('');
   const debounced = useMemo(() => debounce(updateName, 300), [updateName]);
 
-  const { navigator } = useContext(UNSAFE_NavigationContext);
-  useEffect(() => {
-    if (!dirty) return;
-    const unblock = navigator.block((tx: any) => {
-      if (window.confirm('Ungespeicherte Änderungen verwerfen?')) {
-        unblock();
-        tx.retry();
-      }
-    });
-    return unblock;
-  }, [navigator, dirty]);
 
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
@@ -95,7 +85,7 @@ export default function PipelineEditor() {
         <TextField size="small" label="Name" value={name}
           onChange={e=>debounced(e.target.value)} />
         <Button startIcon={<AddIcon/>}
-          onClick={() => { setInsertPos(steps.length); setDraft({ id: crypto.randomUUID(), label:'', type:'ExtractionPrompt', promptId:0, active:true }); }}>
+          onClick={() => { setInsertPos(steps.length); setDraft({ id: uuid(), label:'', type:'ExtractionPrompt', promptId:0, active:true }); }}>
           Step
         </Button>
       </Box>
@@ -122,7 +112,7 @@ export default function PipelineEditor() {
                         <TableCell>
                           <IconButton size="small" onClick={() => moveStep(i, i-1)}><ArrowUpwardIcon fontSize="small"/></IconButton>
                           <IconButton size="small" onClick={() => moveStep(i, i+1)}><ArrowDownwardIcon fontSize="small"/></IconButton>
-                          <IconButton size="small" onClick={() => { setInsertPos(i+1); setDraft({ ...s, id: crypto.randomUUID() }); }}><AddIcon fontSize="small"/></IconButton>
+                          <IconButton size="small" onClick={() => { setInsertPos(i+1); setDraft({ ...s, id: uuid() }); }}><AddIcon fontSize="small"/></IconButton>
                         </TableCell>
                         <TableCell>{s.label}</TableCell>
                         <TableCell>{s.type}</TableCell>
