@@ -24,7 +24,9 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import DarkModeIcon from '@mui/icons-material/DarkMode';
 import { ColorModeContext } from '../ColorModeContext';
 import { motion } from 'framer-motion';
-import logo from '../imgs/jamiah_logo_color.png';
+import { useTheme } from '@mui/material/styles';
+import logoWhite from '../imgs/logo_white.svg';
+import logoBlack from '../imgs/logo_black.svg';
 
 export interface SidebarProps {
   open: boolean;
@@ -38,6 +40,8 @@ const expandedWidth = 240;
 
 export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: SidebarProps) {
   const { toggle } = useContext(ColorModeContext);
+  const theme = useTheme();
+  const logo = theme.palette.mode === 'dark' ? logoWhite : logoBlack;
   const location = useLocation();
   const ref = useRef<HTMLDivElement>(null);
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
