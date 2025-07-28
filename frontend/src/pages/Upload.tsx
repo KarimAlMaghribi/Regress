@@ -7,6 +7,9 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { motion } from 'framer-motion';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CloseIcon from '@mui/icons-material/Close';
+import CircularProgress from '@mui/material/CircularProgress';
 import PageHeader from '../components/PageHeader';
 
 interface UploadEntry {
@@ -15,6 +18,7 @@ interface UploadEntry {
   status: string;
   pdfUrl: string;
   ocr: boolean;
+  layout: boolean;
 }
 
 export default function Upload() {
@@ -38,6 +42,7 @@ export default function Upload() {
           status: d.status,
           pdfUrl: d.pdf_id ? `${ingest}/pdf/${d.pdf_id}` : '',
           ocr: d.pdf_id ? ocrIds.includes(d.pdf_id) : false,
+          layout: d.status === 'ready',
         }));
         setEntries(mapped);
       })
@@ -112,7 +117,27 @@ export default function Upload() {
   const columns: GridColDef[] = [
     { field: 'pdfId', headerName: 'PDF', width: 90 },
     { field: 'status', headerName: 'Status', flex: 1 },
-    { field: 'ocr', headerName: 'OCR', width: 80, valueGetter: p => (p.row.ocr ? 'Ja' : 'Nein') },
+    {
+      field: 'ocr',
+      headerName: 'OCR',
+      width: 80,
+      renderCell: params => {
+        const st = params.row.status as string;
+        if (st === 'ocr' || st === 'merging') return <CircularProgress size={16} />;
+        if (st === 'ready' && params.row.ocr) return <CheckCircleIcon color="success" fontSize="small" />;
+        return <CloseIcon color="error" fontSize="small" />;
+      },
+    },
+    {
+      field: 'layout',
+      headerName: 'Layout',
+      width: 80,
+      renderCell: params => {
+        const st = params.row.status as string;
+        if (st !== 'ready') return <CircularProgress size={16} />;
+        return <CheckCircleIcon color="success" fontSize="small" />;
+      },
+    },
     {
       field: 'actions',
       headerName: '',
