@@ -1,6 +1,6 @@
 use actix_cors::Cors;
 use actix_multipart::Multipart;
-use actix_web::http::header;
+use actix_web::http::{header, StatusCode};
 use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use futures_util::StreamExt as _;
@@ -10,7 +10,6 @@ use rdkafka::{
 };
 use shared::config::Settings;
 use shared::dto::{PdfUploaded, UploadResponse};
-use uuid::Uuid;
 use std::time::Duration;
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
@@ -306,16 +305,45 @@ async fn get_pdf(
     }
 }
 
+async fn get_extract(
+    id: web::Path<i32>,
+    db: web::Data<tokio_postgres::Client>,
+) -> Result<HttpResponse, Error> {
+    let stmt = db
+        .prepare("SELECT text FROM pdf_texts WHERE pdf_id=$1")
+        .await
+        .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
+    match db.query_opt(&stmt, &[&id.into_inner()]).await {
+        Ok(Some(row)) => {
+            let text: String = row.get(0);
+            Ok(HttpResponse::Ok()
+                .insert_header((header::CONTENT_TYPE, "text/plain"))
+                .body(text))
+        }
+        Ok(None) => Ok(HttpResponse::NotFound().finish()),
+        Err(e) => Err(actix_web::error::ErrorInternalServerError(e)),
+    }
+}
+
 async fn delete_pdf(
     id: web::Path<i32>,
     db: web::Data<tokio_postgres::Client>,
 ) -> Result<HttpResponse, Error> {
+    let id = id.into_inner();
+    // Clean up any dependent rows. These may not exist yet so ignore errors.
+    let _ = db
+        .execute("DELETE FROM pdf_sources WHERE pdf_id=$1", &[&id])
+        .await;
+    let _ = db
+        .execute("DELETE FROM pdf_texts WHERE pdf_id=$1", &[&id])
+        .await;
+
     let stmt = db
         .prepare("DELETE FROM pdfs WHERE id=$1")
         .await
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
     let rows = db
-        .execute(&stmt, &[&id.into_inner()])
+        .execute(&stmt, &[&id])
         .await
         .map_err(|e| actix_web::error::ErrorInternalServerError(e))?;
     if rows == 0 {
@@ -388,6 +416,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(web::Data::new(producer.clone()))
             .route("/upload", web::post().to(upload))
             .route("/uploads", web::get().to(list_uploads))
+            .route("/uploads/{id}/extract", web::get().to(get_extract))
             .route("/pdf/{id}", web::get().to(get_pdf))
             .route("/pdf/{id}", web::delete().to(delete_pdf))
             .route("/health", web::get().to(health))
@@ -448,6 +477,13 @@ mod tests {
                 )
                 .await
                 .unwrap();
+            client
+                .execute(
+                    "INSERT INTO pdf_sources (pdf_id, names, count) VALUES ($1,$2,$3)",
+                    &[&1, &"[]", &0],
+                )
+                .await
+                .unwrap();
             let app = test::init_service(
                 App::new()
                     .app_data(web::Data::new(client))
@@ -462,6 +498,46 @@ mod tests {
             let req = test::TestRequest::delete().uri("/pdf/1").to_request();
             let resp = test::call_service(&app, req).await;
             assert!(resp.status().is_success());
+
+            let req = test::TestRequest::get().uri("/pdf/1").to_request();
+            let resp = test::call_service(&app, req).await;
+            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        }
+    }
+
+    #[actix_web::test]
+    async fn get_extract_ok() {
+        let url = std::env::var("DATABASE_URL")
+            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/postgres".into());
+        let tls_connector = TlsConnector::builder().build().unwrap();
+        let connector = MakeTlsConnector::new(tls_connector);
+        if let Ok((client, connection)) = tokio_postgres::connect(&url, connector).await {
+            tokio::spawn(async move {
+                let _ = connection.await;
+            });
+            client
+                .execute(
+                    "CREATE TABLE IF NOT EXISTS pdf_texts (pdf_id INTEGER PRIMARY KEY, text TEXT NOT NULL)",
+                    &[],
+                )
+                .await
+                .unwrap();
+            client
+                .execute(
+                    "INSERT INTO pdf_texts (pdf_id, text) VALUES ($1,$2)",
+                    &[&1, &"hello"],
+                )
+                .await
+                .unwrap();
+            let app = test::init_service(
+                App::new()
+                    .app_data(web::Data::new(client))
+                    .route("/uploads/{id}/extract", web::get().to(get_extract)),
+            )
+            .await;
+            let req = test::TestRequest::get().uri("/uploads/1/extract").to_request();
+            let resp = test::call_and_read_body(&app, req).await;
+            assert_eq!(&resp[..], b"hello");
         }
     }
 }
