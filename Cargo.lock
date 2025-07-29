@@ -1184,16 +1184,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "db_version"
-version = "0.1.0"
-dependencies = [
- "native-tls",
- "postgres-native-tls",
- "tokio",
- "tokio-postgres",
-]
-
-[[package]]
 name = "deadpool"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
