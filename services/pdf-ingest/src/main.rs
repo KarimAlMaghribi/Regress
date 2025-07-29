@@ -370,6 +370,10 @@ async fn main() -> std::io::Result<()> {
         )
         .await
         .unwrap();
+    db_client
+        .execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS pipeline_id UUID", &[])
+        .await
+        .unwrap();
     info!("ensured uploads table exists");
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &settings.message_broker_url)
