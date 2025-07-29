@@ -30,16 +30,16 @@ The CI workflow installs these packages automatically.
 
 All services read the database connection string from the `DATABASE_URL` environment variable.
 Kafka connection is read from `MESSAGE_BROKER_URL`.
-If either variable is omitted, the code falls back to `postgres://regress:nITj%22%2B0%28f89F@fehmarn.adesso.claims:5432/regress` and `kafka:9092` respectively.
+If either variable is omitted, the code falls back to `postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress` and `kafka:9092` respectively.
 When running the services outside of Docker you must set `DATABASE_URL` to the server:
 
 ```bash
-export DATABASE_URL="postgres://regress:nITj%22%2B0%28f89F@fehmarn.adesso.claims:5432/regress"
+export DATABASE_URL="postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress"
 ```
 To override the password or connect to a different host, supply the full connection string via `DATABASE_URL`. Example:
 
 ```bash
-export DATABASE_URL="postgres://regress:<YOUR_PASSWORD>@fehmarn.adesso.claims:5432/regress"
+export DATABASE_URL="postgres://regress:<YOUR_PASSWORD>@localhost:5432/regress"
 ```
 Failure to connect to the database results in `500 Internal Server Error`
 responses when accessing `/prompts`.
@@ -64,7 +64,7 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to
-`postgres://regress:nITj%22%2B0%28f89F@fehmarn.adesso.claims:5432/regress`.
+`postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress`.
 `/prompts` exposes all stored prompts and the table is created automatically if
 it does not exist. The same service now also manages pipelines. Use `/pipelines`
 to list and create pipelines or `/pipelines/{id}` to update and delete them.

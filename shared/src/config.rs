@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 fn default_database_url() -> String {
-    "postgres://regress:nITj%22%2B0%28f89F@fehmarn.adesso.claims:5432/regress".into()
+    "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress".into()
 }
 
 fn default_message_broker_url() -> String {
