@@ -72,6 +72,21 @@ services:
     ports:
       - "8083:8083"
 
+  pipeline-runner:
+    build:
+      context: .
+      dockerfile: services/pipeline-runner/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
+    environment:
+      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      OPENAI_API_KEY: "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"
+      MESSAGE_BROKER_URL: kafka:9092
+    ports:
+      - "8087:8087"
+
   prompt-manager:
     build:
       context: .
@@ -95,6 +110,7 @@ services:
       - backendnet
     environment:
       DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      OPENAI_API_KEY: "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"
     ports:
       - "8084:8084"
 
