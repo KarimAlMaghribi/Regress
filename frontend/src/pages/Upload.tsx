@@ -1,7 +1,8 @@
 import React, { useCallback, useState, useEffect } from 'react';
 import { useDropzone } from 'react-dropzone';
 import {
-  Box, Typography, Paper, Button, IconButton, Select, MenuItem, FormControl, InputLabel,
+  Box, Typography, Paper, Button, IconButton, Select, MenuItem,
+  FormControl, InputLabel, Snackbar, Alert,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -11,56 +12,44 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloseIcon from '@mui/icons-material/Close';
 import CircularProgress from '@mui/material/CircularProgress';
 import PageHeader from '../components/PageHeader';
-
-interface UploadEntry {
-  id: number;
-  pdfId: number | null;
-  status: string;
-  pdfUrl: string;
-  ocr: boolean;
-  layout: boolean;
-}
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import DownloadIcon from '@mui/icons-material/Download';
+import { useUploadStore } from '../hooks/useUploadStore';
+import { usePipelineList } from '../hooks/usePipelineList';
 
 export default function Upload() {
   const [files, setFiles] = useState<File[]>([]);
   const [message, setMessage] = useState<string>('');
-  const [entries, setEntries] = useState<UploadEntry[]>([]);
-  const [pipelines, setPipelines] = useState<{id:string,name:string}[]>([]);
   const [pipelineId, setPipelineId] = useState('');
 
-  const load = () => {
-    const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-    Promise.all([
-      fetch(`${ingest}/uploads`).then(r => r.json()),
-      fetch('http://localhost:8083/texts').then(r => r.json()),
-    ])
-      .then(([uploadData, texts]: [any[], { id: number }[]]) => {
-        const ocrIds = texts.map(t => t.id);
-        const mapped: UploadEntry[] = uploadData.map((d: any) => ({
-          id: d.id,
-          pdfId: d.pdf_id ?? null,
-          status: d.status,
-          pdfUrl: d.pdf_id ? `${ingest}/pdf/${d.pdf_id}` : '',
-          ocr: d.pdf_id ? ocrIds.includes(d.pdf_id) : false,
-          layout: d.status === 'ready',
-        }));
-        setEntries(mapped);
-      })
-      .catch(e => console.error('load uploads', e));
-  };
+  const { pipelines } = usePipelineList();
+  const {
+    entries,
+    load,
+    updateFile,
+    runPipeline,
+    downloadExtractedText,
+    startAutoRefresh,
+    stopAutoRefresh,
+    error,
+  } = useUploadStore();
+  const [snackOpen, setSnackOpen] = useState(false);
 
   const onDrop = useCallback((sel: File[]) => {
     console.log('Selected files', sel);
     setFiles(sel);
   }, []);
 
-  useEffect(load, []);
   useEffect(() => {
-    fetch('/api/pipelines')
-      .then(r => r.json())
-      .then(setPipelines)
-      .catch(() => undefined);
-  }, []);
+    load()
+      .then(() => startAutoRefresh(3000))
+      .catch(() => setSnackOpen(true));
+    return () => stopAutoRefresh();
+  }, [load, startAutoRefresh, stopAutoRefresh]);
+
+  useEffect(() => {
+    if (error) setSnackOpen(true);
+  }, [error]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     onDrop,
@@ -98,7 +87,7 @@ export default function Upload() {
   const deletePdf = (id: number) => {
     const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
     fetch(`${ingest}/pdf/${id}`, { method: 'DELETE' })
-      .then(() => load())
+      .then(() => load().catch(()=>{}))
       .catch(e => console.error('delete pdf', e));
   };
 
@@ -117,6 +106,49 @@ export default function Upload() {
   const columns: GridColDef[] = [
     { field: 'pdfId', headerName: 'PDF', width: 90 },
     { field: 'status', headerName: 'Status', flex: 1 },
+    {
+      field: 'pipeline',
+      headerName: 'Pipeline',
+      width: 180,
+      renderCell: params => (
+        <Select
+          size="small"
+          fullWidth
+          value={params.row.selectedPipelineId || ''}
+          onChange={e => updateFile(params.row.id, { selectedPipelineId: e.target.value })}
+        >
+          {pipelines.map(p => (
+            <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>
+          ))}
+        </Select>
+      ),
+    },
+    {
+      field: 'run',
+      headerName: '',
+      width: 60,
+      sortable: false,
+      renderCell: params => (
+        <IconButton
+          size="small"
+          onClick={() => runPipeline(params.row.id, params.row.selectedPipelineId).catch(()=>setSnackOpen(true))}
+          disabled={!params.row.selectedPipelineId || params.row.loading}
+        >
+          {params.row.loading ? <CircularProgress size={16} /> : <PlayArrowIcon fontSize="small" />}
+        </IconButton>
+      ),
+    },
+    {
+      field: 'download',
+      headerName: '',
+      width: 60,
+      sortable: false,
+      renderCell: params => (
+        <IconButton size="small" onClick={() => downloadExtractedText(params.row.id)} disabled={!params.row.ocr}>
+          <DownloadIcon fontSize="small" />
+        </IconButton>
+      ),
+    },
     {
       field: 'ocr',
       headerName: 'OCR',
@@ -156,7 +188,7 @@ export default function Upload() {
       <PageHeader
         title="Upload"
         breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Upload' }]}
-        actions={<Button variant="outlined" size="small" onClick={load}>Reload</Button>}
+        actions={<Button variant="outlined" size="small" onClick={()=>load().catch(()=>{})}>Reload</Button>}
       />
       <FormControl sx={{ mt:2, mb:2, minWidth:200 }}>
         <InputLabel>Pipeline</InputLabel>
@@ -208,6 +240,11 @@ export default function Upload() {
           initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
         />
       </Paper>
+      <Snackbar open={snackOpen} autoHideDuration={6000} onClose={() => setSnackOpen(false)}>
+        <Alert onClose={() => setSnackOpen(false)} severity="error" sx={{ width: '100%' }}>
+          Statusaktualisierung fehlgeschlagen, versuche erneut
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }
