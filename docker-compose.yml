@@ -1,95 +1,154 @@
 version: '3.9'
+
 services:
+  regressdb:
+    image: postgres:17
+    restart: unless-stopped
+    networks:
+      - backendnet
+    environment:
+      POSTGRES_USER: regress
+      POSTGRES_PASSWORD: 'nITj"+0(f89F'
+      POSTGRES_DB: regress
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  kafka:
+    image: bitnami/kafka:latest
+    restart: unless-stopped
+    networks:
+      - backendnet                # << hier ergänzen
+    environment:
+      KAFKA_CFG_PROCESS_ROLES: "controller,broker"
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_KRAFT_CLUSTER_ID: "11111111111111111111"
+    ports:
+      - "9092:9092"
+
   api-gateway:
     build:
       context: .
       dockerfile: services/api-gateway/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
     ports:
       - "8080:8080"
+
   pdf-ingest:
     build:
       context: .
       dockerfile: services/pdf-ingest/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
     environment:
-      DATABASE_URL: "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress"
+      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
       MESSAGE_BROKER_URL: kafka:9092
     ports:
       - "8081:8081"
+
   text-extraction:
     build:
       context: .
       dockerfile: services/text-extraction/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
     environment:
-      DATABASE_URL: "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress"
+      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
       MESSAGE_BROKER_URL: kafka:9092
     ports:
       - "8083:8083"
+
   prompt-manager:
     build:
       context: .
       dockerfile: services/prompt-manager/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
     environment:
-      DATABASE_URL: "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress"
+      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
     ports:
       - "8082:8082"
+
   pipeline-api:
     build:
       context: .
       dockerfile: services/pipeline-api/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
     environment:
-      DATABASE_URL: "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress"
+      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
     ports:
       - "8084:8084"
+
   metrics:
     build:
       context: .
       dockerfile: services/metrics/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
     environment:
-      DATABASE_URL: "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress"
+      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
     ports:
       - "8085:8085"
+
   history-service:
     build:
       context: .
       dockerfile: services/history-service/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
     environment:
-      DATABASE_URL: "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress"
+      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
       MESSAGE_BROKER_URL: kafka:9092
       SERVER_PORT: 8090
     ports:
       - "8090:8090"
-  kafka:
-    image: bitnami/kafka:latest
-    environment:
-      - KAFKA_CFG_PROCESS_ROLES=controller,broker
-      - KAFKA_CFG_NODE_ID=1
-      - KAFKA_CFG_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
-      - KAFKA_CFG_CONTROLLER_LISTENER_NAMES=CONTROLLER
-      - KAFKA_CFG_LISTENERS=PLAINTEXT://:9092,CONTROLLER://:9093
-      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
-      - KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      - ALLOW_PLAINTEXT_LISTENER=yes
-      - KAFKA_KRAFT_CLUSTER_ID=11111111111111111111
-    ports:
-      - "9092:9092"
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    environment:
-      KAFKA_CLUSTERS_0_NAME: local
-      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-    ports:
-      - "8086:8080"
     depends_on:
       - kafka
+    networks:
+      - backendnet
+    ports:
+      - "8086:8080"
+
   frontend:
     build:
       context: .
       dockerfile: frontend/Dockerfile
       args:
-        # Use host ports so the browser can reach the services directly
         VITE_INGEST_URL: http://localhost:8081
         VITE_HISTORY_WS: ws://localhost:8090
+    networks:
+      - backendnet
     ports:
       - "3001:80"
 
+networks:
+  backendnet:
+
+volumes:
+  db_data:
