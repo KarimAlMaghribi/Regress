@@ -87,7 +87,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     const res = await fetch(`${API}/pipelines/${pipelineId}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fileId }),
+      body: JSON.stringify({ file_id: fileId }),
     });
     const json = await res.json().catch(() => ({}));
     console.log('pipeline run result', json);
