@@ -14,3 +14,4 @@ sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "macro
 shared = { path = "../../shared" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["serde", "v4"] }
+rdkafka.workspace = true
