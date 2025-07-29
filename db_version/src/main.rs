@@ -5,11 +5,11 @@ use native_tls::TlsConnector;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
-    config.host("fehmarn.adesso.claims");
+    config.host("localhost");
     config.port(5432);
     config.dbname("regress");
     config.user("regress");
-    config.ssl_mode(tokio_postgres::config::SslMode::Require);
+    config.ssl_mode(tokio_postgres::config::SslMode::Prefer);
 
     let tls_connector = TlsConnector::builder()
         .danger_accept_invalid_certs(true)

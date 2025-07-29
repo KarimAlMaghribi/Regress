@@ -644,7 +644,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
     let settings = Settings::new().unwrap_or_else(|_| Settings {
         database_url:
-            "postgres://regress:nITj%22%2B0%28f89F@fehmarn.adesso.claims:5432/regress".into(),
+            "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress".into(),
         message_broker_url: String::new(),
         openai_api_key: String::new(),
         class_prompt_id: 0,
