@@ -9,8 +9,7 @@ members = [
     "services/metrics",
     "services/pipeline-runner",
     "services/pipeline-api",
-    "services/upload-api",
-    "db_version",
+    "services/upload-api"
 ]
 resolver = "2"
 
