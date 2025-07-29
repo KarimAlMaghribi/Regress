@@ -103,6 +103,10 @@ async fn main() -> std::io::Result<()> {
         )
         .await
         .unwrap();
+    db_client
+        .execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS pipeline_id UUID", &[])
+        .await
+        .unwrap();
     info!("ensured uploads table exists");
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "text-extraction")
