@@ -3144,6 +3144,7 @@ version = "0.1.0"
 dependencies = [
  "actix-cors",
  "actix-web",
+ "rdkafka",
  "serde",
  "serde_json",
  "shared",

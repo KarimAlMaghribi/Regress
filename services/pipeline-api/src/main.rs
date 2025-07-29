@@ -2,7 +2,9 @@ use actix_cors::Cors;
 use actix_web::web::Json;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
-use shared::dto::{PipelineConfig, PipelineStep};
+use shared::dto::{PipelineConfig, PipelineStep, PdfUploaded};
+use rdkafka::producer::{FutureProducer, FutureRecord};
+use rdkafka::ClientConfig;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use tracing::{error, info};
@@ -11,6 +13,7 @@ use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
+    producer: FutureProducer,
 }
 
 #[derive(Serialize)]
@@ -337,13 +340,55 @@ async fn reorder_steps(
     }
 }
 
+#[derive(Deserialize)]
+struct RunInput {
+    file_id: i32,
+}
+
+async fn run_pipeline(
+    data: web::Data<AppState>,
+    path: web::Path<Uuid>,
+    Json(input): web::Json<RunInput>,
+) -> impl Responder {
+    let row = match sqlx::query("SELECT pdf_id FROM uploads WHERE id=$1")
+        .bind(input.file_id)
+        .fetch_one(&data.pool)
+        .await
+    {
+        Ok(r) => r,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+    let pdf_id: i32 = match row.try_get("pdf_id") {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+    let _ = sqlx::query("UPDATE uploads SET pipeline_id=$1, status='ocr' WHERE id=$2")
+        .bind(*path)
+        .bind(input.file_id)
+        .execute(&data.pool)
+        .await;
+    let payload = serde_json::to_string(&PdfUploaded { pdf_id, pipeline_id: *path }).unwrap();
+    let _ = data
+        .producer
+        .send(
+            FutureRecord::to("pdf-merged").payload(&payload).key(&()),
+            std::time::Duration::from_secs(0),
+        )
+        .await;
+    HttpResponse::Accepted().finish()
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
-    let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
-    let pool = PgPool::connect(&db_url).await.expect("db connect");
+    let settings = shared::config::Settings::new().unwrap();
+    let pool = PgPool::connect(&settings.database_url).await.expect("db connect");
     init_db(&pool).await;
-    let state = AppState { pool };
+    let producer: FutureProducer = ClientConfig::new()
+        .set("bootstrap.servers", &settings.message_broker_url)
+        .create()
+        .expect("producer");
+    let state = AppState { pool, producer };
     info!("starting pipeline-api");
     HttpServer::new(move || {
         App::new()
@@ -359,6 +404,7 @@ async fn main() -> std::io::Result<()> {
             )
             .route("/pipelines/{id}/steps", web::put().to(add_step))
             .route("/pipelines/{id}/steps/order", web::put().to(reorder_steps))
+            .route("/pipelines/{id}/run", web::post().to(run_pipeline))
             .service(
                 web::resource("/pipelines/{id}/steps/{step_id}")
                     .route(web::patch().to(update_step))
