@@ -24,7 +24,7 @@ use model::{
     prompt::Entity as Prompt,
     pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel, Model as PipelineModel},
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 async fn health() -> &'static str {
     info!("health check request");
@@ -150,6 +150,7 @@ async fn get_prompt(
             )
         })?
     else {
+        warn!(id, "prompt not found");
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse { error: "Not found".into() }),
