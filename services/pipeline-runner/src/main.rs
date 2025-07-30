@@ -12,7 +12,7 @@ mod runner;
 use sqlx::PgPool;
 use sqlx::Row;
 use tokio::task::LocalSet;
-use tracing_subscriber;
+use tracing_subscriber::{fmt, EnvFilter};
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
@@ -21,7 +21,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn app_main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // Logging: Level via RUST_LOG steuern
+    fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
     // Prefer MESSAGE_BROKER_URL which is set for all services including
     // pipeline-runner. Fall back to BROKER or the default "kafka:9092".
     let broker = std::env::var("MESSAGE_BROKER_URL")
