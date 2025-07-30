@@ -12,7 +12,11 @@ use tracing_subscriber;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
-    let broker = std::env::var("BROKER").unwrap_or_else(|_| "localhost:9092".into());
+    // Prefer MESSAGE_BROKER_URL which is set for all services including
+    // pipeline-runner. Fall back to BROKER or the default "kafka:9092".
+    let broker = std::env::var("MESSAGE_BROKER_URL")
+        .or_else(|_| std::env::var("BROKER"))
+        .unwrap_or_else(|_| "kafka:9092".into());
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
     let pool = PgPool::connect(&db_url).await?;
 
