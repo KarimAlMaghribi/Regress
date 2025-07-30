@@ -205,7 +205,9 @@ pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> {
 
 async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
     let client = Client::default();
-    let url = format!("http://localhost:8082/prompts/{}", id);
+    let base =
+        std::env::var("PROMPT_MANAGER_URL").unwrap_or_else(|_| "http://prompt-manager:8082".into());
+    let url = format!("{}/prompts/{}", base, id);
     for i in 0..=3 {
         match client.get(url.clone()).send().await {
             Ok(mut resp) if resp.status().is_success() => {
