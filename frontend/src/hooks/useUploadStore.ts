@@ -90,7 +90,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       body: JSON.stringify({ file_id: fileId }),
     });
     const json = await res.json().catch(() => ({}));
-    console.log('pipeline run result', json);
+    console.log('pipeline run result', JSON.stringify(json));
     set(state => ({
       entries: state.entries.map(e =>
         e.id === fileId ? { ...e, loading: false } : e
