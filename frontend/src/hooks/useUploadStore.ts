@@ -89,14 +89,30 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_id: fileId }),
     });
-    const json = await res.json().catch(() => ({}));
-    console.log('pipeline run result', JSON.stringify(json));
+
+    // Log status and headers of the response
+    console.log('⛽️ Pipeline run response:', {
+      status: res.status,
+      statusText: res.statusText,
+      headers: Object.fromEntries(res.headers.entries()),
+    });
+
+    // Read raw body and try to parse JSON manually
+    const raw = await res.text();
+    console.log('📦 Raw response body:', raw);
+    let data: any = {};
+    try {
+      data = JSON.parse(raw);
+      console.log('🔍 Parsed JSON:', data);
+    } catch (e) {
+      console.warn('⚠️ JSON.parse fehlgeschlagen:', e);
+    }
     set(state => ({
       entries: state.entries.map(e =>
         e.id === fileId ? { ...e, loading: false } : e
       ),
     }));
-    if (!res.ok) throw new Error(json.error || `HTTP ${res.status}`);
+    if (!res.ok) throw new Error((data.error as string) || `HTTP ${res.status}`);
   },
   async downloadExtractedText(fileId) {
     const res = await fetch(`${INGEST}/uploads/${fileId}/extract`);
