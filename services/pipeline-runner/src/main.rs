@@ -1,16 +1,26 @@
-use rdkafka::{consumer::{Consumer, StreamConsumer}, producer::{FutureProducer, FutureRecord}, ClientConfig, Message};
-use shared::dto::{TextExtracted, PipelineConfig, PipelineRunResult};
-use tracing::{info, error};
+use rdkafka::{
+    consumer::{Consumer, StreamConsumer},
+    producer::{FutureProducer, FutureRecord},
+    ClientConfig, Message,
+};
 use serde_json::Value;
+use shared::dto::{PipelineConfig, PipelineRunResult, TextExtracted};
 use std::time::Duration;
+use tracing::{error, info};
 mod builder;
 mod runner;
 use sqlx::PgPool;
 use sqlx::Row;
+use tokio::task::LocalSet;
 use tracing_subscriber;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
+    let local = LocalSet::new();
+    local.run_until(async { app_main().await }).await
+}
+
+async fn app_main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
     // Prefer MESSAGE_BROKER_URL which is set for all services including
     // pipeline-runner. Fall back to BROKER or the default "kafka:9092".
@@ -28,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &broker)
         .create()?;
-    info!("pipeline-runner started");
+    info!("pipeline-runner started (broker={})", broker);
     loop {
         match consumer.recv().await {
             Err(e) => error!(%e, "kafka error"),
@@ -69,4 +79,5 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+    Ok(())
 }
