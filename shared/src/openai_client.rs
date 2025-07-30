@@ -1,8 +1,9 @@
-use actix_web::{http::header, Error};
+use actix_web::http::header;
 use awc::Client;
 use jsonrepair;
 use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
 use serde::Serialize;
+use serde::de::Error as DeError;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
@@ -54,9 +55,9 @@ pub async fn call_openai_chat(
     client: &Client,
     model: &str,
     messages: Vec<ChatCompletionMessage>,
-) -> Result<String, Error> {
+) -> Result<String, PromptError> {
     let key = std::env::var("OPENAI_API_KEY")
-        .map_err(|e| actix_web::error::ErrorInternalServerError(e.to_string()))?;
+        .map_err(|e| PromptError::Network(e.to_string()))?;
 
     let req = ChatRequest {
         model,
@@ -64,38 +65,39 @@ pub async fn call_openai_chat(
     };
 
     let base = std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| "https://api.openai.com".into());
+    let url = format!("{}/v1/chat/completions", base);
+    debug!("\u{2192} OpenAI request: model = {}", req.model);
     let mut res = client
-        .post(format!("{}/v1/chat/completions", base))
+        .post(url)
         .insert_header((header::AUTHORIZATION, format!("Bearer {}", key)))
         .send_json(&req)
         .await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+        .map_err(|e| {
+            error!("network error to OpenAI: {e}");
+            PromptError::Network(e.to_string())
+        })?;
 
-    if res.status().is_success() {
-        let chat: ChatCompletion = res
-            .json()
-            .await
-            .map_err(actix_web::error::ErrorInternalServerError)?;
-        let answer = chat
-            .choices
-            .get(0)
-            .and_then(|c| c.message.content.clone())
-            .unwrap_or_default();
-        Ok(answer)
-    } else {
-        let status = res.status();
-        let headers = format!("{:?}", res.headers());
-        let body_bytes = res.body().await.unwrap_or_default();
-        error!(
-            status = %status,
-            headers = %headers,
-            body = %String::from_utf8_lossy(&body_bytes),
-            "openai error",
-        );
-        Err(actix_web::error::ErrorInternalServerError(
-            "openai request failed",
-        ))
+    debug!(status = %res.status(), "\u{2190} headers = {:?}", res.headers());
+    let bytes = res
+        .body()
+        .await
+        .map_err(|e| PromptError::Network(e.to_string()))?;
+    debug!(
+        "\u{2190} body = {}",
+        String::from_utf8_lossy(&bytes[..bytes.len().min(1024)])
+    );
+
+    if !res.status().is_success() {
+        return Err(PromptError::Http(res.status().as_u16()));
     }
+
+    let chat: ChatCompletion = serde_json::from_slice(&bytes).map_err(PromptError::Parse)?;
+    let answer = chat
+        .choices
+        .get(0)
+        .and_then(|c| c.message.content.clone())
+        .unwrap_or_default();
+    Ok(answer)
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -106,8 +108,12 @@ pub enum PromptError {
     ScoringFailed,
     #[error("decision failed")]
     DecisionFailed,
-    #[error("parse error")]
-    Parse,
+    #[error("network error: {0}")]
+    Network(String),
+    #[error("parse error: {0}")]
+    Parse(serde_json::Error),
+    #[error("http error: {0}")]
+    Http(u16),
 }
 
 pub async fn extract(prompt_id: i32, input: &str) -> Result<serde_json::Value, PromptError> {
@@ -128,7 +134,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<serde_json::Value, P
         let wait = 100 * (1u64 << i).min(8);
         time::sleep(Duration::from_millis(wait)).await;
     }
-    Err(PromptError::Parse)
+    Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
 pub async fn score(prompt_id: i32, args: &[(&str, serde_json::Value)]) -> Result<f64, PromptError> {
@@ -160,7 +166,7 @@ pub async fn score(prompt_id: i32, args: &[(&str, serde_json::Value)]) -> Result
         let wait = 100 * (1u64 << i).min(8);
         time::sleep(Duration::from_millis(wait)).await;
     }
-    Err(PromptError::Parse)
+    Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
 pub async fn decide(
@@ -196,7 +202,7 @@ pub async fn decide(
         let wait = 100 * (1u64 << i).min(8);
         time::sleep(Duration::from_millis(wait)).await;
     }
-    Err(PromptError::Parse)
+    Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
 pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> {
@@ -232,5 +238,5 @@ async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
         let wait = 100 * (1u64 << i).min(8);
         time::sleep(Duration::from_millis(wait)).await;
     }
-    Err(PromptError::Parse)
+    Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
