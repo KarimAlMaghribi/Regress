@@ -25,6 +25,7 @@ use model::{
     pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel, Model as PipelineModel},
 };
 use tracing::{error, info, warn};
+use tracing_subscriber::{fmt, EnvFilter};
 
 async fn health() -> &'static str {
     info!("health check request");
@@ -666,7 +667,10 @@ async fn delete_pipeline(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    // Logging: Level via RUST_LOG steuern
+    fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .init();
     let settings = Settings::new().unwrap_or_else(|_| Settings {
         database_url:
             "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress".into(),
