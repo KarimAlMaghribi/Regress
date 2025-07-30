@@ -85,6 +85,7 @@ services:
       OPENAI_API_KEY: "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"
       PROMPT_MANAGER_URL: http://prompt-manager:8082
       MESSAGE_BROKER_URL: kafka:9092
+      RUST_LOG: info,pipeline_runner=debug,openai_client=debug
     ports:
       - "8087:8087"
 
@@ -98,6 +99,7 @@ services:
       - backendnet
     environment:
       DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      RUST_LOG: info,prompt_manager=debug,tower_http=info
     ports:
       - "8082:8082"
 
