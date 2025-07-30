@@ -5,7 +5,7 @@ use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageR
 use serde::Serialize;
 use std::time::Duration;
 use tokio::time;
-use tracing::{error, warn};
+use tracing::{debug, error, warn};
 
 #[derive(Serialize)]
 struct ChatRequest<'a> {
@@ -212,18 +212,22 @@ async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
         match client.get(url.clone()).send().await {
             Ok(mut resp) if resp.status().is_success() => {
                 if let Ok(text) = resp.body().await {
+                    debug!(id, %url, "prompt fetched ({} bytes)", text.len());
                     return Ok(String::from_utf8_lossy(&text).to_string());
                 }
             }
             Ok(resp) => {
                 warn!(
                     id,
+                    %url,
                     status = %resp.status(),
-                    url = %url,
-                    "fetch_prompt failed; retrying"
+                    retry = i,
+                    "fetch_prompt HTTP error"
                 );
             }
-            _ => {}
+            Err(e) => {
+                warn!(id, %url, retry = i, "fetch_prompt network error: {e}");
+            }
         }
         let wait = 100 * (1u64 << i).min(8);
         time::sleep(Duration::from_millis(wait)).await;
