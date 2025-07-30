@@ -9,7 +9,7 @@ serde_json.workspace = true
 config.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
-awc = "3"
+awc = { version = "3", features = ["rustls"] }
 openai.workspace = true
 actix-web = "4"
 rhai = { workspace = true }
