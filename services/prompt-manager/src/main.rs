@@ -134,6 +134,30 @@ async fn list_prompts(
     Ok(Json(texts))
 }
 
+async fn get_prompt(
+    Path(id): Path<i32>,
+    State(db): State<Arc<DatabaseConnection>>,
+) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
+    info!(id, "fetch prompt");
+    let Some(model) = model::prompt::Entity::find_by_id(id)
+        .one(&*db)
+        .await
+        .map_err(|e| {
+            error!("db error {}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse { error: e.to_string() }),
+            )
+        })?
+    else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse { error: "Not found".into() }),
+        ));
+    };
+    Ok(model.text)
+}
+
 async fn create_prompt(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
@@ -722,7 +746,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/prompts", get(list_prompts).post(create_prompt))
-        .route("/prompts/:id", put(update_prompt).delete(delete_prompt))
+        .route(
+            "/prompts/:id",
+            get(get_prompt).put(update_prompt).delete(delete_prompt),
+        )
         .route("/prompts/:id/favorite", put(set_favorite))
         .route("/prompt-groups", get(list_groups).post(create_group))
         .route("/prompt-groups/:id", put(update_group))
