@@ -2,11 +2,13 @@ use actix_cors::Cors;
 use actix_web::web::Json;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
-use shared::dto::{PipelineConfig, PipelineStep, PdfUploaded};
+use shared::dto::{PipelineConfig, PipelineStep, PdfUploaded, PipelineRunResult};
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::ClientConfig;
+use rdkafka::{ClientConfig, Message};
+use rdkafka::consumer::{Consumer, StreamConsumer};
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
+use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -14,6 +16,7 @@ use uuid::Uuid;
 struct AppState {
     pool: PgPool,
     producer: FutureProducer,
+    broker: String,
 }
 
 #[derive(Serialize)]
@@ -372,9 +375,29 @@ async fn run_pipeline(
         .producer
         .send(
             FutureRecord::to("pdf-merged").payload(&payload).key(&()),
-            std::time::Duration::from_secs(0),
+            Duration::from_secs(0),
         )
         .await;
+
+    let group = format!("pipeline-api-{}", Uuid::new_v4());
+    if let Ok(consumer) = ClientConfig::new()
+        .set("group.id", &group)
+        .set("bootstrap.servers", &data.broker)
+        .create::<StreamConsumer>()
+    {
+        if consumer.subscribe(&["pipeline-result"]).is_ok() {
+            if let Ok(Ok(msg)) = tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await {
+                if let Some(Ok(payload)) = msg.payload_view::<str>() {
+                    if let Ok(res) = serde_json::from_str::<PipelineRunResult>(payload) {
+                        if res.pdf_id == pdf_id && res.pipeline_id == *path {
+                            return HttpResponse::Ok().json(res);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     HttpResponse::Accepted().finish()
 }
 
@@ -388,7 +411,7 @@ async fn main() -> std::io::Result<()> {
         .set("bootstrap.servers", &settings.message_broker_url)
         .create()
         .expect("producer");
-    let state = AppState { pool, producer };
+    let state = AppState { pool, producer, broker: settings.message_broker_url.clone() };
     info!("starting pipeline-api");
     HttpServer::new(move || {
         App::new()
