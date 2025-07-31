@@ -24,12 +24,15 @@ pub fn build_exec_steps(cfg: &PipelineConfig) -> anyhow::Result<Vec<ExecStep>> {
         if step.false_target.is_some() && false_idx.is_none() {
             anyhow::bail!("invalid false_target {}", step.false_target.as_ref().unwrap());
         }
-        execs.push(ExecStep {
+        let mut exec_step = ExecStep {
             step: step.clone(),
             next_idx,
             true_idx,
             false_idx,
-        });
+        };
+        exec_step.step.id = step.id.clone();
+        exec_step.step.step_type = step.step_type.clone();
+        execs.push(exec_step);
     }
     Ok(execs)
 }

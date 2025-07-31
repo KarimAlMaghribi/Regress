@@ -4,7 +4,6 @@ import {
   Paper,
   Typography,
   IconButton,
-  useMediaQuery,
   Drawer,
   Stack,
   TextField,
@@ -16,18 +15,16 @@ import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTheme } from '@mui/material/styles';
+import { PipelineRunResult, PromptResult } from '../types/pipeline';
 
 interface HistoryEntry {
   id: number; // unique analysis id
   pdfId: number;
   timestamp: string;
-  result: { regress?: boolean; answer?: string } | null;
+  result?: PipelineRunResult | null;
   pdfUrl: string;
   prompt?: string | null;
   status?: string;
-  score?: number;
-  result_label?: string;
-  [key: string]: any;
 }
 
 function normalizeEntry(e: any): HistoryEntry {
@@ -36,11 +33,9 @@ function normalizeEntry(e: any): HistoryEntry {
     pdfId: e.pdf_id ?? e.pdfId ?? e.pdfId,
     pdfUrl: e.pdfUrl ?? e.pdf_url,
     timestamp: e.timestamp,
-    result: e.result,
+    result: e.result ?? undefined,
     prompt: e.prompt ?? null,
     status: e.status,
-    score: e.score,
-    result_label: e.result_label,
   };
 }
 
@@ -118,29 +113,10 @@ export default function History() {
     },
     { field: 'status', headerName: 'Status', width: 110, valueGetter: p => p.row.status || '' },
     {
-      field: 'score',
-      headerName: 'Score',
-      width: 90,
-      valueGetter: p =>
-        typeof p.row.score === 'number' ? pctFmt.format(p.row.score) : '',
-    },
-    {
-      field: 'result_label',
-      headerName: 'Label',
+      field: 'summary',
+      headerName: 'Summary',
       flex: 0.8,
-      renderCell: params => (
-        <Chip
-          label={params.row.result_label || ''}
-          size="small"
-          color={
-            params.row.result_label === 'KEIN_REGRESS'
-              ? 'success'
-              : params.row.result_label === 'MÖGLICHER_REGRESS'
-              ? 'warning'
-              : 'error'
-          }
-        />
-      ),
+      valueGetter: p => p.row.result?.summary ?? '—',
     },
     {
       field: 'actions',
@@ -195,29 +171,51 @@ export default function History() {
             <Typography variant="body2" gutterBottom>
               {dayjs(selected.timestamp).format('LLL')}
             </Typography>
-            {typeof selected.score === 'number' && (
-              <Typography variant="body2" gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                Score: {pctFmt.format(selected.score)}
-                <Chip
-                  label={selected.result_label}
-                  size="small"
-                  color={
-                    selected.result_label === 'KEIN_REGRESS'
-                      ? 'success'
-                      : selected.result_label === 'MÖGLICHER_REGRESS'
-                      ? 'warning'
-                      : 'error'
-                  }
-                />
-              </Typography>
-            )}
-            <Box component="pre" sx={{ whiteSpace: 'pre-wrap', fontSize: 12, mb: 2 }}>
-              {JSON.stringify(selected.result, null, 2)}
-            </Box>
-            <iframe src={selected.pdfUrl} width="100%" height="400" title="pdf" />
+            <Typography variant="body2" gutterBottom>
+              Summary: {selected.result?.summary}
+            </Typography>
+            {(['extraction','scoring','decision'] as const).map(cat => (
+              <Box key={cat} sx={{ mb: 1 }}>
+                <Typography variant="subtitle2" gutterBottom>{cat}</Typography>
+                <PromptDetailsTable data={selected.result ? (selected.result as any)[cat] : []} />
+              </Box>
+            ))}
+
+          <iframe src={selected.pdfUrl} width="100%" height="400" title="pdf" />
           </Box>
         )}
       </Drawer>
     </Box>
+  );
+}
+
+function PromptDetailsTable({ data }: { data: PromptResult[] }) {
+  return (
+    <table className="prompt-table" style={{ fontSize: '0.8rem' }}>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Prompt</th>
+          <th>Score/Bool</th>
+          <th>Route</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map(p => (
+          <tr key={p.promptId}>
+            <td>{p.promptId}</td>
+            <td title={p.promptText}>{p.promptText.slice(0, 40)}…</td>
+            <td>{p.score ?? String(p.boolean ?? '')}</td>
+            <td>{p.route ?? '—'}</td>
+            <td>
+              {p.source
+                ? `p${p.source.page} [${p.source.bbox.join(',')}]`
+                : '—'}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

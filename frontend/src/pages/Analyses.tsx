@@ -4,6 +4,7 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
 import { utils as XLSXUtils, writeFile } from 'xlsx';
 import PageHeader from '../components/PageHeader';
+import { PipelineRunResult } from '../types/pipeline';
 
 interface PromptCfg { text: string }
 
@@ -14,8 +15,7 @@ interface Entry {
   prompts: PromptCfg[];
   status: string;
   timestamp: string;
-  score?: number;
-  resultLabel?: string;
+  result?: PipelineRunResult;
 }
 
 export default function Analyses() {
@@ -51,8 +51,7 @@ export default function Analyses() {
             prompts,
             status: d.status,
             timestamp: d.timestamp,
-            score: d.score,
-            resultLabel: d.result_label,
+            result: d.result,
           } as Entry;
         };
         setRunning(runningData.map(map));
@@ -74,8 +73,7 @@ export default function Analyses() {
     const rows = filteredDone.map(e => ({
       pdf: `PDF ${e.pdfId}`,
       prompt: e.prompts.map(p => p.text).join(' | '),
-      score: e.score != null ? e.score.toFixed(2) : '',
-      label: e.resultLabel || '',
+      summary: e.result?.summary ?? '',
     }));
     const ws = XLSXUtils.json_to_sheet(rows);
     const wb = XLSXUtils.book_new();
@@ -90,6 +88,7 @@ const renderList = (items: Entry[], finished: boolean) => (
         <TableRow>
           <TableCell>Name der PDF</TableCell>
           <TableCell>Prompts</TableCell>
+          {finished && <TableCell>Summary</TableCell>}
           {finished && <TableCell align="right">Ergebnis</TableCell>}
         </TableRow>
       </TableHead>
@@ -102,6 +101,7 @@ const renderList = (items: Entry[], finished: boolean) => (
                 <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
               ))}
             </TableCell>
+            {finished && <TableCell>{e.result?.summary ?? ''}</TableCell>}
             {finished && (
               <TableCell align="right">
                 <Button

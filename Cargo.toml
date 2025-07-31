@@ -39,6 +39,7 @@ native-tls = "0.2"
 rhai        = "1"
 strum = "0.26"
 strum_macros = "0.26"
+json_repair = "1"
 
 [workspace.metadata.vcpkg]
 git          = "https://github.com/microsoft/vcpkg"
