@@ -1,9 +1,8 @@
 use actix_web::http::header;
 use awc::Client;
-use jsonrepair;
 use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
 use serde::Serialize;
-use serde_json::error::Error as DeError;
+use serde::de::Error as DeError;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
@@ -137,7 +136,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
             msg(ChatCompletionMessageRole::User, &user),
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(v) = json_repair::repair_json_string(&ans) {
+            if let Ok(v) = jsonrepair::repair_json_string(&ans) {
                 let score = v
                     .get("confidence")
                     .and_then(|c| c.as_f64())
@@ -174,7 +173,7 @@ pub async fn score(prompt_id: i32, args: &[(&str, serde_json::Value)]) -> Result
             msg(ChatCompletionMessageRole::User, &user),
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(val) = json_repair::repair_json_string(&ans) {
+            if let Ok(val) = jsonrepair::repair_json_string(&ans) {
                 let score = if let Some(v) = val.as_f64() {
                     Some(v as f32)
                 } else if let Some(s) = val.as_str() {
@@ -218,7 +217,7 @@ pub async fn decide(
             msg(ChatCompletionMessageRole::User, &user),
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(val) = json_repair::repair_json_string(&ans) {
+            if let Ok(val) = jsonrepair::repair_json_string(&ans) {
                 let boolean = if val.is_boolean() {
                     val.as_bool()
                 } else if let Some(s) = val.as_str() {
