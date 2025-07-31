@@ -29,60 +29,12 @@ import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
+import { PipelineRunResult, PromptResult } from '../types/pipeline';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
-interface ResultData {
-  pdf_id: number;
-  pipeline_id: string;
-  state: Record<string, any>;
-  score: number | null;
-  label: string | null;
-}
+type ResultData = PipelineRunResult;
 
-function OverviewCard({ data }: { data: ResultData }) {
-  const pctFmt = new Intl.NumberFormat('de-DE', {
-    style: 'percent',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-
-  return (
-    <Paper sx={{ p: 2, mb: 2 }}>
-      <Typography variant="h6" gutterBottom>
-        Übersicht
-      </Typography>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-        <Typography variant="body2" sx={{ minWidth: 72 }}>
-          Score {pctFmt.format(data.score)}
-        </Typography>
-        <LinearProgress
-          variant="determinate"
-          value={data.score * 100}
-          sx={{ flexGrow: 1, height: 8, borderRadius: 1 }}
-        />
-      </Box>
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1 }}>
-        {data.label && <Chip label={data.label} color="info" />}
-      </Box>
-    </Paper>
-  );
-}
-
-function StateTable({ state }: { state: Record<string, any> }) {
-  return (
-    <Table size="small">
-      <TableBody>
-        {Object.entries(state).map(([k, v]) => (
-          <TableRow key={k}>
-            <TableCell>{k}</TableCell>
-            <TableCell>{String(v)}</TableCell>
-          </TableRow>
-        ))}
-      </TableBody>
-    </Table>
-  );
-}
 
 
 
@@ -129,6 +81,7 @@ function PdfViewer({ url }: { url: string }) {
 export default function Result() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<ResultData | null>(null);
+  const [tab, setTab] = useState(0);
 
   useEffect(() => {
     if (!id) return;
@@ -141,7 +94,7 @@ export default function Result() {
 
 
   const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-  const pdfUrl = `${ingest}/pdf/${id}`;
+const pdfUrl = `${ingest}/pdf/${id}`;
 
   return (
     <Box>
@@ -153,13 +106,54 @@ export default function Result() {
         </Box>
       ) : (
         <>
-          <OverviewCard data={data} />
-          <StateTable state={data.state} />
+          <Typography variant="h6" gutterBottom>
+            {data.summary}
+          </Typography>
+          <Tabs value={tab} onChange={(_,v)=>setTab(v)} sx={{ mb: 2 }}>
+            {(['extraction','scoring','decision'] as const).map((cat, i) => (
+              <Tab key={cat} label={cat} value={i} />
+            ))}
+          </Tabs>
+          {(['extraction','scoring','decision'] as const).map((cat,i) => (
+            tab===i && (
+            <Box key={cat} sx={{ mb: 2 }}>
+              <PromptDetailsTable data={(data as any)[cat] as PromptResult[]} />
+            </Box>)
+          ))}
           <Box sx={{ mt: 2 }}>
             <PdfViewer url={pdfUrl} />
           </Box>
         </>
       )}
     </Box>
+  );
+}
+
+function PromptDetailsTable({ data }: { data: PromptResult[] }) {
+  return (
+    <table className="prompt-table" style={{ fontSize: '0.8rem' }}>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Prompt</th>
+          <th>Score/Bool</th>
+          <th>Route</th>
+          <th>Source</th>
+        </tr>
+      </thead>
+      <tbody>
+        {data.map(p => (
+          <tr key={p.promptId}>
+            <td>{p.promptId}</td>
+            <td title={p.promptText}>{p.promptText.slice(0,40)}…</td>
+            <td>{p.score ?? String(p.boolean ?? '')}</td>
+            <td>{p.route ?? '—'}</td>
+            <td>
+              {p.source ? `p${p.source.page} [${p.source.bbox.join(',')}]` : '—'}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }

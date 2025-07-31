@@ -380,20 +380,21 @@ async fn start_kafka(
                         }
                         "pipeline-result" => {
                             if let Ok(data) = serde_json::from_str::<PipelineRunResult>(payload) {
+                                let value = serde_json::to_value(&data).unwrap_or_default();
                                 let entry = HistoryEntry {
                                     id: 0,
                                     pdf_id: data.pdf_id,
                                     prompt: None,
-                                    result: Some(data.state.clone()),
+                                    result: Some(value.clone()),
                                     pdf_url: format!("{}/pdf/{}", pdf_base, data.pdf_id),
                                     timestamp: Utc::now(),
                                     status: "completed".into(),
-                                    score: data.score,
-                                    result_label: data.label.clone(),
+                                    score: None,
+                                    result_label: Some(data.summary.clone()),
                                 };
                                 let _ = db.execute(
                                     "INSERT INTO analysis_history (pdf_id, pipeline_id, state, pdf_url, timestamp, score, label) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-                                    &[&data.pdf_id, &data.pipeline_id, &data.state, &entry.pdf_url, &entry.timestamp, &data.score, &data.label],
+                                    &[&data.pdf_id, &data.pipeline_id, &value, &entry.pdf_url, &entry.timestamp, &None::<f64>, &entry.result_label],
                                 ).await;
                                 let _ = tx.send(entry);
                             }

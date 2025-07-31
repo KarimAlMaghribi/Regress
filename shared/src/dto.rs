@@ -33,13 +33,32 @@ pub struct TextExtracted {
 }
 
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct TextPosition {
+    pub page: u32,
+    pub bbox: [f32; 4],
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct PromptResult {
+    pub prompt_id: i32,
+    pub prompt_type: PromptType,
+    pub prompt_text: String,
+    pub score: Option<f32>,
+    pub boolean: Option<bool>,
+    pub route: Option<String>,
+    pub source: Option<TextPosition>,
+    pub openai_raw: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PipelineRunResult {
     pub pdf_id: i32,
     pub pipeline_id: uuid::Uuid,
-    pub state: serde_json::Value,
-    pub score: Option<f64>,
-    pub label: Option<String>,
+    pub summary: String,
+    pub extraction: Vec<PromptResult>,
+    pub scoring: Vec<PromptResult>,
+    pub decision: Vec<PromptResult>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

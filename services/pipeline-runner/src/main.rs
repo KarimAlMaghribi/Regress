@@ -57,12 +57,22 @@ async fn app_main() -> anyhow::Result<()> {
                         if let Ok(cfg) = serde_json::from_value::<PipelineConfig>(config_json) {
                             match runner::execute(&cfg, &evt.text).await {
                                 Ok(outcome) => {
+                                    let summary = if outcome
+                                        .decision
+                                        .iter()
+                                        .any(|p| p.boolean == Some(false))
+                                    {
+                                        "REJECTED"
+                                    } else {
+                                        "OK"
+                                    };
                                     let result = PipelineRunResult {
                                         pdf_id: evt.pdf_id,
                                         pipeline_id: evt.pipeline_id,
-                                        state: serde_json::to_value(outcome.state)?,
-                                        score: outcome.last_score,
-                                        label: outcome.final_label,
+                                        summary: summary.into(),
+                                        extraction: outcome.extraction,
+                                        scoring: outcome.scoring,
+                                        decision: outcome.decision,
                                     };
                                     let payload = serde_json::to_string(&result).unwrap();
                                     let _ = producer
