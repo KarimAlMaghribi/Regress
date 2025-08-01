@@ -24,7 +24,9 @@ fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
 
 fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
     let clean = s.trim().trim_start_matches("```json").trim_matches('`');
-    Ok(json_repair::repair_json_string(clean)?)
+    let val = jsonrepair::repair_json_string(clean)
+        .map_err(|e| anyhow::anyhow!("jsonrepair error: {:?}", e))?;
+    Ok(val)
 }
 
 /// Send chat messages to OpenAI and return the assistant's answer.
