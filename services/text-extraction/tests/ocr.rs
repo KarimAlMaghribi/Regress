@@ -1,4 +1,5 @@
 use text_extraction::extract_text_layout;
+use base64;
 
 #[tokio::test]
 async fn pdf_to_text() {

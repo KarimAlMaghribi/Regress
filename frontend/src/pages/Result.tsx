@@ -107,7 +107,7 @@ const pdfUrl = `${ingest}/pdf/${id}`;
       ) : (
         <>
           <Typography variant="h6" gutterBottom>
-            {data.summary}
+            Overall Score: {data.overallScore?.toFixed(2) ?? 'n/a'}
           </Typography>
           <Tabs value={tab} onChange={(_,v)=>setTab(v)} sx={{ mb: 2 }}>
             {(['extraction','scoring','decision'] as const).map((cat, i) => (

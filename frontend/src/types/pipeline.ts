@@ -7,8 +7,9 @@ export interface PromptResult {
   prompt_id: number;
   prompt_type: 'ExtractionPrompt' | 'ScoringPrompt' | 'DecisionPrompt';
   prompt_text: string;
-  score?: number;
   boolean?: boolean;
+  value?: any;
+  weight?: number;
   route?: string;
   source?: TextPosition;
   openaiRaw: string;
@@ -17,7 +18,8 @@ export interface PromptResult {
 export interface PipelineRunResult {
   pdfId: number;
   pipelineId: string;
-  summary: string;
+  overallScore?: number;
+  extracted: Record<string, any>;
   extraction: PromptResult[];
   scoring: PromptResult[];
   decision: PromptResult[];

@@ -73,7 +73,7 @@ export default function Analyses() {
     const rows = filteredDone.map(e => ({
       pdf: `PDF ${e.pdfId}`,
       prompt: e.prompts.map(p => p.text).join(' | '),
-      summary: e.result?.summary ?? '',
+      overallScore: e.result?.overallScore ?? '',
     }));
     const ws = XLSXUtils.json_to_sheet(rows);
     const wb = XLSXUtils.book_new();
@@ -97,11 +97,11 @@ const renderList = (items: Entry[], finished: boolean) => (
           <TableRow key={e.id}>
             <TableCell>{`PDF ${e.pdfId}`}</TableCell>
             <TableCell>
-              {e.prompts.map((p, i) => (
-                <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
-              ))}
-            </TableCell>
-            {finished && <TableCell>{e.result?.summary ?? ''}</TableCell>}
+            {e.prompts.map((p, i) => (
+              <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+            ))}
+          </TableCell>
+          {finished && <TableCell>{e.result?.overallScore?.toFixed(2) ?? ''}</TableCell>}
             {finished && (
               <TableCell align="right">
                 <Button

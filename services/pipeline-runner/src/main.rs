@@ -57,19 +57,18 @@ async fn app_main() -> anyhow::Result<()> {
                         if let Ok(cfg) = serde_json::from_value::<PipelineConfig>(config_json) {
                             match runner::execute(&cfg, &evt.text).await {
                                 Ok(outcome) => {
-                                    let summary = if outcome
-                                        .decision
-                                        .iter()
-                                        .any(|p| p.boolean == Some(false))
-                                    {
-                                        "REJECTED"
-                                    } else {
-                                        "OK"
-                                    };
+                                    let overall = runner::compute_overall_score(&outcome.scoring);
+                                    let mut extracted = std::collections::HashMap::new();
+                                    for p in &outcome.extraction {
+                                        if let (Some(k), Some(v)) = (p.route.clone().or(p.prompt_text.split_whitespace().next().map(|s| s.to_string())), p.value.clone()) {
+                                            extracted.insert(k, v);
+                                        }
+                                    }
                                     let result = PipelineRunResult {
                                         pdf_id: evt.pdf_id,
                                         pipeline_id: evt.pipeline_id,
-                                        summary: summary.into(),
+                                        overall_score: overall,
+                                        extracted,
                                         extraction: outcome.extraction,
                                         scoring: outcome.scoring,
                                         decision: outcome.decision,

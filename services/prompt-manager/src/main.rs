@@ -39,6 +39,7 @@ struct PromptData {
     #[serde(rename = "type")]
     prompt_type: PromptType,
     weight: f64,
+    json_key: Option<String>,
     favorite: bool,
 }
 
@@ -49,6 +50,7 @@ struct PromptInput {
     weight: f64,
     #[serde(default = "default_prompt_type", rename = "type")]
     prompt_type: PromptType,
+    json_key: Option<String>,
     #[serde(default)]
     favorite: bool,
     #[serde(default)]
@@ -128,6 +130,7 @@ async fn list_prompts(
             text: p.text,
             prompt_type: p.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
             weight: p.weight,
+            json_key: p.json_key,
             favorite: p.favorite,
         })
         .collect();
@@ -165,10 +168,15 @@ async fn create_prompt(
     Json(input): Json<PromptInput>,
 ) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
     info!("creating prompt");
+    if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "json_key required".into() }))); }
+    if input.prompt_type == PromptType::ScoringPrompt && input.weight <= 0.0 {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "weight must be >0".into() }))); }
     let mut model: model::ActiveModel = Default::default();
     model.text = Set(input.text);
     model.prompt_type = Set(input.prompt_type.to_string());
-    model.weight = Set(input.weight);
+    model.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt { 1.0 } else { input.weight });
+    model.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt { input.json_key.clone() } else { None });
     model.favorite = Set(input.favorite);
     let res = model.insert(&*db).await.map_err(|e| {
         error!("failed to create prompt: {}", e);
@@ -199,6 +207,7 @@ async fn create_prompt(
         text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
         weight: res.weight,
+        json_key: res.json_key,
         favorite: res.favorite,
     }))
 }
@@ -229,7 +238,12 @@ async fn update_prompt(
     let mut active: model::ActiveModel = model.into();
     active.text = Set(input.text);
     active.prompt_type = Set(input.prompt_type.to_string());
-    active.weight = Set(input.weight);
+    if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "json_key required".into() }))); }
+    if input.prompt_type == PromptType::ScoringPrompt && input.weight <= 0.0 {
+        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "weight must be >0".into() }))); }
+    active.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt { 1.0 } else { input.weight });
+    active.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt { input.json_key.clone() } else { None });
     active.favorite = Set(input.favorite);
     let res = active.update(&*db).await.map_err(|e| {
         error!("failed to update prompt {}: {}", id, e);
@@ -274,6 +288,7 @@ async fn update_prompt(
         text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
         weight: res.weight,
+        json_key: res.json_key,
         favorite: res.favorite,
     }))
 }
@@ -563,6 +578,7 @@ async fn set_favorite(
         text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
         weight: res.weight,
+        json_key: res.json_key,
         favorite: res.favorite,
     }))
 }
@@ -702,6 +718,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
+        "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS json_key TEXT",
+    ))
+    .await?;
+    db.execute(sea_orm::Statement::from_string(
+        db.get_database_backend(),
         "UPDATE prompts SET favorite = FALSE WHERE favorite IS NULL",
     ))
     .await?;
@@ -805,6 +826,7 @@ mod tests {
                     text: "hello".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 2.0,
+                    json_key: None,
                     favorite: false,
                 }]])
                 .append_query_results([[model::Model {
@@ -812,6 +834,7 @@ mod tests {
                     text: "hello".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 2.0,
+                    json_key: None,
                     favorite: false,
                 }]])
                 .append_exec_results([MockExecResult {
@@ -823,6 +846,7 @@ mod tests {
                     text: "world".into(),
                     prompt_type: "ScoringPrompt".into(),
                     weight: 3.0,
+                    json_key: None,
                     favorite: true,
                 }]])
                 .into_connection(),
@@ -834,6 +858,7 @@ mod tests {
                 text: "hello".into(),
                 prompt_type: PromptType::ExtractionPrompt,
                 weight: 2.0,
+                json_key: None,
                 favorite: false,
                 group_ids: vec![],
             }),
@@ -850,6 +875,7 @@ mod tests {
                 text: "world".into(),
                 prompt_type: PromptType::ScoringPrompt,
                 weight: 3.0,
+                json_key: None,
                 favorite: true,
                 group_ids: vec![],
             }),
@@ -869,6 +895,7 @@ mod tests {
                     text: "t".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 1.0,
+                    json_key: None,
                     favorite: false,
                 }]])
                 .into_connection(),
@@ -888,6 +915,7 @@ mod tests {
                     text: "test".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 1.0,
+                    json_key: None,
                     favorite: false,
                 }]])
                 .append_exec_results([MockExecResult {
@@ -899,6 +927,7 @@ mod tests {
                     text: "test".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 1.0,
+                    json_key: None,
                     favorite: true,
                 }]])
                 .into_connection(),
