@@ -31,6 +31,15 @@ export default function Prompts() {
   const [newJsonKey, setNewJsonKey] = useState('');
   const [newType, setNewType] = useState<PromptType>('ExtractionPrompt');
 
+  useEffect(() => {
+    if (newType === 'ExtractionPrompt') setNewWeight(1);
+    else setNewJsonKey('');
+  }, [newType]);
+
+  const canCreate =
+    newText.trim() !== '' &&
+    (newType !== 'ExtractionPrompt' || newJsonKey.trim() !== '');
+
   const load = () => {
     fetch('http://localhost:8082/prompts')
       .then(r => r.json())
@@ -106,9 +115,19 @@ export default function Prompts() {
             />
           </Box>
         )}
-        <Button variant="contained" onClick={create}>Add</Button>
+        <Button
+          variant="contained"
+          color={canCreate ? 'primary' : 'inherit'}
+          disabled={!canCreate}
+          onClick={create}
+        >
+          Add
+        </Button>
       </Box>
-      {prompts.map(p => (
+      {prompts.map(p => {
+        const canSave =
+          p.type !== 'ExtractionPrompt' || (p.json_key && p.json_key.trim().length > 0);
+        return (
         <Card key={p.id} sx={{ mb: 1 }}>
           <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
             <Box sx={{ flexGrow: 1 }}>{p.text}</Box>
@@ -120,7 +139,13 @@ export default function Prompts() {
                 onChange={e =>
                   setPrompts(ps =>
                     ps.map(it =>
-                      it.id === p.id ? { ...it, type: e.target.value as PromptType } : it
+                      it.id === p.id
+                        ? {
+                            ...it,
+                            type: e.target.value as PromptType,
+                            weight: e.target.value === 'ExtractionPrompt' ? 1 : it.weight,
+                          }
+                        : it
                     )
                   )
                 }
@@ -175,7 +200,9 @@ export default function Prompts() {
             <Button
               variant="outlined"
               size="small"
-              onClick={() =>
+              disabled={!canSave}
+              onClick={() => {
+                if (p.type === 'ExtractionPrompt' && !p.json_key?.trim()) return;
                 fetch(`http://localhost:8082/prompts/${p.id}`, {
                   method: 'PUT',
                   headers: { 'Content-Type': 'application/json' },
@@ -186,8 +213,8 @@ export default function Prompts() {
                     type: p.type,
                     favorite: p.favorite,
                   }),
-                }).then(load)
-              }
+                }).then(load);
+              }}
             >
               Save
             </Button>
@@ -196,7 +223,8 @@ export default function Prompts() {
             </Button>
           </CardContent>
         </Card>
-      ))}
+        );
+      })}
     </Box>
   );
 }
