@@ -82,15 +82,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                 let prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id)
                     .await
                     .unwrap_or_default();
-                let input = if let Some(src) = step.step.input_source.as_ref() {
-                    if src == "document" {
-                        pdf_text.to_string()
-                    } else {
-                        state.get(src).cloned().unwrap_or(Value::Null).to_string()
-                    }
-                } else {
-                    pdf_text.to_string()
-                };
+                let input = pdf_text.to_string();
                 match openai_client::extract(step.step.prompt_id, &input).await {
                     Ok(ans) => {
                         if let Some(alias) = &step.step.alias {
@@ -159,11 +151,16 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                         explanation: String::new(),
                     })
                 } else {
-                    openai_client::score(
-                        step.step.prompt_id,
-                        &serde_json::to_string(&args).unwrap_or_default(),
-                    )
-                    .await
+                    let doc = if args.is_empty() {
+                        pdf_text.to_string()
+                    } else {
+                        format!(
+                            "DOCUMENT:\n{}\n\nARGS:\n{}",
+                            pdf_text,
+                            serde_json::to_string(&args).unwrap_or_default()
+                        )
+                    };
+                    openai_client::score(step.step.prompt_id, &doc).await
                 };
                 match res {
                     Ok(mut sr) => {
@@ -194,7 +191,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                 let prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id)
                     .await
                     .unwrap_or_default();
-                match openai_client::decide(step.step.prompt_id, &state).await {
+                match openai_client::decide(step.step.prompt_id, pdf_text, &state).await {
                     Ok(ans) => {
                         let decision_val =
                             json_repair::repair_json_string(&ans.raw).unwrap_or(Value::Null);

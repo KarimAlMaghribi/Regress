@@ -272,14 +272,16 @@ pub async fn score(
 
 pub async fn decide(
     prompt_id: i32,
+    document: &str,
     state: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<OpenAiAnswer, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
     let system = "Return ONE JSON object: {\"answer\": <true|false>, \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2], \"quote\": \"<exact text span>\"}, \"explanation\": \"<short reason>\"}";
     let user = format!(
-        "{}\n{}",
+        "{}\n\nDOCUMENT:\n{}\n\nSTATE:\n{}",
         prompt,
+        document,
         serde_json::to_string(state).unwrap_or_default()
     );
     for i in 0..=3 {
