@@ -1,6 +1,7 @@
 export interface TextPosition {
   page: number;
   bbox: [number, number, number, number];
+  quote?: string;
 }
 
 export interface PromptResult {

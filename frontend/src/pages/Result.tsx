@@ -136,6 +136,7 @@ function PromptDetailsTable({ data }: { data: PromptResult[] }) {
         <tr>
           <th>ID</th>
           <th>Prompt</th>
+          <th>Quote</th>
           <th>Score/Bool</th>
           <th>Route</th>
           <th>Source</th>
@@ -146,6 +147,7 @@ function PromptDetailsTable({ data }: { data: PromptResult[] }) {
           <tr key={p.promptId}>
             <td>{p.promptId}</td>
             <td title={p.promptText}>{p.promptText.slice(0,40)}…</td>
+            <td>{p.source?.quote ?? '—'}</td>
             <td>{p.score ?? String(p.boolean ?? '')}</td>
             <td>{p.route ?? '—'}</td>
             <td>

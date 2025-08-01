@@ -37,6 +37,7 @@ pub struct TextExtracted {
 pub struct TextPosition {
     pub page: u32,
     pub bbox: [f32; 4],
+    pub quote: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
