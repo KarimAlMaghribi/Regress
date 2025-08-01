@@ -113,10 +113,10 @@ export default function History() {
     },
     { field: 'status', headerName: 'Status', width: 110, valueGetter: p => p.row.status || '' },
     {
-      field: 'summary',
-      headerName: 'Summary',
+      field: 'overall',
+      headerName: 'Score',
       flex: 0.8,
-      valueGetter: p => p.row.result?.summary ?? '—',
+      valueGetter: p => p.row.result?.overallScore?.toFixed(2) ?? '—',
     },
     {
       field: 'actions',
@@ -172,7 +172,7 @@ export default function History() {
               {dayjs(selected.timestamp).format('LLL')}
             </Typography>
             <Typography variant="body2" gutterBottom>
-              Summary: {selected.result?.summary}
+              Score: {selected.result?.overallScore?.toFixed(2)}
             </Typography>
             {(['extraction','scoring','decision'] as const).map(cat => (
               <Box key={cat} sx={{ mb: 1 }}>

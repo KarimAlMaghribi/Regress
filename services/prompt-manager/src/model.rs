@@ -11,6 +11,7 @@ pub mod prompt {
         pub text: String,
         pub prompt_type: String,
         pub weight: f64,
+        pub json_key: Option<String>,
         pub favorite: bool,
     }
 

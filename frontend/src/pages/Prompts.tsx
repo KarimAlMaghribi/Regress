@@ -19,6 +19,7 @@ interface Prompt {
   id: number;
   text: string;
   weight: number;
+  json_key?: string;
   favorite: boolean;
   type: PromptType;
 }
@@ -27,6 +28,7 @@ export default function Prompts() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [newText, setNewText] = useState('');
   const [newWeight, setNewWeight] = useState(1);
+  const [newJsonKey, setNewJsonKey] = useState('');
   const [newType, setNewType] = useState<PromptType>('ExtractionPrompt');
 
   const load = () => {
@@ -42,11 +44,17 @@ export default function Prompts() {
     fetch('http://localhost:8082/prompts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: newText, weight: newWeight, type: newType }),
+      body: JSON.stringify({
+        text: newText,
+        weight: newType === 'ExtractionPrompt' ? 1 : newWeight,
+        json_key: newType === 'ExtractionPrompt' ? newJsonKey : undefined,
+        type: newType,
+      }),
     })
       .then(() => {
         setNewText('');
         setNewWeight(1);
+        setNewJsonKey('');
         load();
       })
       .catch(e => console.error('create prompt', e));
@@ -71,24 +79,33 @@ export default function Prompts() {
             <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
           </Select>
         </FormControl>
-        <Box sx={{ width: 180, display:'flex', alignItems:'center' }}>
-          <Slider
-            min={0}
-            max={5}
-            step={0.1}
-            value={newWeight}
-            onChange={(_, v) => setNewWeight(v as number)}
-            sx={{ mr: 1, flexGrow: 1 }}
-          />
+        {newType === 'ExtractionPrompt' ? (
           <TextField
-            type="number"
-            size="small"
-            value={newWeight}
-            onChange={e => setNewWeight(parseFloat(e.target.value))}
-            inputProps={{ step: 1, min: 0, max: 10 }}
-            sx={{ width: 130 }}
+            label="JSON-Key"
+            value={newJsonKey}
+            onChange={e => setNewJsonKey(e.target.value)}
+            sx={{ width: 180 }}
           />
-        </Box>
+        ) : (
+          <Box sx={{ width: 180, display: 'flex', alignItems: 'center' }}>
+            <Slider
+              min={0}
+              max={5}
+              step={0.1}
+              value={newWeight}
+              onChange={(_, v) => setNewWeight(v as number)}
+              sx={{ mr: 1, flexGrow: 1 }}
+            />
+            <TextField
+              type="number"
+              size="small"
+              value={newWeight}
+              onChange={e => setNewWeight(parseFloat(e.target.value))}
+              inputProps={{ step: 1, min: 0, max: 10 }}
+              sx={{ width: 130 }}
+            />
+          </Box>
+        )}
         <Button variant="contained" onClick={create}>Add</Button>
       </Box>
       {prompts.map(p => (
@@ -113,34 +130,48 @@ export default function Prompts() {
                 <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
               </Select>
             </FormControl>
-            <Box sx={{ width: 180, display: 'flex', alignItems: 'center' }}>
-              <Slider
-                min={0}
-                max={5}
-                step={0.1}
-                value={p.weight}
-                onChange={(_, v) =>
-                  setPrompts(ps =>
-                    ps.map(it => (it.id === p.id ? { ...it, weight: v as number } : it))
-                  )
-                }
-                sx={{ mr: 1, flexGrow: 1 }}
-              />
+            {p.type === 'ExtractionPrompt' ? (
               <TextField
-                type="number"
+                label="JSON-Key"
                 size="small"
-                value={p.weight}
+                value={p.json_key || ''}
                 onChange={e =>
                   setPrompts(ps =>
-                    ps.map(it =>
-                      it.id === p.id ? { ...it, weight: parseFloat(e.target.value) } : it
-                    )
+                    ps.map(it => (it.id === p.id ? { ...it, json_key: e.target.value } : it))
                   )
                 }
-                inputProps={{ step: 1, min: 0, max: 10 }}
-                sx={{ width: 130 }}
+                sx={{ width: 180 }}
               />
-            </Box>
+            ) : (
+              <Box sx={{ width: 180, display: 'flex', alignItems: 'center' }}>
+                <Slider
+                  min={0}
+                  max={5}
+                  step={0.1}
+                  value={p.weight}
+                  onChange={(_, v) =>
+                    setPrompts(ps =>
+                      ps.map(it => (it.id === p.id ? { ...it, weight: v as number } : it))
+                    )
+                  }
+                  sx={{ mr: 1, flexGrow: 1 }}
+                />
+                <TextField
+                  type="number"
+                  size="small"
+                  value={p.weight}
+                  onChange={e =>
+                    setPrompts(ps =>
+                      ps.map(it =>
+                        it.id === p.id ? { ...it, weight: parseFloat(e.target.value) } : it
+                      )
+                    )
+                  }
+                  inputProps={{ step: 1, min: 0, max: 10 }}
+                  sx={{ width: 130 }}
+                />
+              </Box>
+            )}
             <Button
               variant="outlined"
               size="small"
@@ -150,7 +181,8 @@ export default function Prompts() {
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
                     text: p.text,
-                    weight: p.weight,
+                    weight: p.type === 'ExtractionPrompt' ? 1 : p.weight,
+                    json_key: p.type === 'ExtractionPrompt' ? p.json_key : undefined,
                     type: p.type,
                     favorite: p.favorite,
                   }),

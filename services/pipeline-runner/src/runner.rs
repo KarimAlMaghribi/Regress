@@ -28,6 +28,15 @@ pub struct RunOutcome {
     pub decision: Vec<PromptResult>,
 }
 
+pub fn compute_overall_score(results: &[PromptResult]) -> Option<f32> {
+    let (sum, weight) = results
+        .iter()
+        .filter(|r| r.prompt_type == PromptType::ScoringPrompt)
+        .filter_map(|r| r.boolean.map(|b| (b as u8 as f32, r.weight.unwrap_or(1.0))))
+        .fold((0.0, 0.0), |(s, w), (b, wt)| (s + b * wt, w + wt));
+    if weight > 0.0 { Some(sum / weight) } else { None }
+}
+
 pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<RunOutcome> {
     let exec = crate::builder::build_exec_steps(cfg)?;
     let mut state: RunState = HashMap::new();
@@ -78,8 +87,9 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_id: step.step.prompt_id,
                             prompt_type: PromptType::ExtractionPrompt,
                             prompt_text,
-                            score: ans.score,
                             boolean: None,
+                            value: ans.value,
+                            weight: None,
                             route: None,
                             source,
                             openai_raw: ans.raw,
@@ -90,8 +100,9 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_id: step.step.prompt_id,
                             prompt_type: PromptType::ExtractionPrompt,
                             prompt_text,
-                            score: None,
                             boolean: None,
+                            value: None,
+                            weight: None,
                             route: None,
                             source: None,
                             openai_raw: e.to_string(),
@@ -102,31 +113,28 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
             }
             PromptType::ScoringPrompt => {
                 let prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id).await.unwrap_or_default();
-                let mut args = Vec::new();
+                let mut args = HashMap::new();
                 if let Some(ins) = &step.step.inputs {
                     for a in ins {
-                        if let Some(v) = state.get(a) { args.push((a.as_str(), v.clone())); }
+                        if let Some(v) = state.get(a) { args.insert(a.clone(), v.clone()); }
                     }
                 }
-                let (value, answer): (Value, Option<OpenAiAnswer>) = if let Some(f) = &step.step.formula_override {
+                let (boolean, raw): (Option<bool>, String) = if let Some(f) = &step.step.formula_override {
                     let mut ctx = HashMap::new();
                     for (k,v) in &state { ctx.insert(k.clone(), to_dyn(v)); }
                     let dynv = eval_formula(f, &ctx)?;
-                    let val = serde_json::from_str(&dynv.to_string()).unwrap_or(Value::Null);
-                    (val, None)
+                    (dynv.as_bool().ok(), dynv.to_string())
                 } else {
-                    match openai_client::score(step.step.prompt_id, &args).await {
-                        Ok(ans) => {
-                            let v = ans.score.map(|f| Value::from(f as f64)).unwrap_or(Value::Null);
-                            (v, Some(ans))
-                        }
+                    match openai_client::decide(step.step.prompt_id, &args).await {
+                        Ok(ans) => (ans.boolean, ans.raw),
                         Err(e) => {
                             scoring.push(PromptResult {
                                 prompt_id: step.step.prompt_id,
                                 prompt_type: PromptType::ScoringPrompt,
                                 prompt_text,
-                                score: None,
                                 boolean: None,
+                                value: None,
+                                weight: Some(1.0),
                                 route: None,
                                 source: None,
                                 openai_raw: e.to_string(),
@@ -136,30 +144,18 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                         }
                     }
                 };
-                if let Some(alias) = &step.step.alias { state.insert(alias.clone(), value.clone()); }
-                if let Some(ans) = answer {
-                    scoring.push(PromptResult {
-                        prompt_id: step.step.prompt_id,
-                        prompt_type: PromptType::ScoringPrompt,
-                        prompt_text,
-                        score: ans.score,
-                        boolean: None,
-                        route: None,
-                        source: None,
-                        openai_raw: ans.raw,
-                    });
-                } else {
-                    scoring.push(PromptResult {
-                        prompt_id: step.step.prompt_id,
-                        prompt_type: PromptType::ScoringPrompt,
-                        prompt_text,
-                        score: value.as_f64().map(|f| f as f32),
-                        boolean: None,
-                        route: None,
-                        source: None,
-                        openai_raw: value.to_string(),
-                    });
-                }
+                if let Some(alias) = &step.step.alias { state.insert(alias.clone(), Value::Bool(boolean.unwrap_or(false))); }
+                scoring.push(PromptResult {
+                    prompt_id: step.step.prompt_id,
+                    prompt_type: PromptType::ScoringPrompt,
+                    prompt_text,
+                    boolean,
+                    value: None,
+                    weight: Some(1.0),
+                    route: None,
+                    source: None,
+                    openai_raw: raw,
+                });
                 idx = step.next_idx.unwrap_or(exec.len());
             }
             PromptType::DecisionPrompt => {
@@ -190,8 +186,9 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_id: step.step.prompt_id,
                             prompt_type: PromptType::DecisionPrompt,
                             prompt_text,
-                            score: None,
                             boolean: ans.boolean,
+                            value: ans.value,
+                            weight: None,
                             route: ans.route,
                             source: None,
                             openai_raw: ans.raw,
@@ -202,8 +199,9 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_id: step.step.prompt_id,
                             prompt_type: PromptType::DecisionPrompt,
                             prompt_text,
-                            score: None,
                             boolean: None,
+                            value: None,
+                            weight: None,
                             route: None,
                             source: None,
                             openai_raw: e.to_string(),

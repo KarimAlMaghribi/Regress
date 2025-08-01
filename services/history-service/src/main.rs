@@ -389,12 +389,12 @@ async fn start_kafka(
                                     pdf_url: format!("{}/pdf/{}", pdf_base, data.pdf_id),
                                     timestamp: Utc::now(),
                                     status: "completed".into(),
-                                    score: None,
-                                    result_label: Some(data.summary.clone()),
+                                    score: data.overall_score.map(|f| f as f64),
+                                    result_label: None,
                                 };
                                 let _ = db.execute(
                                     "INSERT INTO analysis_history (pdf_id, pipeline_id, state, pdf_url, timestamp, score, label) VALUES ($1,$2,$3,$4,$5,$6,$7)",
-                                    &[&data.pdf_id, &data.pipeline_id, &value, &entry.pdf_url, &entry.timestamp, &None::<f64>, &entry.result_label],
+                                    &[&data.pdf_id, &data.pipeline_id, &value, &entry.pdf_url, &entry.timestamp, &entry.score, &entry.result_label],
                                 ).await;
                                 let _ = tx.send(entry);
                             }

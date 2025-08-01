@@ -117,9 +117,9 @@ pub enum PromptError {
 
 #[derive(Debug, Clone)]
 pub struct OpenAiAnswer {
-    pub score: Option<f32>,
     pub boolean: Option<bool>,
     pub route: Option<String>,
+    pub value: Option<serde_json::Value>,
     pub raw: String,
 }
 
@@ -137,15 +137,10 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
             if let Ok(v) = jsonrepair::repair_json_string(&ans) {
-                let score = v
-                    .get("confidence")
-                    .and_then(|c| c.as_f64())
-                    .or_else(|| v.get("score").and_then(|c| c.as_f64()))
-                    .map(|f| f as f32);
                 return Ok(OpenAiAnswer {
-                    score,
                     boolean: None,
                     route: None,
+                    value: Some(v),
                     raw: ans,
                 });
             }
@@ -156,46 +151,6 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
-pub async fn score(prompt_id: i32, args: &[(&str, serde_json::Value)]) -> Result<OpenAiAnswer, PromptError> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(120))
-        .finish();
-    let prompt = fetch_prompt(prompt_id).await?;
-    let system = "You are a scoring engine. Return only a floating point number between 0 and 1";
-    let user = format!(
-        "{}\n{}",
-        prompt,
-        serde_json::to_string(args).unwrap_or_default()
-    );
-    for i in 0..=3 {
-        let msgs = vec![
-            msg(ChatCompletionMessageRole::System, system),
-            msg(ChatCompletionMessageRole::User, &user),
-        ];
-        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(val) = jsonrepair::repair_json_string(&ans) {
-                let score = if let Some(v) = val.as_f64() {
-                    Some(v as f32)
-                } else if let Some(s) = val.as_str() {
-                    s.parse::<f32>().ok()
-                } else {
-                    val.get("score").and_then(|s| s.as_f64()).map(|v| v as f32)
-                };
-                if score.is_some() {
-                    return Ok(OpenAiAnswer {
-                        score,
-                        boolean: None,
-                        route: None,
-                        raw: ans,
-                    });
-                }
-            }
-        }
-        let wait = 100 * (1u64 << i).min(8);
-        time::sleep(Duration::from_millis(wait)).await;
-    }
-    Err(PromptError::Parse(DeError::custom("invalid JSON")))
-}
 
 pub async fn decide(
     prompt_id: i32,
@@ -233,9 +188,9 @@ pub async fn decide(
                     .map(|s| s.to_string());
                 if boolean.is_some() || route.is_some() {
                     return Ok(OpenAiAnswer {
-                        score: None,
                         boolean,
                         route,
+                        value: Some(val),
                         raw: ans,
                     });
                 }
