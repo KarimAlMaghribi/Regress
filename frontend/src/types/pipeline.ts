@@ -11,6 +11,8 @@ export interface PromptResult {
   value?: any;
   weight?: number;
   route?: string;
+  json_key?: string;
+  error?: string;
   source?: TextPosition;
   openaiRaw: string;
 }
