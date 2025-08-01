@@ -1,0 +1,10 @@
+-- up
+ALTER TABLE prompt_results
+  ADD COLUMN IF NOT EXISTS error TEXT,
+  ADD COLUMN IF NOT EXISTS source JSONB,
+  ADD COLUMN IF NOT EXISTS json_key TEXT;
+-- down
+ALTER TABLE prompt_results
+  DROP COLUMN IF EXISTS error,
+  DROP COLUMN IF EXISTS source,
+  DROP COLUMN IF EXISTS json_key;

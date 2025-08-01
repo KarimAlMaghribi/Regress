@@ -48,6 +48,8 @@ pub struct PromptResult {
     pub value: Option<serde_json::Value>,
     pub weight: Option<f32>,
     pub route: Option<String>,
+    pub json_key: Option<String>,
+    pub error: Option<String>,
     pub source: Option<TextPosition>,
     pub openai_raw: String,
 }

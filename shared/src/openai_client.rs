@@ -3,6 +3,7 @@ use awc::Client;
 use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
 use serde::Serialize;
 use serde::de::Error as DeError;
+use crate::dto::TextPosition;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
@@ -19,6 +20,11 @@ fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
         content: Some(txt.to_string()),
         ..Default::default()
     }
+}
+
+fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
+    let clean = s.trim().trim_start_matches("```json").trim_matches('`');
+    Ok(json_repair::repair_json_string(clean)?)
 }
 
 /// Send chat messages to OpenAI and return the assistant's answer.
@@ -120,6 +126,7 @@ pub struct OpenAiAnswer {
     pub boolean: Option<bool>,
     pub route: Option<String>,
     pub value: Option<serde_json::Value>,
+    pub source: Option<TextPosition>,
     pub raw: String,
 }
 
@@ -128,7 +135,8 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
         .timeout(Duration::from_secs(120))
         .finish();
     let prompt = fetch_prompt(prompt_id).await?;
-    let system = "You are an extraction engine. Extract exactly one JSON value";
+    let system = "You are an extraction engine. \
+             Return exactly ONE JSON object with the keys {\"value\": <extracted value>, \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2]}}";
     let user = format!("{}\n{}", prompt, input);
     for i in 0..=3 {
         let msgs = vec![
@@ -136,12 +144,15 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
             msg(ChatCompletionMessageRole::User, &user),
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(v) = jsonrepair::repair_json_string(&ans) {
+            if let Ok(v) = parse_json_block(&ans) {
                 return Ok(OpenAiAnswer {
                     boolean: None,
                     route: None,
-                    value: Some(v),
-                    raw: ans,
+                    value: v.get("value").cloned(),
+                    source: v
+                        .get("source")
+                        .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                    raw: v.to_string(),
                 });
             }
         }
@@ -160,7 +171,7 @@ pub async fn decide(
         .timeout(Duration::from_secs(120))
         .finish();
     let prompt = fetch_prompt(prompt_id).await?;
-    let system = "Return only the word TRUE or FALSE";
+    let system = "Return ONE JSON object: {\"answer\": <true|false>, \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2]}, \"explanation\": \"<short reason>\"}";
     let user = format!(
         "{}\n{}",
         prompt,
@@ -172,28 +183,19 @@ pub async fn decide(
             msg(ChatCompletionMessageRole::User, &user),
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
-            if let Ok(val) = jsonrepair::repair_json_string(&ans) {
-                let boolean = if val.is_boolean() {
-                    val.as_bool()
-                } else if let Some(s) = val.as_str() {
-                    s.parse::<bool>().ok()
-                } else {
-                    val.get("fraud")
-                        .or_else(|| val.get("bool"))
-                        .and_then(|b| b.as_bool())
-                };
-                let route = val
-                    .get("route")
-                    .and_then(|r| r.as_str())
-                    .map(|s| s.to_string());
-                if boolean.is_some() || route.is_some() {
-                    return Ok(OpenAiAnswer {
-                        boolean,
-                        route,
-                        value: Some(val),
-                        raw: ans,
-                    });
-                }
+            if let Ok(v) = parse_json_block(&ans) {
+                return Ok(OpenAiAnswer {
+                    boolean: v.get("answer").and_then(|b| b.as_bool()),
+                    route: v
+                        .get("route")
+                        .and_then(|r| r.as_str())
+                        .map(|s| s.to_string()),
+                    value: None,
+                    source: v
+                        .get("source")
+                        .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                    raw: v.to_string(),
+                });
             }
         }
         let wait = 100 * (1u64 << i).min(8);

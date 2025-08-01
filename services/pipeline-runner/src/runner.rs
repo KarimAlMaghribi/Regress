@@ -66,23 +66,9 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                 } else { pdf_text.to_string() };
                 match openai_client::extract(step.step.prompt_id, &input).await {
                     Ok(ans) => {
-                        let val = json_repair::repair_json_string(&ans.raw).unwrap_or(Value::Null);
-                        if let Some(alias) = &step.step.alias { state.insert(alias.clone(), val.clone()); }
-                        let source = val.get("source").and_then(|s| {
-                            let page = s.get("page")?.as_u64()? as u32;
-                            let arr = s.get("bbox")?.as_array()?;
-                            if arr.len() == 4 {
-                                Some(TextPosition {
-                                    page,
-                                    bbox: [
-                                        arr[0].as_f64()? as f32,
-                                        arr[1].as_f64()? as f32,
-                                        arr[2].as_f64()? as f32,
-                                        arr[3].as_f64()? as f32,
-                                    ],
-                                })
-                            } else { None }
-                        });
+                        if let Some(alias) = &step.step.alias {
+                            if let Some(v) = &ans.value { state.insert(alias.clone(), v.clone()); }
+                        }
                         extraction.push(PromptResult {
                             prompt_id: step.step.prompt_id,
                             prompt_type: PromptType::ExtractionPrompt,
@@ -91,7 +77,9 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             value: ans.value,
                             weight: None,
                             route: None,
-                            source,
+                            json_key: step.step.alias.clone(),
+                            source: ans.source,
+                            error: None,
                             openai_raw: ans.raw,
                         });
                     }
@@ -104,8 +92,10 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             value: None,
                             weight: None,
                             route: None,
+                            json_key: step.step.alias.clone(),
                             source: None,
-                            openai_raw: e.to_string(),
+                            error: Some(e.to_string()),
+                            openai_raw: String::new(),
                         });
                     }
                 }
@@ -119,14 +109,14 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                         if let Some(v) = state.get(a) { args.insert(a.clone(), v.clone()); }
                     }
                 }
-                let (boolean, raw): (Option<bool>, String) = if let Some(f) = &step.step.formula_override {
+                let (boolean, raw, source): (Option<bool>, String, Option<TextPosition>) = if let Some(f) = &step.step.formula_override {
                     let mut ctx = HashMap::new();
                     for (k,v) in &state { ctx.insert(k.clone(), to_dyn(v)); }
                     let dynv = eval_formula(f, &ctx)?;
-                    (dynv.as_bool().ok(), dynv.to_string())
+                    (dynv.as_bool().ok(), dynv.to_string(), None)
                 } else {
                     match openai_client::decide(step.step.prompt_id, &args).await {
-                        Ok(ans) => (ans.boolean, ans.raw),
+                        Ok(ans) => (ans.boolean, ans.raw, ans.source),
                         Err(e) => {
                             scoring.push(PromptResult {
                                 prompt_id: step.step.prompt_id,
@@ -136,8 +126,10 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                                 value: None,
                                 weight: Some(1.0),
                                 route: None,
+                                json_key: None,
                                 source: None,
-                                openai_raw: e.to_string(),
+                                error: Some(e.to_string()),
+                                openai_raw: String::new(),
                             });
                             idx = step.next_idx.unwrap_or(exec.len());
                             continue;
@@ -153,7 +145,9 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     value: None,
                     weight: Some(1.0),
                     route: None,
-                    source: None,
+                    json_key: None,
+                    source,
+                    error: None,
                     openai_raw: raw,
                 });
                 idx = step.next_idx.unwrap_or(exec.len());
@@ -164,7 +158,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     Ok(ans) => {
                         let decision_val = json_repair::repair_json_string(&ans.raw).unwrap_or(Value::Null);
                         state.insert("result".into(), decision_val.clone());
-                        state.insert("route".into(), decision_val.clone());
+                        if let Some(r) = &ans.route { state.insert("route".into(), Value::String(r.clone())); }
                         let cond = step.step.condition.as_deref().unwrap_or("result == true");
                         let mut ctx = HashMap::new();
                         for (k,v) in &state { ctx.insert(k.clone(), to_dyn(v)); }
@@ -190,7 +184,9 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             value: ans.value,
                             weight: None,
                             route: ans.route,
-                            source: None,
+                            json_key: None,
+                            source: ans.source,
+                            error: None,
                             openai_raw: ans.raw,
                         });
                     }
@@ -203,8 +199,10 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             value: None,
                             weight: None,
                             route: None,
+                            json_key: None,
                             source: None,
-                            openai_raw: e.to_string(),
+                            error: Some(e.to_string()),
+                            openai_raw: String::new(),
                         });
                         idx = step.next_idx.unwrap_or(exec.len());
                     }

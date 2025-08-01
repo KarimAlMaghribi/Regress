@@ -60,7 +60,7 @@ async fn app_main() -> anyhow::Result<()> {
                                     let overall = runner::compute_overall_score(&outcome.scoring);
                                     let mut extracted = std::collections::HashMap::new();
                                     for p in &outcome.extraction {
-                                        if let (Some(k), Some(v)) = (p.route.clone().or(p.prompt_text.split_whitespace().next().map(|s| s.to_string())), p.value.clone()) {
+                                        if let (Some(k), Some(v)) = (p.json_key.clone(), p.value.clone()) {
                                             extracted.insert(k, v);
                                         }
                                     }
