@@ -18,12 +18,19 @@ export interface PromptResult {
   openaiRaw: string;
 }
 
+export interface ScoringResult {
+  prompt_id: number;
+  result: boolean;
+  source: TextPosition;
+  explanation: string;
+}
+
 export interface PipelineRunResult {
   pdfId: number;
   pipelineId: string;
   overallScore?: number;
   extracted: Record<string, any>;
   extraction: PromptResult[];
-  scoring: PromptResult[];
+  scoring: ScoringResult[];
   decision: PromptResult[];
 }

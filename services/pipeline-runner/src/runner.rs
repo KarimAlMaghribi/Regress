@@ -1,18 +1,22 @@
-use std::collections::HashMap;
+use rhai;
 use serde_json::Value;
 use shared::{
-    dto::{PipelineConfig, PromptType, PromptResult, TextPosition},
-    utils::{rhai_eval_bool, eval_formula},
+    dto::{PipelineConfig, PromptResult, PromptType, ScoringResult, TextPosition},
     openai_client::{self, OpenAiAnswer},
+    utils::{eval_formula, rhai_eval_bool},
 };
-use rhai;
+use std::collections::HashMap;
 
 fn to_dyn(v: &Value) -> rhai::Dynamic {
     match v {
         Value::Number(n) => {
-            if let Some(i) = n.as_i64() { (i as i64).into() }
-            else if let Some(f) = n.as_f64() { f.into() }
-            else { ().into() }
+            if let Some(i) = n.as_i64() {
+                (i as i64).into()
+            } else if let Some(f) = n.as_f64() {
+                f.into()
+            } else {
+                ().into()
+            }
         }
         Value::Bool(b) => (*b).into(),
         Value::String(s) => s.clone().into(),
@@ -24,17 +28,19 @@ pub type RunState = HashMap<String, Value>;
 
 pub struct RunOutcome {
     pub extraction: Vec<PromptResult>,
-    pub scoring: Vec<PromptResult>,
+    pub scoring: Vec<ScoringResult>,
     pub decision: Vec<PromptResult>,
 }
 
-pub fn compute_overall_score(results: &[PromptResult]) -> Option<f32> {
-    let (sum, weight) = results
+pub fn compute_overall_score(results: &[ScoringResult]) -> Option<f32> {
+    if results.is_empty() {
+        return None;
+    }
+    let sum: f32 = results
         .iter()
-        .filter(|r| r.prompt_type == PromptType::ScoringPrompt)
-        .filter_map(|r| r.boolean.map(|b| (b as u8 as f32, r.weight.unwrap_or(1.0))))
-        .fold((0.0, 0.0), |(s, w), (b, wt)| (s + b * wt, w + wt));
-    if weight > 0.0 { Some(sum / weight) } else { None }
+        .map(|r| if r.result { 1.0 } else { 0.0 })
+        .sum();
+    Some(sum / results.len() as f32)
 }
 
 pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<RunOutcome> {
@@ -47,27 +53,50 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
     let mut idx = 0usize;
     while let Some(step) = exec.get(idx) {
         hops += 1;
-        if hops > exec.len() * 3 { return Err(anyhow::anyhow!("pipeline exceeded max steps")); }
-        if step.step.active == Some(false) { idx = step.next_idx.unwrap_or(exec.len()); continue; }
+        if hops > exec.len() * 3 {
+            return Err(anyhow::anyhow!("pipeline exceeded max steps"));
+        }
+        if step.step.active == Some(false) {
+            idx = step.next_idx.unwrap_or(exec.len());
+            continue;
+        }
         if let Some(r) = &step.step.route {
             let current = state.get("route").and_then(|v| v.as_str());
-            if current != Some(r.as_str()) { idx = step.next_idx.unwrap_or(exec.len()); continue; }
+            if current != Some(r.as_str()) {
+                idx = step.next_idx.unwrap_or(exec.len());
+                continue;
+            }
         }
         if let Some(expr) = &step.step.condition {
             let mut ctx = HashMap::new();
-            for (k,v) in &state { ctx.insert(k.clone(), to_dyn(v)); }
-            if !rhai_eval_bool(expr, &ctx)? { idx = step.next_idx.unwrap_or(exec.len()); continue; }
+            for (k, v) in &state {
+                ctx.insert(k.clone(), to_dyn(v));
+            }
+            if !rhai_eval_bool(expr, &ctx)? {
+                idx = step.next_idx.unwrap_or(exec.len());
+                continue;
+            }
         }
         match step.step.step_type {
             PromptType::ExtractionPrompt => {
-                let prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id).await.unwrap_or_default();
+                let prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id)
+                    .await
+                    .unwrap_or_default();
                 let input = if let Some(src) = step.step.input_source.as_ref() {
-                    if src == "document" { pdf_text.to_string() } else { state.get(src).cloned().unwrap_or(Value::Null).to_string() }
-                } else { pdf_text.to_string() };
+                    if src == "document" {
+                        pdf_text.to_string()
+                    } else {
+                        state.get(src).cloned().unwrap_or(Value::Null).to_string()
+                    }
+                } else {
+                    pdf_text.to_string()
+                };
                 match openai_client::extract(step.step.prompt_id, &input).await {
                     Ok(ans) => {
                         if let Some(alias) = &step.step.alias {
-                            if let Some(v) = &ans.value { state.insert(alias.clone(), v.clone()); }
+                            if let Some(v) = &ans.value {
+                                state.insert(alias.clone(), v.clone());
+                            }
                         }
                         extraction.push(PromptResult {
                             prompt_id: step.step.prompt_id,
@@ -102,71 +131,90 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                 idx = step.next_idx.unwrap_or(exec.len());
             }
             PromptType::ScoringPrompt => {
-                let prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id).await.unwrap_or_default();
+                let _prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id)
+                    .await
+                    .unwrap_or_default();
                 let mut args = HashMap::new();
                 if let Some(ins) = &step.step.inputs {
                     for a in ins {
-                        if let Some(v) = state.get(a) { args.insert(a.clone(), v.clone()); }
-                    }
-                }
-                let (boolean, raw, source): (Option<bool>, String, Option<TextPosition>) = if let Some(f) = &step.step.formula_override {
-                    let mut ctx = HashMap::new();
-                    for (k,v) in &state { ctx.insert(k.clone(), to_dyn(v)); }
-                    let dynv = eval_formula(f, &ctx)?;
-                    (dynv.as_bool().ok(), dynv.to_string(), None)
-                } else {
-                    match openai_client::decide(step.step.prompt_id, &args).await {
-                        Ok(ans) => (ans.boolean, ans.raw, ans.source),
-                        Err(e) => {
-                            scoring.push(PromptResult {
-                                prompt_id: step.step.prompt_id,
-                                prompt_type: PromptType::ScoringPrompt,
-                                prompt_text,
-                                boolean: None,
-                                value: None,
-                                weight: Some(1.0),
-                                route: None,
-                                json_key: None,
-                                source: None,
-                                error: Some(e.to_string()),
-                                openai_raw: String::new(),
-                            });
-                            idx = step.next_idx.unwrap_or(exec.len());
-                            continue;
+                        if let Some(v) = state.get(a) {
+                            args.insert(a.clone(), v.clone());
                         }
                     }
+                }
+                let res: Result<ScoringResult, _> = if let Some(f) = &step.step.formula_override {
+                    let mut ctx = HashMap::new();
+                    for (k, v) in &state {
+                        ctx.insert(k.clone(), to_dyn(v));
+                    }
+                    let dynv = eval_formula(f, &ctx)?;
+                    Ok(ScoringResult {
+                        prompt_id: step.step.prompt_id,
+                        result: dynv.as_bool().unwrap_or(false),
+                        source: TextPosition {
+                            page: 0,
+                            bbox: [0.0, 0.0, 0.0, 0.0],
+                            quote: Some(String::new()),
+                        },
+                        explanation: String::new(),
+                    })
+                } else {
+                    openai_client::score(
+                        step.step.prompt_id,
+                        &serde_json::to_string(&args).unwrap_or_default(),
+                    )
+                    .await
                 };
-                if let Some(alias) = &step.step.alias { state.insert(alias.clone(), Value::Bool(boolean.unwrap_or(false))); }
-                scoring.push(PromptResult {
-                    prompt_id: step.step.prompt_id,
-                    prompt_type: PromptType::ScoringPrompt,
-                    prompt_text,
-                    boolean,
-                    value: None,
-                    weight: Some(1.0),
-                    route: None,
-                    json_key: None,
-                    source,
-                    error: None,
-                    openai_raw: raw,
-                });
+                match res {
+                    Ok(mut sr) => {
+                        if sr.source.quote.as_ref().map_or(true, |q| q.is_empty()) {
+                            sr.explanation = "missing quote".into();
+                        }
+                        if let Some(alias) = &step.step.alias {
+                            state.insert(alias.clone(), Value::Bool(sr.result));
+                        }
+                        scoring.push(sr);
+                    }
+                    Err(e) => {
+                        scoring.push(ScoringResult {
+                            prompt_id: step.step.prompt_id,
+                            result: false,
+                            source: TextPosition {
+                                page: 0,
+                                bbox: [0.0, 0.0, 0.0, 0.0],
+                                quote: Some(String::new()),
+                            },
+                            explanation: e.to_string(),
+                        });
+                    }
+                }
                 idx = step.next_idx.unwrap_or(exec.len());
             }
             PromptType::DecisionPrompt => {
-                let prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id).await.unwrap_or_default();
+                let prompt_text = openai_client::fetch_prompt_text(step.step.prompt_id)
+                    .await
+                    .unwrap_or_default();
                 match openai_client::decide(step.step.prompt_id, &state).await {
                     Ok(ans) => {
-                        let decision_val = json_repair::repair_json_string(&ans.raw).unwrap_or(Value::Null);
+                        let decision_val =
+                            json_repair::repair_json_string(&ans.raw).unwrap_or(Value::Null);
                         state.insert("result".into(), decision_val.clone());
-                        if let Some(r) = &ans.route { state.insert("route".into(), Value::String(r.clone())); }
+                        if let Some(r) = &ans.route {
+                            state.insert("route".into(), Value::String(r.clone()));
+                        }
                         let cond = step.step.condition.as_deref().unwrap_or("result == true");
                         let mut ctx = HashMap::new();
-                        for (k,v) in &state { ctx.insert(k.clone(), to_dyn(v)); }
+                        for (k, v) in &state {
+                            ctx.insert(k.clone(), to_dyn(v));
+                        }
                         let ok = rhai_eval_bool(cond, &ctx)?;
                         if let Some(map) = &step.step.enum_targets {
                             if let Some(key) = decision_val.as_str() {
                                 if let Some(target_id) = map.get(key) {
-                                    idx = exec.iter().position(|s| s.step.id == *target_id).unwrap_or(exec.len());
+                                    idx = exec
+                                        .iter()
+                                        .position(|s| s.step.id == *target_id)
+                                        .unwrap_or(exec.len());
                                 } else {
                                     idx = step.next_idx.unwrap_or(exec.len());
                                 }
@@ -174,7 +222,8 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                                 idx = step.next_idx.unwrap_or(exec.len());
                             }
                         } else {
-                            idx = if ok { step.true_idx } else { step.false_idx }.unwrap_or(exec.len());
+                            idx = if ok { step.true_idx } else { step.false_idx }
+                                .unwrap_or(exec.len());
                         }
                         decision.push(PromptResult {
                             prompt_id: step.step.prompt_id,
@@ -209,9 +258,15 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                 }
             }
         }
-        if idx >= exec.len() { break; }
+        if idx >= exec.len() {
+            break;
+        }
     }
-    Ok(RunOutcome { extraction, scoring, decision })
+    Ok(RunOutcome {
+        extraction,
+        scoring,
+        decision,
+    })
 }
 
 #[cfg(test)]
@@ -222,10 +277,43 @@ mod tests {
     #[tokio::test]
     async fn run_simple() {
         let steps = vec![
-            PipelineStep{ id:"s1".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("a".into()),inputs:None,formula_override:Some("1".into()),input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
-            PipelineStep{ id:"s2".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("b".into()),inputs:Some(vec!["a".into()]),formula_override:Some("1+1".into()),input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep {
+                id: "s1".into(),
+                step_type: PromptType::ScoringPrompt,
+                prompt_id: 0,
+                label: None,
+                alias: Some("a".into()),
+                inputs: None,
+                formula_override: Some("1".into()),
+                input_source: None,
+                route: None,
+                condition: None,
+                true_target: None,
+                false_target: None,
+                enum_targets: None,
+                active: Some(true),
+            },
+            PipelineStep {
+                id: "s2".into(),
+                step_type: PromptType::ScoringPrompt,
+                prompt_id: 0,
+                label: None,
+                alias: Some("b".into()),
+                inputs: Some(vec!["a".into()]),
+                formula_override: Some("1+1".into()),
+                input_source: None,
+                route: None,
+                condition: None,
+                true_target: None,
+                false_target: None,
+                enum_targets: None,
+                active: Some(true),
+            },
         ];
-        let cfg = PipelineConfig{ name:"t".into(), steps};
+        let cfg = PipelineConfig {
+            name: "t".into(),
+            steps,
+        };
         let result = execute(&cfg, "doc").await.unwrap();
         assert_eq!(result.scoring.len(), 2);
     }
@@ -233,11 +321,59 @@ mod tests {
     #[tokio::test]
     async fn route_skip() {
         let steps = vec![
-            PipelineStep{ id:"set".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("route".into()),inputs:None,formula_override:Some("\"\\\"true\\\"\"".into()),input_source:None,route:None,condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
-            PipelineStep{ id:"p1".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("x".into()),inputs:None,formula_override:Some("1".into()),input_source:None,route:Some("true".into()),condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
-            PipelineStep{ id:"p2".into(), step_type:PromptType::ScoringPrompt, prompt_id:0,label:None,alias:Some("y".into()),inputs:None,formula_override:Some("2".into()),input_source:None,route:Some("false".into()),condition:None,true_target:None,false_target:None,enum_targets:None,active:Some(true)},
+            PipelineStep {
+                id: "set".into(),
+                step_type: PromptType::ScoringPrompt,
+                prompt_id: 0,
+                label: None,
+                alias: Some("route".into()),
+                inputs: None,
+                formula_override: Some("\"\\\"true\\\"\"".into()),
+                input_source: None,
+                route: None,
+                condition: None,
+                true_target: None,
+                false_target: None,
+                enum_targets: None,
+                active: Some(true),
+            },
+            PipelineStep {
+                id: "p1".into(),
+                step_type: PromptType::ScoringPrompt,
+                prompt_id: 0,
+                label: None,
+                alias: Some("x".into()),
+                inputs: None,
+                formula_override: Some("1".into()),
+                input_source: None,
+                route: Some("true".into()),
+                condition: None,
+                true_target: None,
+                false_target: None,
+                enum_targets: None,
+                active: Some(true),
+            },
+            PipelineStep {
+                id: "p2".into(),
+                step_type: PromptType::ScoringPrompt,
+                prompt_id: 0,
+                label: None,
+                alias: Some("y".into()),
+                inputs: None,
+                formula_override: Some("2".into()),
+                input_source: None,
+                route: Some("false".into()),
+                condition: None,
+                true_target: None,
+                false_target: None,
+                enum_targets: None,
+                active: Some(true),
+            },
         ];
-        let cfg = PipelineConfig{ name:"t".into(), steps};
+        let cfg = PipelineConfig {
+            name: "t".into(),
+            steps,
+        };
         let result = execute(&cfg, "doc").await.unwrap();
         assert_eq!(result.scoring.len(), 2);
     }

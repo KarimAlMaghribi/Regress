@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use strum_macros::{EnumString, Display};
+use strum_macros::{Display, EnumString};
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumString, Display, Serialize, Deserialize)]
 #[strum(serialize_all = "PascalCase")]
@@ -32,12 +32,19 @@ pub struct TextExtracted {
     pub text: String,
 }
 
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TextPosition {
     pub page: u32,
     pub bbox: [f32; 4],
     pub quote: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ScoringResult {
+    pub prompt_id: i32,
+    pub result: bool,
+    pub source: TextPosition,
+    pub explanation: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -62,7 +69,7 @@ pub struct PipelineRunResult {
     pub overall_score: Option<f32>,
     pub extracted: std::collections::HashMap<String, serde_json::Value>,
     pub extraction: Vec<PromptResult>,
-    pub scoring: Vec<PromptResult>,
+    pub scoring: Vec<ScoringResult>,
     pub decision: Vec<PromptResult>,
 }
 
