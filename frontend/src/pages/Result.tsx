@@ -29,7 +29,7 @@ import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import { Document, Page, pdfjs } from 'react-pdf';
 import { useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
-import { PipelineRunResult, PromptResult } from '../types/pipeline';
+import { PipelineRunResult, PromptResult, ScoringResult } from '../types/pipeline';
 
 pdfjs.GlobalWorkerOptions.workerSrc = `//cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjs.version}/pdf.worker.min.js`;
 
@@ -117,7 +117,7 @@ const pdfUrl = `${ingest}/pdf/${id}`;
           {(['extraction','scoring','decision'] as const).map((cat,i) => (
             tab===i && (
             <Box key={cat} sx={{ mb: 2 }}>
-              <PromptDetailsTable data={(data as any)[cat] as PromptResult[]} />
+              <PromptDetailsTable data={(data as any)[cat] as any[]} />
             </Box>)
           ))}
           <Box sx={{ mt: 2 }}>
@@ -129,7 +129,7 @@ const pdfUrl = `${ingest}/pdf/${id}`;
   );
 }
 
-function PromptDetailsTable({ data }: { data: PromptResult[] }) {
+function PromptDetailsTable({ data }: { data: any[] }) {
   return (
     <table className="prompt-table" style={{ fontSize: '0.8rem' }}>
       <thead>
@@ -148,7 +148,7 @@ function PromptDetailsTable({ data }: { data: PromptResult[] }) {
             <td>{p.promptId}</td>
             <td title={p.promptText}>{p.promptText.slice(0,40)}…</td>
             <td>{p.source?.quote ?? '—'}</td>
-            <td>{p.score ?? String(p.boolean ?? '')}</td>
+            <td>{(p as any).score ?? String((p as any).boolean ?? (p as any).result ?? '')}</td>
             <td>{p.route ?? '—'}</td>
             <td>
               {p.source ? `p${p.source.page} [${p.source.bbox.join(',')}]` : '—'}

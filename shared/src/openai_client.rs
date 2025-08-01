@@ -1,9 +1,9 @@
+use crate::dto::TextPosition;
 use actix_web::http::header;
 use awc::Client;
 use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
-use serde::Serialize;
 use serde::de::Error as DeError;
-use crate::dto::TextPosition;
+use serde::Serialize;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
@@ -12,6 +12,12 @@ use tracing::{debug, error, warn};
 struct ChatRequest<'a> {
     model: &'a str,
     messages: &'a [ChatCompletionMessage],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    functions: Option<&'a [serde_json::Value]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    function_call: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<serde_json::Value>,
 }
 
 fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
@@ -27,6 +33,31 @@ fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
     let val = jsonrepair::repair_json_string(clean)
         .map_err(|e| anyhow::anyhow!("jsonrepair error: {:?}", e))?;
     Ok(val)
+}
+
+pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMessage> {
+    let system = r#"
+You are a binary classifier that answers Yes/No questions about the given
+document. Always respond with ONE JSON object that matches exactly this schema:
+{
+  \"result\": <true|false>,
+  \"source\": {
+    \"page\": <integer>,
+    \"bbox\": [<float>,<float>,<float>,<float>],
+    \"quote\": \"<exact snippet from the document>\"
+  },
+  \"explanation\": \"<short reason>\"
+}
+Do not add any keys, do not wrap the object in markdown.
+"#;
+    let user = format!(
+        "DOCUMENT:\n{}\n\nQUESTION (Yes/No): {}\n\nRespond with the JSON schema above.",
+        document, question
+    );
+    vec![
+        msg(ChatCompletionMessageRole::System, system),
+        msg(ChatCompletionMessageRole::User, &user),
+    ]
 }
 
 /// Send chat messages to OpenAI and return the assistant's answer.
@@ -62,13 +93,17 @@ pub async fn call_openai_chat(
     client: &Client,
     model: &str,
     messages: Vec<ChatCompletionMessage>,
+    functions: Option<Vec<serde_json::Value>>,
+    function_call: Option<serde_json::Value>,
 ) -> Result<String, PromptError> {
-    let key = std::env::var("OPENAI_API_KEY")
-        .map_err(|e| PromptError::Network(e.to_string()))?;
+    let key = std::env::var("OPENAI_API_KEY").map_err(|e| PromptError::Network(e.to_string()))?;
 
     let req = ChatRequest {
         model,
         messages: &messages,
+        functions: functions.as_deref(),
+        function_call,
+        response_format: Some(serde_json::json!({"type":"json_object"})),
     };
 
     let base = std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| "https://api.openai.com".into());
@@ -102,7 +137,14 @@ pub async fn call_openai_chat(
     let answer = chat
         .choices
         .get(0)
-        .and_then(|c| c.message.content.clone())
+        .and_then(|c| {
+            c.message.content.clone().or_else(|| {
+                c.message
+                    .function_call
+                    .as_ref()
+                    .map(|fc| fc.arguments.clone())
+            })
+        })
         .unwrap_or_default();
     Ok(answer)
 }
@@ -133,9 +175,7 @@ pub struct OpenAiAnswer {
 }
 
 pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, PromptError> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(120))
-        .finish();
+    let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
     let system = "You are an extraction engine. \
              Return exactly ONE JSON object with the keys \
@@ -147,7 +187,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
             msg(ChatCompletionMessageRole::System, system),
             msg(ChatCompletionMessageRole::User, &user),
         ];
-        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
+        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
             if let Ok(v) = parse_json_block(&ans) {
                 return Ok(OpenAiAnswer {
                     boolean: None,
@@ -166,14 +206,75 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
+pub async fn score(
+    prompt_id: i32,
+    document: &str,
+) -> Result<crate::dto::ScoringResult, PromptError> {
+    let client = Client::builder().timeout(Duration::from_secs(120)).finish();
+    let question = fetch_prompt(prompt_id).await?;
+    let msgs = build_scoring_prompt(document, &question);
+    let schema = serde_json::json!({
+      "name": "binary_answer",
+      "description": "Return exactly one object answering the Yes/No question.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "result": {"type":"boolean"},
+          "source": {
+            "type":"object",
+            "properties": {
+              "page": {"type":"integer"},
+              "bbox": {"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},
+              "quote": {"type":"string"}
+            },
+            "required": ["page","bbox","quote"]
+          },
+          "explanation": {"type":"string"}
+        },
+        "required": ["result","source"]
+      }
+    });
+    for i in 0..=3 {
+        if let Ok(ans) = call_openai_chat(
+            &client,
+            "gpt-4o",
+            msgs.clone(),
+            Some(vec![schema.clone()]),
+            Some(serde_json::json!({"name":"binary_answer"})),
+        )
+        .await
+        {
+            if let Ok(v) = parse_json_block(&ans) {
+                if let (Some(result), Some(source)) = (
+                    v.get("result").and_then(|b| b.as_bool()),
+                    v.get("source")
+                        .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                ) {
+                    let explanation = v
+                        .get("explanation")
+                        .and_then(|e| e.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    return Ok(crate::dto::ScoringResult {
+                        prompt_id,
+                        result,
+                        source,
+                        explanation,
+                    });
+                }
+            }
+        }
+        let wait = 100 * (1u64 << i).min(8);
+        time::sleep(Duration::from_millis(wait)).await;
+    }
+    Err(PromptError::Parse(DeError::custom("invalid JSON")))
+}
 
 pub async fn decide(
     prompt_id: i32,
     state: &std::collections::HashMap<String, serde_json::Value>,
 ) -> Result<OpenAiAnswer, PromptError> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(120))
-        .finish();
+    let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
     let system = "Return ONE JSON object: {\"answer\": <true|false>, \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2], \"quote\": \"<exact text span>\"}, \"explanation\": \"<short reason>\"}";
     let user = format!(
@@ -186,7 +287,7 @@ pub async fn decide(
             msg(ChatCompletionMessageRole::System, system),
             msg(ChatCompletionMessageRole::User, &user),
         ];
-        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs).await {
+        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
             if let Ok(v) = parse_json_block(&ans) {
                 return Ok(OpenAiAnswer {
                     boolean: v.get("answer").and_then(|b| b.as_bool()),
@@ -213,9 +314,7 @@ pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> {
 }
 
 async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
-    let client = Client::builder()
-        .timeout(Duration::from_secs(120))
-        .finish();
+    let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let base =
         std::env::var("PROMPT_MANAGER_URL").unwrap_or_else(|_| "http://prompt-manager:8082".into());
     let url = format!("{}/prompts/{}", base, id);

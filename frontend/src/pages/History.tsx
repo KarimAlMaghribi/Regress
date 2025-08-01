@@ -15,7 +15,7 @@ import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTheme } from '@mui/material/styles';
-import { PipelineRunResult, PromptResult } from '../types/pipeline';
+import { PipelineRunResult, PromptResult, ScoringResult } from '../types/pipeline';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -189,7 +189,7 @@ export default function History() {
   );
 }
 
-function PromptDetailsTable({ data }: { data: PromptResult[] }) {
+function PromptDetailsTable({ data }: { data: any[] }) {
   return (
     <table className="prompt-table" style={{ fontSize: '0.8rem' }}>
       <thead>
@@ -208,7 +208,7 @@ function PromptDetailsTable({ data }: { data: PromptResult[] }) {
             <td>{p.promptId}</td>
             <td title={p.promptText}>{p.promptText.slice(0, 40)}…</td>
             <td>{p.source?.quote ?? '—'}</td>
-            <td>{p.score ?? String(p.boolean ?? '')}</td>
+            <td>{(p as any).score ?? String((p as any).boolean ?? (p as any).result ?? '')}</td>
             <td>{p.route ?? '—'}</td>
             <td>
               {p.source
