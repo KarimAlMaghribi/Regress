@@ -138,7 +138,9 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
         .finish();
     let prompt = fetch_prompt(prompt_id).await?;
     let system = "You are an extraction engine. \
-             Return exactly ONE JSON object with the keys {\"value\": <extracted value>, \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2]}}";
+             Return exactly ONE JSON object with the keys \
+             {\"value\": <extracted value>, \
+              \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2], \"quote\": \"<exact text span>\"}}";
     let user = format!("{}\n{}", prompt, input);
     for i in 0..=3 {
         let msgs = vec![
@@ -173,7 +175,7 @@ pub async fn decide(
         .timeout(Duration::from_secs(120))
         .finish();
     let prompt = fetch_prompt(prompt_id).await?;
-    let system = "Return ONE JSON object: {\"answer\": <true|false>, \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2]}, \"explanation\": \"<short reason>\"}";
+    let system = "Return ONE JSON object: {\"answer\": <true|false>, \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2], \"quote\": \"<exact text span>\"}, \"explanation\": \"<short reason>\"}";
     let user = format!(
         "{}\n{}",
         prompt,
