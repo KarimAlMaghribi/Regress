@@ -290,7 +290,13 @@ pub async fn decide(
             msg(ChatCompletionMessageRole::User, &user),
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
-            if let Ok(v) = parse_json_block(&ans) {
+            if let Ok(mut v) = parse_json_block(&ans) {
+                // ensure `route` is present for bool answers
+                if v.get("route").is_none() {
+                    if let Some(ansb) = v.get("answer").and_then(|val| val.as_bool()) {
+                        v["route"] = serde_json::Value::String(ansb.to_string());
+                    }
+                }
                 return Ok(OpenAiAnswer {
                     boolean: v.get("answer").and_then(|b| b.as_bool()),
                     route: v

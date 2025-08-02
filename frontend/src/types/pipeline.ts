@@ -34,3 +34,11 @@ export interface PipelineRunResult {
   scoring: ScoringResult[];
   decision: PromptResult[];
 }
+
+export interface PipelineStep {
+  id: string;
+  step_type: 'ExtractionPrompt' | 'ScoringPrompt' | 'DecisionPrompt';
+  prompt_id: number;
+  targets?: Record<string, string>;
+  merge_to?: string;
+}

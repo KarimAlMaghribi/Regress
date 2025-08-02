@@ -11,9 +11,8 @@ export interface PipelineStep {
   formulaOverride?: string;
   route?: string;
   condition?: string;
-  trueTarget?: string;
-  falseTarget?: string;
-  enumTargets?: Record<string, string>;
+  targets?: Record<string, string>;
+  mergeTo?: string;
   active?: boolean;
 }
 
@@ -35,6 +34,25 @@ interface PipelineState {
 }
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
+
+// when loading old pipelines → migrate
+interface Pipeline { name: string; steps: PipelineStep[] }
+const migrate = (p: Pipeline): Pipeline => ({
+  ...p,
+  steps: p.steps.map(s => {
+    if (!s.targets) {
+      const t: Record<string, string> = {};
+      // @ts-ignore legacy fields
+      if (s.trueTarget) t['true'] = s.trueTarget;
+      // @ts-ignore legacy fields
+      if (s.falseTarget) t['false'] = s.falseTarget;
+      // @ts-ignore legacy fields
+      if (s.enumTargets) Object.assign(t, s.enumTargets);
+      return { ...s, targets: Object.keys(t).length ? t : undefined };
+    }
+    return s;
+  }),
+});
 
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
@@ -59,7 +77,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
   async loadPipeline(id) {
     const res = await fetch(`${API}/pipelines/${id}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = await res.json();
+    const json = migrate(await res.json());
     set({ name: json.name, steps: json.steps, currentPipelineId: id, dirty: false });
   },
 
@@ -181,8 +199,8 @@ export function validatePipeline(steps: PipelineStep[]): string[] {
   steps.forEach((s, idx) => {
     if (!s.type) errors.push(`Step ${idx + 1}: type missing`);
     if (s.type === 'ExtractionPrompt' && !s.alias) errors.push(`Step ${idx + 1}: alias required`);
-    if (s.type === 'DecisionPrompt' && !s.condition && !s.enumTargets) {
-      errors.push(`Step ${idx + 1}: condition or enumTargets required`);
+    if (s.type === 'DecisionPrompt' && !s.condition && !s.targets) {
+      errors.push(`Step ${idx + 1}: condition or targets required`);
     }
     if (s.alias) {
       if (aliases.has(s.alias)) errors.push(`duplicate alias ${s.alias}`);

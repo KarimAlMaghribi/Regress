@@ -87,8 +87,18 @@ pub struct PipelineStep {
     pub input_source: Option<String>,
     pub route: Option<String>,
     pub condition: Option<String>,
+    /// generic branching: route-value → next-step-id
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub targets: Option<std::collections::HashMap<String, String>>,
+    /// first step after the branch rejoins (optional)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_to: Option<String>,
+    /* legacy fields kept for migration only */
+    #[serde(default, skip)]
     pub true_target: Option<String>,
+    #[serde(default, skip)]
     pub false_target: Option<String>,
+    #[serde(default, skip)]
     pub enum_targets: Option<std::collections::HashMap<String, String>>,
     pub active: Option<bool>,
 }

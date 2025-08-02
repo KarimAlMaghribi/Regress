@@ -9,6 +9,7 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import debounce from 'lodash.debounce';
 import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
+import StepBranchPanel from './PipelineEditor/StepBranchPanel';
 import { useNavigate } from 'react-router-dom';
 import uuid from '../utils/uuid';
 
@@ -166,7 +167,15 @@ export default function PipelineEditor() {
             {edit.type==='DecisionPrompt' && (
               <>
                 <TextField label="Condition" fullWidth value={edit.condition||''} onChange={e=>updateStep(edit.id,{condition:e.target.value}).catch(er=>setError(String(er)))} />
+                <StepBranchPanel step={edit} />
               </>
+            )}
+            {edit.type!=='DecisionPrompt' && (
+              <Select fullWidth value={edit.mergeTo||''}
+                      onChange={e=>updateStep(edit.id,{mergeTo:e.target.value||undefined}).catch(er=>setError(String(er)))}>
+                <MenuItem value="">(linear)</MenuItem>
+                {steps.map(s=>(<MenuItem key={s.id} value={s.id}>{s.id}</MenuItem>))}
+              </Select>
             )}
           </Box>
         )}
@@ -203,6 +212,13 @@ export default function PipelineEditor() {
             )}
             {draft.type==='DecisionPrompt' && (
               <TextField label="Condition" fullWidth value={draft.condition||''} onChange={e=>setDraft({...draft, condition:e.target.value})} />
+            )}
+            {draft.type!=='DecisionPrompt' && (
+              <Select fullWidth value={draft.mergeTo||''}
+                      onChange={e=>setDraft({...draft, mergeTo:e.target.value||undefined})}>
+                <MenuItem value="">(linear)</MenuItem>
+                {steps.map(s=>(<MenuItem key={s.id} value={s.id}>{s.id}</MenuItem>))}
+              </Select>
             )}
             <Box sx={{ display:'flex', justifyContent:'flex-end', mt:2 }}>
               <Button variant="outlined" onClick={() => setDraft(null)}>Cancel</Button>
