@@ -8,10 +8,21 @@ For a German overview, see [docs/PROJECT_DOC_DE.md](docs/PROJECT_DOC_DE.md).
 graph TD;
     A[API Gateway] -->|upload| B[PDF Ingest];
     B --> C[Text Extraction];
-    C --> D[Classifier];
+    C --> D[Pipeline Runner];
     D --> E[Prompt Manager];
     D --> F[Metrics];
 ```
+
+## Architecture
+
+* **api-gateway** – performs health checks and forwards requests to the internal services.
+* **pdf-ingest** – stores uploaded PDFs and triggers text extraction.
+* **text-extraction** – runs OCR on new files and publishes `text-extracted` events.
+* **pipeline-runner** – consumes those events, executes the configured pipeline and emits `pipeline-result`.
+* **prompt-manager** – persists prompts and pipelines.
+* **pipeline-api** – REST API for editing and executing pipelines.
+* **metrics** – exposes Prometheus metrics and a `/health` route.
+* **history-service** – records all runs and provides a WebSocket for live updates.
 
 ## Building
 
@@ -53,14 +64,18 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
 2. The `text-extraction` service processes the file asynchronously and publishes
    a `text-extracted` event.
 3. The `pipeline-runner` consumes that event, executes the configured pipeline
-   and stores the result in the `analysis_history` table. Poll
-   `GET http://localhost:8090/results/{id}` until data is returned. The endpoint
-   returns `202 Accepted` while processing is still pending.
+   and stores the result in the `analysis_history` table. Use
+   `GET http://localhost:8090/analyses?status=completed` or open the WebSocket on
+   the same port to receive updates while processing is running.
 4. To re-run classification on already extracted texts, first fetch available
    ids via `GET http://localhost:8083/texts` and then submit them to
    `POST http://localhost:8083/analyze` together with a prompt. The endpoint does
    not repeat OCR but simply republishes a `text-extracted` event to start
    classification again.
+5. Analyses can also be triggered manually by calling
+   `POST http://localhost:8084/pipelines/{id}/run` with
+   `{ "file_id": <upload id> }`. The request returns the result JSON once the
+   pipeline finishes or `202 Accepted` while still running.
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to

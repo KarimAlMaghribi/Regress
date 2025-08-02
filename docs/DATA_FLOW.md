@@ -26,11 +26,12 @@ The `classifications` table contains:
 | `metrics`    | JSONB     | analysis metrics                |
 | `error`      | TEXT      | error message if classification failed |
 
-Results can be polled via `GET /results/{id}` from the pipeline API.
-While processing, the endpoint responds with HTTP `202 Accepted` so callers
-should retry until a `200 OK` payload is returned. If an error occurs during
-classification the endpoint responds with `500` and includes an `error`
-field in the JSON body.
+Finished results are stored in the `analysis_history` table. They can be
+retrieved via the history API, e.g.
+`GET /analyses?status=completed`. The `/` WebSocket of the same service sends
+new entries as soon as they are written. When triggering analyses through the
+pipeline API at `/pipelines/{id}/run`, the request returns the result JSON once
+available or HTTP `202` while still pending.
 
 ## Prompts
 - **text** (`string`): managed in the Prompts page and persisted by the
@@ -57,13 +58,11 @@ Content-Type: multipart/form-data
 file=<pdf bytes>
 ```
 
-Example response:
+Example response when triggering a run manually:
 ```
-{ "id": "42" }
+POST /pipelines/<PIPELINE_ID>/run
+{ "file_id": 42 }
 ```
-
-Poll result:
-```
-GET /results/42
-```
-The request returns `202 Accepted` until the classification record exists.
+The request will return either the result JSON or `202 Accepted` until the
+`pipeline-result` event is received. Completed runs are also available via the
+history API as described above.

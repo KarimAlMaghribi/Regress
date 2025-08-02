@@ -45,13 +45,15 @@ Request body: Partial<PipelineStep>
 Request body: { "order": [stepId, ...] }
 ```
 
-### Notify pipeline runner
-`POST /pipeline-runner/event`
+### Run pipeline
+`POST /pipelines/:id/run`
 ```
-Request body: { "pipeline_id": UUID }
+Request body: { "file_id": number }
 ```
 
-A `pipeline-updated` event is sent after every successful save (name, step or order change).
+The call returns the result JSON when the pipeline has finished or
+`202 Accepted` while waiting. A `pipeline-updated` event is sent after every
+successful save (name, step or order change).
 
 ## Prompt Manager Endpoints
 
@@ -60,3 +62,12 @@ A `pipeline-updated` event is sent after every successful save (name, step or or
 
 Optional query parameter `type` filters the returned prompts by their stored `PromptType`.
 Each prompt item contains `text`, `type` and `weight` fields.
+
+### Manage prompt groups
+`GET /prompt-groups` – list groups
+
+`POST /prompt-groups` – create a group
+
+`PUT /prompt-groups/:id` – rename a group
+
+`PUT /prompt-groups/:id/favorite` – mark group as favorite

@@ -14,10 +14,17 @@ Das System besteht aus mehreren Diensten, die über Docker Compose gestartet wer
 - **pdf-ingest** – nimmt hochgeladene PDFs entgegen, speichert sie und löst das Extrahieren des Textes aus.
 - **text-extraction** – führt OCR aus und übergibt den erkannten Text an den Pipeline-Runner.
 - **pipeline-runner** – führt die Pipeline aus und speichert das Ergebnis in der Datenbank.
+- **pipeline-api** – bietet eine REST-Schnittstelle zum Bearbeiten und
+  Ausführen von Pipelines. Ein Lauf kann über
+  `POST /pipelines/{id}/run` gestartet werden.
 - **prompt-manager** – verwaltet Prompt-Vorlagen und Pipelines.
-- **pipeline-api** – stellt REST-Endpunkte für die Verwaltung von Pipelines bereit.
 - **metrics** – stellt Metriken und eine Health-Route bereit.
 - **history-service** – liefert via WebSocket den Verlauf vergangener Klassifikationen.
+
+Die Ergebnisse jeder Analyse werden in der Tabelle `analysis_history`
+gespeichert. Über die History-API können sie per
+`GET /analyses?status=completed` abgefragt oder in Echtzeit über den
+WebSocket-Endpoint `/` verfolgt werden.
 
 Eine schematische Darstellung findet sich in der README-Datei im Wurzelverzeichnis.
 
