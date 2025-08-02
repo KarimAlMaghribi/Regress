@@ -232,6 +232,8 @@ struct StepPatch {
     inputs: Option<Option<Vec<String>>>,
     formula_override: Option<Option<String>>,
     condition: Option<Option<String>>,
+    targets: Option<Option<HashMap<String, String>>>,
+    merge_to: Option<Option<String>>,
     true_target: Option<Option<String>>,
     false_target: Option<Option<String>>,
     enum_targets: Option<Option<HashMap<String, String>>>,
@@ -274,6 +276,12 @@ async fn update_step(
     }
     if let Some(v) = patch.condition {
         step.condition = v;
+    }
+    if let Some(v) = patch.targets {
+        step.targets = v;
+    }
+    if let Some(v) = patch.merge_to {
+        step.merge_to = v;
     }
     if let Some(v) = patch.true_target {
         step.true_target = v;

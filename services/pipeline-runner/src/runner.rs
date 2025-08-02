@@ -199,29 +199,15 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                         if let Some(r) = &ans.route {
                             state.insert("route".into(), Value::String(r.clone()));
                         }
-                        let cond = step.step.condition.as_deref().unwrap_or("result == true");
-                        let mut ctx = HashMap::new();
-                        for (k, v) in &state {
-                            ctx.insert(k.clone(), to_dyn(v));
-                        }
-                        let ok = rhai_eval_bool(cond, &ctx)?;
-                        if let Some(map) = &step.step.enum_targets {
-                            if let Some(key) = decision_val.as_str() {
-                                if let Some(target_id) = map.get(key) {
-                                    idx = exec
-                                        .iter()
-                                        .position(|s| s.step.id == *target_id)
-                                        .unwrap_or(exec.len());
-                                } else {
-                                    idx = step.next_idx.unwrap_or(exec.len());
-                                }
-                            } else {
-                                idx = step.next_idx.unwrap_or(exec.len());
+                        let decision_key = ans.route.clone().or_else(|| ans.boolean.map(|b| b.to_string()))
+                            .or_else(|| decision_val.as_str().map(|s| s.to_string()));
+                        if let (Some(key), Some(map)) = (decision_key.clone(), &step.targets_idx) {
+                            if let Some(&jump) = map.get(&key) {
+                                idx = jump;
+                                continue;
                             }
-                        } else {
-                            idx = if ok { step.true_idx } else { step.false_idx }
-                                .unwrap_or(exec.len());
                         }
+                        idx = step.next_idx.unwrap_or(exec.len());
                         decision.push(PromptResult {
                             prompt_id: step.step.prompt_id,
                             prompt_type: PromptType::DecisionPrompt,
@@ -285,6 +271,8 @@ mod tests {
                 input_source: None,
                 route: None,
                 condition: None,
+                targets: None,
+                merge_to: None,
                 true_target: None,
                 false_target: None,
                 enum_targets: None,
@@ -301,6 +289,8 @@ mod tests {
                 input_source: None,
                 route: None,
                 condition: None,
+                targets: None,
+                merge_to: None,
                 true_target: None,
                 false_target: None,
                 enum_targets: None,
@@ -329,6 +319,8 @@ mod tests {
                 input_source: None,
                 route: None,
                 condition: None,
+                targets: None,
+                merge_to: None,
                 true_target: None,
                 false_target: None,
                 enum_targets: None,
@@ -345,6 +337,8 @@ mod tests {
                 input_source: None,
                 route: Some("true".into()),
                 condition: None,
+                targets: None,
+                merge_to: None,
                 true_target: None,
                 false_target: None,
                 enum_targets: None,
@@ -361,6 +355,8 @@ mod tests {
                 input_source: None,
                 route: Some("false".into()),
                 condition: None,
+                targets: None,
+                merge_to: None,
                 true_target: None,
                 false_target: None,
                 enum_targets: None,
