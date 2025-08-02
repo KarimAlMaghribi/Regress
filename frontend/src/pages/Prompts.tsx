@@ -78,6 +78,16 @@ export default function Prompts() {
   return (
     <Box>
       <PageHeader title="Prompts" />
+      <Button
+        component="a"
+        href="https://chatgpt.com/g/g-688d63e210008191972ad48f0b844319-prompt-optimierer"
+        target="_blank"
+        rel="noopener noreferrer"
+        variant="outlined"
+        sx={{ mb: 2 }}
+      >
+        Prompt-Optimierer (GPT) öffnen
+      </Button>
       <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
         <TextField value={newText} onChange={e => setNewText(e.target.value)} label="Text" fullWidth />
         <FormControl sx={{ minWidth: 160 }}>
