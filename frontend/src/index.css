@@ -1,0 +1,4 @@
+/* thin left border for branch steps */
+.table .MuiTableCell-root {
+  transition: border-color 0.3s;
+}

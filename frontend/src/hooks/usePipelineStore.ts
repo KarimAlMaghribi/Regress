@@ -199,8 +199,8 @@ export function validatePipeline(steps: PipelineStep[]): string[] {
   steps.forEach((s, idx) => {
     if (!s.type) errors.push(`Step ${idx + 1}: type missing`);
     if (s.type === 'ExtractionPrompt' && !s.alias) errors.push(`Step ${idx + 1}: alias required`);
-    if (s.type === 'DecisionPrompt' && !s.condition && !s.targets) {
-      errors.push(`Step ${idx + 1}: condition or targets required`);
+    if (s.type === 'DecisionPrompt' && !s.targets) {
+      errors.push(`Step ${idx + 1}: targets required`);
     }
     if (s.alias) {
       if (aliases.has(s.alias)) errors.push(`duplicate alias ${s.alias}`);
