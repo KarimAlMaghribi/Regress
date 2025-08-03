@@ -223,17 +223,15 @@ async fn add_step(
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct StepPatch {
-    label: Option<Option<String>>,
     #[serde(rename = "type")]
     step_type: Option<shared::dto::PromptType>,
     prompt_id: Option<i32>,
-    input_source: Option<Option<String>>,
-    alias: Option<Option<String>>,
-    inputs: Option<Option<Vec<String>>>,
-    formula_override: Option<Option<String>>,
-    condition: Option<Option<String>>,
+    route: Option<Option<String>>,
     targets: Option<Option<HashMap<String, String>>>,
     merge_to: Option<Option<String>>,
+    yes_key: Option<Option<String>>,
+    no_key: Option<Option<String>>,
+    merge_key: Option<Option<String>>,
     true_target: Option<Option<String>>,
     false_target: Option<Option<String>>,
     enum_targets: Option<Option<HashMap<String, String>>>,
@@ -253,35 +251,29 @@ async fn update_step(
     let Some(step) = cfg.steps.iter_mut().find(|s| s.id == step_id) else {
         return HttpResponse::NotFound().finish();
     };
-    if let Some(v) = patch.label {
-        step.label = v;
-    }
     if let Some(v) = patch.step_type {
         step.step_type = v;
     }
     if let Some(v) = patch.prompt_id {
         step.prompt_id = v;
     }
-    if let Some(v) = patch.input_source {
-        step.input_source = v;
-    }
-    if let Some(v) = patch.alias {
-        step.alias = v;
-    }
-    if let Some(v) = patch.inputs {
-        step.inputs = v;
-    }
-    if let Some(v) = patch.formula_override {
-        step.formula_override = v;
-    }
-    if let Some(v) = patch.condition {
-        step.condition = v;
+    if let Some(v) = patch.route {
+        step.route = v;
     }
     if let Some(v) = patch.targets {
         step.targets = v;
     }
     if let Some(v) = patch.merge_to {
         step.merge_to = v;
+    }
+    if let Some(v) = patch.yes_key {
+        step.yes_key = v;
+    }
+    if let Some(v) = patch.no_key {
+        step.no_key = v;
+    }
+    if let Some(v) = patch.merge_key {
+        step.merge_key = v;
     }
     if let Some(v) = patch.true_target {
         step.true_target = v;

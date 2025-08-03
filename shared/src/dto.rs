@@ -80,19 +80,19 @@ pub struct PipelineStep {
     #[serde(rename = "type")]
     pub step_type: PromptType,
     pub prompt_id: i32,
-    pub label: Option<String>,
-    pub alias: Option<String>,
-    pub inputs: Option<Vec<String>>,
-    pub formula_override: Option<String>,
-    pub input_source: Option<String>,
     pub route: Option<String>,
-    pub condition: Option<String>,
     /// generic branching: route-value → next-step-id
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub targets: Option<std::collections::HashMap<String, String>>,
     /// first step after the branch rejoins (optional)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub merge_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub yes_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_key: Option<String>,
     /* legacy fields kept for migration only */
     #[serde(default, skip)]
     pub true_target: Option<String>,

@@ -100,7 +100,7 @@ export default function PipelineEditor() {
         <TextField size="small" label="Name" value={name}
           onChange={e=>debounced(e.target.value)} />
         <Button startIcon={<AddIcon/>}
-          onClick={() => { setInsertPos(steps.length); setDraft({ id: uuid(), label:'', type:'ExtractionPrompt', promptId:0, active:true }); }}>
+          onClick={() => { setInsertPos(steps.length); setDraft({ id: uuid(), type:'ExtractionPrompt', promptId:0, active:true }); }}>
           Step
         </Button>
       </Box>
@@ -109,19 +109,14 @@ export default function PipelineEditor() {
               <TableRow>
                 <TableCell>#</TableCell>
                 <TableCell></TableCell>
-                <TableCell>Label</TableCell>
-                  <TableCell>Type</TableCell>
-                  <TableCell>Prompt</TableCell>
-                  <TableCell>Input Source</TableCell>
-                  <TableCell>Alias</TableCell>
-                  <TableCell>Inputs</TableCell>
-                  <TableCell>Route</TableCell>
-                  <TableCell>Condition</TableCell>
-                  <TableCell>Active</TableCell>
-                  <TableCell></TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
+                <TableCell>Type</TableCell>
+                <TableCell>Prompt</TableCell>
+                <TableCell>Route</TableCell>
+                <TableCell>Active</TableCell>
+                <TableCell></TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
                 {layoutRows.map(r => (
                   r.isBranchHeader ? (
                     <TableRow key={`bh-${r.cKey}`}>
@@ -137,7 +132,7 @@ export default function PipelineEditor() {
                .map(x=>steps.findIndex(s=>s.id===x.step.id))
                .reduce((a,b)=>Math.max(a,b), -1) + 1;
             setInsertPos(lastRowIndex);
-            setDraft({ id: uuid(), label:'', type:'ExtractionPrompt', promptId:0, active:true });
+            setDraft({ id: uuid(), type:'ExtractionPrompt', promptId:0, active:true });
           }}
                         />
                       </TableCell>
@@ -154,14 +149,28 @@ export default function PipelineEditor() {
                           <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}><ArrowDownwardIcon fontSize="small" /></IconButton>
                           <IconButton size="small" onClick={() => { setInsertPos(idx + 1); setDraft({ ...r.step, id: uuid() }); }}><AddIcon fontSize="small" /></IconButton>
                         </TableCell>
-                        <TableCell>{r.step.label}</TableCell>
                         <TableCell>{r.step.type}</TableCell>
                         <TableCell>{r.step.promptId}</TableCell>
-                        <TableCell>{r.step.inputSource}</TableCell>
-                        <TableCell>{r.step.alias}</TableCell>
-                        <TableCell>{(r.step.inputs || []).join(',')}</TableCell>
-                        <TableCell>{r.step.route || '—'}</TableCell>
-                        <TableCell>{r.step.condition}</TableCell>
+                        <TableCell>
+                          {r.step.type==='DecisionPrompt' ? '—' : (
+                            <Select value={r.step.route||''}
+                                    onChange={e=>updateStep(r.step.id,{ route:e.target.value||undefined }).catch(()=>{})}>
+                              <MenuItem value=""><em>none</em></MenuItem>
+                              {(() => {
+                                const idx = steps.findIndex(s=>s.id===r.step.id);
+                                for(let i=idx-1;i>=0;i--){
+                                  const d=steps[i];
+                                  if(d.type==='DecisionPrompt' && d.yesKey && d.noKey && d.mergeKey){
+                                    return [d.yesKey,d.noKey,d.mergeKey].map(k=>
+                                      <MenuItem key={k} value={k}>{k}</MenuItem>
+                                    );
+                                  }
+                                }
+                                return [];
+                              })()}
+                            </Select>
+                          )}
+                        </TableCell>
                         <TableCell><Checkbox checked={r.step.active !== false} onChange={e => updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))} /></TableCell>
                         <TableCell>
                           {r.isBranchEnd && (
@@ -185,7 +194,6 @@ export default function PipelineEditor() {
       <Drawer open={!!edit} onClose={() => setEdit(null)} anchor="right">
         {edit && (
           <Box sx={{ p:2, width: 320, display:'flex', flexDirection:'column', gap:2 }}>
-            <TextField label="Label" value={edit.label||''} onChange={e=>updateStep(edit.id,{label:e.target.value}).catch(er=>setError(String(er)))} />
             <Select fullWidth value={edit.type} onChange={e=>{const val=e.target.value as string; updateStep(edit.id,{type:val}).catch(er=>setError(String(er)));}}>
               <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
               <MenuItem value="ScoringPrompt">ScoringPrompt</MenuItem>
@@ -194,30 +202,8 @@ export default function PipelineEditor() {
             <Select fullWidth value={edit.promptId} onChange={e=>updateStep(edit.id,{promptId:Number(e.target.value)}).catch(er=>setError(String(er)))}>
               {(promptOptions[edit.type]||[]).map(p=>(<MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>))}
             </Select>
-            <TextField label="Route" fullWidth value={edit.route || ''}
-              onChange={e=>updateStep(edit.id,{route:e.target.value || null}).catch(er=>setError(String(er)))} />
-            {edit.type==='ExtractionPrompt' && (
-              <>
-                <Select fullWidth value={edit.inputSource||'document'} onChange={e=>updateStep(edit.id,{inputSource:e.target.value as string}).catch(er=>setError(String(er)))}>
-                  <MenuItem value="document">document</MenuItem>
-                  {steps.filter(s=>s.alias).map(s=>(<MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>))}
-                </Select>
-                <TextField fullWidth label="Alias" value={edit.alias||''} onChange={e=>updateStep(edit.id,{alias:e.target.value}).catch(er=>setError(String(er)))} />
-              </>
-            )}
-            {edit.type==='ScoringPrompt' && (
-              <>
-                <Select multiple fullWidth value={edit.inputs||[]} onChange={e=>updateStep(edit.id,{inputs:Array.from(e.target.value as any)}).catch(er=>setError(String(er)))}>
-                  {steps.filter(s=>s.alias).map(s=>(<MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>))}
-                </Select>
-                <TextField label="Formula" fullWidth value={edit.formulaOverride||''} onChange={e=>updateStep(edit.id,{formulaOverride:e.target.value}).catch(er=>setError(String(er)))} />
-              </>
-            )}
             {edit.type==='DecisionPrompt' && (
-              <>
-                <TextField label="Condition" fullWidth value={edit.condition||''} onChange={e=>updateStep(edit.id,{condition:e.target.value}).catch(er=>setError(String(er)))} />
-                <StepBranchPanel step={edit} />
-              </>
+              <StepBranchPanel step={edit} />
             )}
             {edit.type!=='DecisionPrompt' && (
               <Select fullWidth value={edit.mergeTo||''}
@@ -232,7 +218,6 @@ export default function PipelineEditor() {
       <Drawer open={!!draft} onClose={() => setDraft(null)} anchor="right">
         {draft && (
           <Box sx={{ p:2, width:320, display:'flex', flexDirection:'column', gap:2 }}>
-            <TextField label="Label" value={draft.label||''} onChange={e=>setDraft({...draft, label:e.target.value})} />
             <Select fullWidth value={draft.type} onChange={e=>{const val=e.target.value as string; setDraft({...draft, type:val}); fetchPrompts(val);}}>
               <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
               <MenuItem value="ScoringPrompt">ScoringPrompt</MenuItem>
@@ -241,27 +226,6 @@ export default function PipelineEditor() {
             <Select fullWidth value={draft.promptId} onChange={e=>setDraft({...draft, promptId:Number(e.target.value)})}>
               {(promptOptions[draft.type]||[]).map(p=>(<MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>))}
             </Select>
-            <TextField label="Route" fullWidth value={draft.route||''} onChange={e=>setDraft({...draft, route: e.target.value || undefined})} />
-            {draft.type==='ExtractionPrompt' && (
-              <>
-                <Select fullWidth value={draft.inputSource||'document'} onChange={e=>setDraft({...draft,inputSource:e.target.value as string})}>
-                  <MenuItem value="document">document</MenuItem>
-                  {steps.filter(s=>s.alias).map(s=>(<MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>))}
-                </Select>
-                <TextField fullWidth label="Alias" value={draft.alias||''} onChange={e=>setDraft({...draft, alias:e.target.value})} />
-              </>
-            )}
-            {draft.type==='ScoringPrompt' && (
-              <>
-                <Select multiple fullWidth value={draft.inputs||[]} onChange={e=>setDraft({...draft, inputs:Array.from(e.target.value as any)})}>
-                  {steps.filter(s=>s.alias).map(s=>(<MenuItem key={s.id} value={s.alias!}>{s.alias}</MenuItem>))}
-                </Select>
-                <TextField label="Formula" fullWidth value={draft.formulaOverride||''} onChange={e=>setDraft({...draft, formulaOverride:e.target.value})} />
-              </>
-            )}
-            {draft.type==='DecisionPrompt' && (
-              <TextField label="Condition" fullWidth value={draft.condition||''} onChange={e=>setDraft({...draft, condition:e.target.value})} />
-            )}
             {draft.type!=='DecisionPrompt' && (
               <Select fullWidth value={draft.mergeTo||''}
                       onChange={e=>setDraft({...draft, mergeTo:e.target.value||undefined})}>
