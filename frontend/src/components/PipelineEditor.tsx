@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
   Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
-  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography
+  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -9,13 +9,21 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import debounce from 'lodash.debounce';
 import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
+import { useBranchLayout, LayoutRow } from '../hooks/useBranchLayout';
 import StepBranchPanel from './PipelineEditor/StepBranchPanel';
+import BranchHeader from './PipelineEditor/BranchHeader';
 import { useNavigate } from 'react-router-dom';
 import uuid from '../utils/uuid';
 
 interface PromptOption { id: number; text: string; }
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
+
+/* move helper before component to avoid hoisting quirks */
+function branchColor(key?: string) {
+  const map: Record<string, string> = { true: '#4caf50', false: '#f44336', maybe: '#2196f3' };
+  return map[key ?? ''] ?? '#9e9e9e';
+}
 
 export default function PipelineEditor() {
   const {
@@ -30,6 +38,12 @@ export default function PipelineEditor() {
   const [promptOptions, setPromptOptions] = useState<Record<string, PromptOption[]>>({});
   const [error, setError] = useState('');
   const debounced = useMemo(() => debounce(updateName, 300), [updateName]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggleCollapse = (cKey: string) =>
+    setCollapsed(c => ({ ...c, [cKey]: !c[cKey] }));
+
+  /* memo‑ise hierarchical rows */
+  const layoutRows = useMemo<LayoutRow[]>(() => useBranchLayout(steps), [steps]);
 
 
   useEffect(() => {
@@ -90,7 +104,7 @@ export default function PipelineEditor() {
           Step
         </Button>
       </Box>
-      <Table>
+      <Table className="table">
             <TableHead>
               <TableRow>
                 <TableCell>#</TableCell>
@@ -108,28 +122,63 @@ export default function PipelineEditor() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {steps.map((s, i) => (
-                      <TableRow key={s.id}>
-                        <TableCell>{i + 1}</TableCell>
-                        <TableCell>
-                          <IconButton size="small" onClick={() => moveStep(i, i-1)}><ArrowUpwardIcon fontSize="small"/></IconButton>
-                          <IconButton size="small" onClick={() => moveStep(i, i+1)}><ArrowDownwardIcon fontSize="small"/></IconButton>
-                          <IconButton size="small" onClick={() => { setInsertPos(i+1); setDraft({ ...s, id: uuid() }); }}><AddIcon fontSize="small"/></IconButton>
+                {layoutRows.map(r => (
+                  r.isBranchHeader ? (
+                    <TableRow key={`bh-${r.cKey}`}>
+                      <TableCell colSpan={12} sx={{ bgcolor: '#f5f5f5', p: 0 }}>
+                        <BranchHeader
+                          branchKey={r.branchKey!}
+                          collapsed={!!collapsed[r.cKey!]}
+                          onToggle={()=>toggleCollapse(r.cKey!)}
+                          onAdd={()=>{
+            /* insert directly after the last row inside this branch */
+            const lastRowIndex = layoutRows
+               .filter(x=>x.cKey===r.cKey && !x.isBranchHeader)
+               .map(x=>steps.findIndex(s=>s.id===x.step.id))
+               .reduce((a,b)=>Math.max(a,b), -1) + 1;
+            setInsertPos(lastRowIndex);
+            setDraft({ id: uuid(), label:'', type:'ExtractionPrompt', promptId:0, active:true });
+          }}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  ) : collapsed[r.cKey || ''] ? null : (() => {
+                    const idx = steps.findIndex(s => s.id === r.step.id);
+                    return (
+                      <TableRow key={r.step.id}>
+                        <TableCell sx={{ pl:r.depth*4, borderLeft:r.depth ? `4px solid ${branchColor(r.branchKey)}`:undefined }}>
+                          {r.rowIdx}
                         </TableCell>
-                        <TableCell>{s.label}</TableCell>
-                        <TableCell>{s.type}</TableCell>
-                        <TableCell>{s.promptId}</TableCell>
-                        <TableCell>{s.inputSource}</TableCell>
-                        <TableCell>{s.alias}</TableCell>
-                        <TableCell>{(s.inputs||[]).join(',')}</TableCell>
-                        <TableCell>{s.route || '—'}</TableCell>
-                        <TableCell>{s.condition}</TableCell>
-                        <TableCell><Checkbox checked={s.active !== false} onChange={e=>updateStep(s.id,{active:e.target.checked}).catch(err=>setError(String(err)))} /></TableCell>
                         <TableCell>
-                          <IconButton onClick={() => removeStep(s.id).catch(err=>setError(String(err)))}><DeleteIcon/></IconButton>
-                          <Button size="small" onClick={() => setEdit(s)}>Edit</Button>
+                          <IconButton size="small" onClick={() => moveStep(idx, idx - 1)}><ArrowUpwardIcon fontSize="small" /></IconButton>
+                          <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}><ArrowDownwardIcon fontSize="small" /></IconButton>
+                          <IconButton size="small" onClick={() => { setInsertPos(idx + 1); setDraft({ ...r.step, id: uuid() }); }}><AddIcon fontSize="small" /></IconButton>
+                        </TableCell>
+                        <TableCell>{r.step.label}</TableCell>
+                        <TableCell>{r.step.type}</TableCell>
+                        <TableCell>{r.step.promptId}</TableCell>
+                        <TableCell>{r.step.inputSource}</TableCell>
+                        <TableCell>{r.step.alias}</TableCell>
+                        <TableCell>{(r.step.inputs || []).join(',')}</TableCell>
+                        <TableCell>{r.step.route || '—'}</TableCell>
+                        <TableCell>{r.step.condition}</TableCell>
+                        <TableCell><Checkbox checked={r.step.active !== false} onChange={e => updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))} /></TableCell>
+                        <TableCell>
+                          {r.isBranchEnd && (
+                            <Chip
+                              label={`merge→${r.step.mergeTo || '—'}`}
+                              size="small"
+                              onClick={() => setEdit(r.step)}
+                              color="info"
+                              variant="outlined"
+                            />
+                          )}
+                          <IconButton onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}><DeleteIcon /></IconButton>
+                          <Button size="small" onClick={() => setEdit(r.step)}>Edit</Button>
                         </TableCell>
                       </TableRow>
+                    );
+                  })()
                 ))}
               </TableBody>
       </Table>
@@ -233,3 +282,4 @@ export default function PipelineEditor() {
     </Box>
   );
 }
+
