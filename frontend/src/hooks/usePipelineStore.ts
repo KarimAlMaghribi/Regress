@@ -2,17 +2,15 @@ import create from 'zustand';
 
 export interface PipelineStep {
   id: string;
-  label: string;
   type: 'ExtractionPrompt' | 'ScoringPrompt' | 'DecisionPrompt';
   promptId: number;
-  inputSource?: string;
-  alias?: string;
-  inputs?: string[];
-  formulaOverride?: string;
-  route?: string;
-  condition?: string;
+  /** Wizard keys for DecisionPrompts */
+  yesKey?: string;
+  noKey?: string;
+  mergeKey?: string;
   targets?: Record<string, string>;
   mergeTo?: string;
+  route?: string;
   active?: boolean;
 }
 
@@ -195,16 +193,15 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
 
 export function validatePipeline(steps: PipelineStep[]): string[] {
   const errors: string[] = [];
-  const aliases = new Set<string>();
   steps.forEach((s, idx) => {
     if (!s.type) errors.push(`Step ${idx + 1}: type missing`);
-    if (s.type === 'ExtractionPrompt' && !s.alias) errors.push(`Step ${idx + 1}: alias required`);
-    if (s.type === 'DecisionPrompt' && !s.targets) {
-      errors.push(`Step ${idx + 1}: targets required`);
-    }
-    if (s.alias) {
-      if (aliases.has(s.alias)) errors.push(`duplicate alias ${s.alias}`);
-      aliases.add(s.alias);
+    if (s.type === 'DecisionPrompt') {
+      if (!s.yesKey || !s.noKey || !s.mergeKey) {
+        errors.push(`Step ${idx + 1}: decision keys required`);
+      }
+      if (!s.targets) {
+        errors.push(`Step ${idx + 1}: targets required`);
+      }
     }
   });
   return errors;

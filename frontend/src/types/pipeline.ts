@@ -41,4 +41,5 @@ export interface PipelineStep {
   prompt_id: number;
   targets?: Record<string, string>;
   merge_to?: string;
+  route?: string;
 }

@@ -13,9 +13,8 @@ tracing = { workspace = true }
 rdkafka = { version = "0.36", features = ["tokio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid"] }
-tracing-subscriber = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["env-filter"] }
 rhai = { workspace = true }
-json-repair = { workspace = true }
 anyhow = "1"
 openai = { workspace = true }
 shared = { path = "../../shared" }
