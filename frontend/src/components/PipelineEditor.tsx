@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
   Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip
@@ -19,12 +19,6 @@ interface PromptOption { id: number; text: string; }
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
 
-/* move helper before component to avoid hoisting quirks */
-function branchColor(key?: string) {
-  const map: Record<string, string> = { true: '#4caf50', false: '#f44336', maybe: '#2196f3' };
-  return map[key ?? ''] ?? '#9e9e9e';
-}
-
 export default function PipelineEditor() {
   const {
     name, steps, updateName,
@@ -32,6 +26,14 @@ export default function PipelineEditor() {
     currentPipelineId, dirty, confirmIfDirty
   } = usePipelineStore();
   const navigate = useNavigate();
+  const routeColors = useRef<Record<string,string>>({});
+  const getRouteColor = (routeKey: string) => {
+    if (!routeColors.current[routeKey]) {
+      routeColors.current[routeKey] =
+        '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
+    }
+    return routeColors.current[routeKey];
+  };
   const [edit, setEdit] = useState<PipelineStep | null>(null);
   const [draft, setDraft] = useState<PipelineStep | null>(null);
   const [insertPos, setInsertPos] = useState<number>(steps.length);
@@ -156,46 +158,74 @@ export default function PipelineEditor() {
                   ) : collapsed[r.cKey || ''] ? null : (() => {
                     const idx = steps.findIndex(s => s.id === r.step.id);
                     return (
-                      <TableRow key={r.step.id}>
-                        <TableCell sx={{ pl:r.depth*4, borderLeft:r.depth ? `4px solid ${branchColor(r.branchKey)}`:undefined }}>
-                          {r.rowIdx}
-                        </TableCell>
-                        <TableCell>
-                          <IconButton size="small" onClick={() => moveStep(idx, idx - 1)}><ArrowUpwardIcon fontSize="small" /></IconButton>
-                          <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}><ArrowDownwardIcon fontSize="small" /></IconButton>
-                          <IconButton size="small" onClick={() => { setInsertPos(idx + 1); setDraft({ ...r.step, id: uuid() }); }}><AddIcon fontSize="small" /></IconButton>
-                        </TableCell>
-                        <TableCell>{r.step.type}</TableCell>
-                        <TableCell>{r.step.promptId}</TableCell>
-                        <TableCell>{r.step.type==='DecisionPrompt' ? r.step.yesKey : '—'}</TableCell>
-                        <TableCell>{r.step.type==='DecisionPrompt' ? r.step.noKey : '—'}</TableCell>
-                        <TableCell>{r.step.type==='DecisionPrompt' ? r.step.mergeKey : '—'}</TableCell>
-                        <TableCell>
-                            {r.step.type==='DecisionPrompt' ? '—' : (
-                              <Select value={r.step.route||''}
-                                      onChange={e=>updateStep(r.step.id,{ route:e.target.value||undefined }).catch(()=>{})}>
-                                <MenuItem value=""><em>none</em></MenuItem>
-                                {routeKeysUpTo(idx).map(k => (
-                                  <MenuItem key={k} value={k}>{k}</MenuItem>
-                                ))}
-                              </Select>
-                            )}
+                      <>
+                        <TableRow key={r.step.id}>
+                          <TableCell sx={{ pl: r.depth * 4 }}>
+                            {r.rowIdx}
                           </TableCell>
-                        <TableCell><Checkbox checked={r.step.active !== false} onChange={e => updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))} /></TableCell>
-                        <TableCell>
-                          {r.isBranchEnd && (
-                            <Chip
-                              label={`merge→${r.step.mergeTo || '—'}`}
-                              size="small"
-                              onClick={() => setEdit(r.step)}
-                              color="info"
-                              variant="outlined"
-                            />
-                          )}
-                          <IconButton onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}><DeleteIcon /></IconButton>
-                          <Button size="small" onClick={() => setEdit(r.step)}>Edit</Button>
-                        </TableCell>
-                      </TableRow>
+                          <TableCell>
+                            <IconButton size="small" onClick={() => moveStep(idx, idx - 1)}><ArrowUpwardIcon fontSize="small" /></IconButton>
+                            <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}><ArrowDownwardIcon fontSize="small" /></IconButton>
+                            <IconButton size="small" onClick={() => { setInsertPos(idx + 1); setDraft({ ...r.step, id: uuid() }); }}><AddIcon fontSize="small" /></IconButton>
+                          </TableCell>
+                          <TableCell>{r.step.type}</TableCell>
+                          <TableCell>{r.step.promptId}</TableCell>
+                          <TableCell>{r.step.type==='DecisionPrompt' ? r.step.yesKey : '—'}</TableCell>
+                          <TableCell>{r.step.type==='DecisionPrompt' ? r.step.noKey : '—'}</TableCell>
+                          <TableCell>{r.step.type==='DecisionPrompt' ? r.step.mergeKey : '—'}</TableCell>
+                          <TableCell>
+                              {r.step.type==='DecisionPrompt' ? '—' : (
+                                <Select value={r.step.route||''}
+                                        onChange={e=>updateStep(r.step.id,{ route:e.target.value||undefined }).catch(()=>{})}>
+                                  <MenuItem value=""><em>none</em></MenuItem>
+                                  {routeKeysUpTo(idx).map(k => (
+                                    <MenuItem key={k} value={k}>{k}</MenuItem>
+                                  ))}
+                                </Select>
+                              )}
+                            </TableCell>
+                          <TableCell><Checkbox checked={r.step.active !== false} onChange={e => updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))} /></TableCell>
+                          <TableCell>
+                            {r.isBranchEnd && (
+                              <Chip
+                                label={`merge→${r.step.mergeTo || '—'}`}
+                                size="small"
+                                onClick={() => setEdit(r.step)}
+                                color="info"
+                                variant="outlined"
+                              />
+                            )}
+                            <IconButton onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}><DeleteIcon /></IconButton>
+                            <Button size="small" onClick={() => setEdit(r.step)}>Edit</Button>
+                          </TableCell>
+                        </TableRow>
+                        {r.step.type === 'DecisionPrompt' && (
+                          <TableRow>
+                            <TableCell colSpan={10} sx={{ p: 0 }}>
+                              <Box display="flex" width="100%">
+                                {['yesKey', 'noKey', 'mergeKey'].map(keyName => (
+                                  <Box
+                                    key={keyName}
+                                    flex={1}
+                                    height={16}
+                                    sx={{
+                                      backgroundColor: getRouteColor(r.step.id),
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      color: '#fff',
+                                      fontSize: '0.75rem'
+                                    }}
+                                  >
+                                    {/* @ts-ignore */}
+                                    {r.step[keyName]}
+                                  </Box>
+                                ))}
+                              </Box>
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </>
                     );
                   })()
                 ))}
