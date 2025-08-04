@@ -17,6 +17,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 rhai = { workspace = true }
 anyhow = "1"
 openai = { workspace = true }
+uuid = "1"
 shared = { path = "../../shared" }
 
 [dev-dependencies]

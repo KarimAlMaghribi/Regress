@@ -5,9 +5,9 @@ use rdkafka::{
 };
 use serde_json::Value;
 use shared::dto::{PipelineConfig, PipelineRunResult, TextExtracted};
-use uuid::Uuid;
 use std::time::Duration;
 use tracing::{error, info};
+use uuid::Uuid;
 mod builder;
 mod runner;
 use sqlx::PgPool;
@@ -54,13 +54,14 @@ async fn app_main() -> anyhow::Result<()> {
                             .await?;
                         let config_json: Value = row.try_get("config_json")?;
                         if let Ok(cfg) = serde_json::from_value::<PipelineConfig>(config_json) {
-                            let run_id: Uuid = sqlx::query_scalar!(
+                            let row = sqlx::query(
                                 "INSERT INTO pipeline_runs (pipeline_id, pdf_id) VALUES ($1,$2) RETURNING id",
-                                evt.pipeline_id,
-                                evt.pdf_id
                             )
+                            .bind(evt.pipeline_id)
+                            .bind(evt.pdf_id)
                             .fetch_one(&pool)
                             .await?;
+                            let run_id: Uuid = row.try_get("id")?;
 
                             match runner::execute(&cfg, &evt.text).await {
                                 Ok(outcome) => {
@@ -74,29 +75,25 @@ async fn app_main() -> anyhow::Result<()> {
                                         }
                                     }
                                     for rs in &outcome.log {
-                                        sqlx::query!(
-                                            "INSERT INTO pipeline_run_steps (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, merge_to, result) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
-                                            run_id,
-                                            rs.seq_no as i32,
-                                            rs.step_id,
-                                            rs.prompt_id,
-                                            rs.prompt_type.to_string(),
-                                            rs.decision_key,
-                                            rs.route,
-                                            rs.merge_to,
-                                            rs.result
-                                        )
+                                        sqlx::query("INSERT INTO pipeline_run_steps (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, merge_to, result) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+                                            .bind(run_id)
+                                            .bind(rs.seq_no as i32)
+                                            .bind(&rs.step_id)
+                                            .bind(rs.prompt_id)
+                                            .bind(rs.prompt_type.to_string())
+                                            .bind(&rs.decision_key)
+                                            .bind(&rs.route)
+                                            .bind(&rs.merge_to)
+                                            .bind(&rs.result)
+                                            .execute(&pool)
+                                            .await?;
+                                    }
+                                    sqlx::query("UPDATE pipeline_runs SET finished_at = now(), overall_score = $2, extracted = $3 WHERE id = $1")
+                                        .bind(run_id)
+                                        .bind(overall)
+                                        .bind(serde_json::to_value(&extracted)?)
                                         .execute(&pool)
                                         .await?;
-                                    }
-                                    sqlx::query!(
-                                        "UPDATE pipeline_runs SET finished_at = now(), overall_score = $2, extracted = $3 WHERE id = $1",
-                                        run_id,
-                                        overall,
-                                        serde_json::to_value(&extracted)?
-                                    )
-                                    .execute(&pool)
-                                    .await?;
                                     let result = PipelineRunResult {
                                         pdf_id: evt.pdf_id,
                                         pipeline_id: evt.pipeline_id,

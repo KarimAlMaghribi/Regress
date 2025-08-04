@@ -1,8 +1,7 @@
-use rhai;
 use serde_json::Value;
 use shared::{
     dto::{PipelineConfig, PromptResult, PromptType, RunStep, ScoringResult, TextPosition},
-    openai_client::{self, OpenAiAnswer},
+    openai_client::{self},
 };
 use std::collections::HashMap;
 
@@ -91,7 +90,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     seq_no: seq,
                     step_id: step.step.id.clone(),
                     prompt_id: step.step.prompt_id,
-                    prompt_type: step.step.step_type,
+                    prompt_type: step.step.step_type.clone(),
                     decision_key: None,
                     route: step.step.route.clone(),
                     merge_to: step.step.merge_to.clone(),
@@ -123,7 +122,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     seq_no: seq,
                     step_id: step.step.id.clone(),
                     prompt_id: step.step.prompt_id,
-                    prompt_type: step.step.step_type,
+                    prompt_type: step.step.step_type.clone(),
                     decision_key: None,
                     route: step.step.route.clone(),
                     merge_to: step.step.merge_to.clone(),
@@ -169,7 +168,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                                     seq_no: seq,
                                     step_id: step.step.id.clone(),
                                     prompt_id: step.step.prompt_id,
-                                    prompt_type: step.step.step_type,
+                                    prompt_type: step.step.step_type.clone(),
                                     decision_key: decision_key.clone(),
                                     route: step.step.route.clone(),
                                     merge_to: step.step.merge_to.clone(),
@@ -198,7 +197,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             seq_no: seq,
                             step_id: step.step.id.clone(),
                             prompt_id: step.step.prompt_id,
-                            prompt_type: step.step.step_type,
+                            prompt_type: step.step.step_type.clone(),
                             decision_key: decision_key,
                             route: step.step.route.clone(),
                             merge_to: step.step.merge_to.clone(),
@@ -225,7 +224,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             seq_no: seq,
                             step_id: step.step.id.clone(),
                             prompt_id: step.step.prompt_id,
-                            prompt_type: step.step.step_type,
+                            prompt_type: step.step.step_type.clone(),
                             decision_key: None,
                             route: step.step.route.clone(),
                             merge_to: step.step.merge_to.clone(),
