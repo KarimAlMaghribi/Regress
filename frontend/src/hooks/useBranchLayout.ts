@@ -27,20 +27,40 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
     return counters.slice(0, depth + 1).join('.');
   };
 
-  const processBranchChain = (startIdx: number, depth: number, branchKey: string, cKey: string) => {
+  const processBranchChain = (
+    startIdx: number,
+    depth: number,
+    branchKey: string,
+    cKey: string,
+    firstIdx: string
+  ) => {
     let idx = startIdx;
+    let first = true;
+    let popped = false;
     while (idx < steps.length) {
       const cur = steps[idx];
       if (seen.has(cur.id)) break;
-      processStep(idx, depth, branchKey, cKey);
-      if (cur.mergeTo) break;
+      processStep(idx, depth, branchKey, cKey, first ? firstIdx : undefined);
+      first = false;
+      if (cur.mergeTo) {
+        counters.pop();
+        popped = true;
+        break;
+      }
       idx += 1;
     }
+    if (!popped) counters.pop();
   };
 
-  const processStep = (idx: number, depth: number, branchKey?: string, cKey?: string) => {
+  const processStep = (
+    idx: number,
+    depth: number,
+    branchKey?: string,
+    cKey?: string,
+    presetIdx?: string
+  ) => {
     const s = steps[idx];
-    const rowIdx = nextIndex(depth);
+    const rowIdx = presetIdx ?? nextIndex(depth);
     rows.push({ step: s, depth, branchKey, isBranchEnd: !!s.mergeTo, rowIdx, cKey });
     seen.add(s.id);
 
@@ -50,7 +70,7 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
         .forEach(([key, targetId]) => {
           const subKey = `${s.id}:${key}`;
           counters.push(0);
-          const headerIdx = counters.slice(0, depth + 1).join('.');
+          const headerIdx = nextIndex(depth + 1);
           rows.push({
             step: s,
             depth: depth + 1,
@@ -61,9 +81,10 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
           });
           const startIdx = id2idx[targetId];
           if (startIdx !== undefined) {
-            processBranchChain(startIdx, depth + 1, key, subKey);
+            processBranchChain(startIdx, depth + 1, key, subKey, headerIdx);
+          } else {
+            counters.pop();
           }
-          counters.pop();
         });
     }
   };
