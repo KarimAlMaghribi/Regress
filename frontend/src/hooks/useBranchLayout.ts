@@ -50,7 +50,7 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
         .forEach(([key, targetId]) => {
           const subKey = `${s.id}:${key}`;
           counters.push(0);
-          const headerIdx = nextIndex(depth + 1);
+          const headerIdx = counters.slice(0, depth + 1).join('.');
           rows.push({
             step: s,
             depth: depth + 1,
