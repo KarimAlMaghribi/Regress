@@ -1,0 +1,64 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT seq_no        as \"seq_no!\",\n                  step_id       as \"step_id!\",\n                  prompt_id     as \"prompt_id!\",\n                  prompt_type   as \"prompt_type!\",\n                  decision_key,\n                  route,\n                  merge_to,\n                  result        as \"result!\"\n           FROM pipeline_run_steps WHERE run_id=$1 ORDER BY seq_no",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "seq_no!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "step_id!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "prompt_id!",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 3,
+        "name": "prompt_type!",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "decision_key",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "route",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "merge_to",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "result!",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "43acf8c9d13db823c1f8d7c8d8f27d7d209153d4d59180e9dfbe1c21a9255f26"
+}

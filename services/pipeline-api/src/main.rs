@@ -2,7 +2,7 @@ use actix_cors::Cors;
 use actix_web::web::Json;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
-use shared::dto::{PipelineConfig, PipelineRunResult, PipelineStep, PromptType, RunStep};
+use shared::dto::{PipelineConfig, PipelineRunResult, PipelineStep, PromptType, RunStep, PdfUploaded};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::{ClientConfig, Message};
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -124,14 +124,37 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
         Ok(m) => m,
         Err(_) => return HttpResponse::NotFound().finish(),
     };
-    let steps = sqlx::query_as!(
-        RunStep,
-        "SELECT seq_no, step_id, prompt_id, prompt_type AS \"prompt_type: PromptType\", decision_key, route, merge_to, result FROM pipeline_run_steps WHERE run_id=$1 ORDER BY seq_no",
+    let step_rows = sqlx::query!(
+        r#"SELECT seq_no        as "seq_no!",
+                  step_id       as "step_id!",
+                  prompt_id     as "prompt_id!",
+                  prompt_type   as "prompt_type!",
+                  decision_key,
+                  route,
+                  merge_to,
+                  result        as "result!"
+           FROM pipeline_run_steps WHERE run_id=$1 ORDER BY seq_no"#,
         id
     )
     .fetch_all(&data.pool)
     .await
     .unwrap_or_default();
+    let steps: Vec<RunStep> = step_rows
+        .into_iter()
+        .map(|row| RunStep {
+            seq_no: row.seq_no as u32,
+            step_id: row.step_id,
+            prompt_id: row.prompt_id,
+            prompt_type: row
+                .prompt_type
+                .parse()
+                .unwrap_or(PromptType::ExtractionPrompt),
+            decision_key: row.decision_key,
+            route: row.route,
+            merge_to: row.merge_to,
+            result: row.result,
+        })
+        .collect();
     let extracted_map = meta
         .extracted
         .and_then(|v| v.as_object().cloned())
