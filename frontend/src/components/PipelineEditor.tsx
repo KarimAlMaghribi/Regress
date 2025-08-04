@@ -99,14 +99,15 @@ export default function PipelineEditor() {
   const handleRouteChange = async (stepId: string, newRoute: string) => {
     try {
       await updateStep(stepId, { route: newRoute || undefined });
-      const updated = useBranchLayout(usePipelineStore.getState().steps);
-      const indices = updated
-        .map((r, i) => ({ r, i }))
-        .filter(x => x.r.branchKey === newRoute);
-      const targetPos = indices.length
-        ? Math.max(...indices.map(x => x.i)) + 1
-        : updated.findIndex(x => x.step.id === stepId);
-      const ids = usePipelineStore.getState().steps.map(s => s.id);
+      const allSteps = usePipelineStore.getState().steps;
+      const rows = useBranchLayout(allSteps);
+      const branchIds = rows
+        .filter(r => r.branchKey === newRoute && !r.isBranchHeader)
+        .map(r => r.step.id);
+      const targetPos = branchIds.length
+        ? allSteps.findIndex(s => s.id === branchIds[branchIds.length - 1]) + 1
+        : allSteps.findIndex(s => s.id === stepId);
+      const ids = allSteps.map(s => s.id);
       const from = ids.indexOf(stepId);
       ids.splice(from, 1);
       ids.splice(targetPos, 0, stepId);
@@ -224,13 +225,13 @@ export default function PipelineEditor() {
                           <TableRow>
                             <TableCell colSpan={10} sx={{ p: 0 }}>
                               <Box display="flex" width="100%">
-                                {['yesKey', 'noKey', 'mergeKey'].map(keyName => (
+                                {[r.step.yesKey, r.step.noKey, r.step.mergeKey].map((label, i) => (
                                   <Box
-                                    key={keyName}
+                                    key={i}
                                     flex={1}
                                     height={16}
                                     sx={{
-                                      backgroundColor: getRouteColor(r.step.id),
+                                      backgroundColor: getRouteColor(r.step.route || ''),
                                       display: 'flex',
                                       alignItems: 'center',
                                       justifyContent: 'center',
@@ -238,8 +239,7 @@ export default function PipelineEditor() {
                                       fontSize: '0.75rem'
                                     }}
                                   >
-                                    {/* @ts-ignore */}
-                                    {r.step[keyName]}
+                                    {label}
                                   </Box>
                                 ))}
                               </Box>
@@ -268,10 +268,13 @@ export default function PipelineEditor() {
             )}
               {edit.type!=='DecisionPrompt' && (
                 <>
-                  <Select fullWidth value={edit.route||''}
-                          onChange={e=>updateStep(edit.id,{route:e.target.value||undefined}).catch(er=>setError(String(er)))}>
+                  <Select
+                    fullWidth
+                    value={edit.route || ''}
+                    onChange={e => handleRouteChange(edit.id, e.target.value as string)}
+                  >
                     <MenuItem value=""><em>none</em></MenuItem>
-                    {routeKeysUpTo(steps.findIndex(s=>s.id===edit.id)).map(k => (
+                    {routeKeysUpTo(steps.findIndex(s => s.id === edit.id)).map(k => (
                       <MenuItem key={k} value={k}>{k}</MenuItem>
                     ))}
                   </Select>
