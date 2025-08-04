@@ -1,7 +1,7 @@
 use rhai;
 use serde_json::Value;
 use shared::{
-    dto::{PipelineConfig, PromptResult, PromptType, ScoringResult, TextPosition},
+    dto::{PipelineConfig, PromptResult, PromptType, RunStep, ScoringResult, TextPosition},
     openai_client::{self, OpenAiAnswer},
 };
 use std::collections::HashMap;
@@ -12,6 +12,7 @@ pub struct RunOutcome {
     pub extraction: Vec<PromptResult>,
     pub scoring: Vec<ScoringResult>,
     pub decision: Vec<PromptResult>,
+    pub log: Vec<RunStep>,
 }
 
 pub fn compute_overall_score(results: &[ScoringResult]) -> Option<f32> {
@@ -31,6 +32,8 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
     let mut extraction = Vec::new();
     let mut scoring = Vec::new();
     let mut decision = Vec::new();
+    let mut run_log: Vec<RunStep> = Vec::new();
+    let mut seq: u32 = 1;
     let mut hops = 0usize;
     let mut idx = 0usize;
     while let Some(step) = exec.get(idx) {
@@ -55,38 +58,46 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     .await
                     .unwrap_or_default();
                 let input = pdf_text.to_string();
-                match openai_client::extract(step.step.prompt_id, &input).await {
-                    Ok(ans) => {
-                        extraction.push(PromptResult {
-                            prompt_id: step.step.prompt_id,
-                            prompt_type: PromptType::ExtractionPrompt,
-                            prompt_text,
-                            boolean: None,
-                            value: ans.value,
-                            weight: None,
-                            route: None,
-                            json_key: None,
-                            source: ans.source,
-                            error: None,
-                            openai_raw: ans.raw,
-                        });
-                    }
-                    Err(e) => {
-                        extraction.push(PromptResult {
-                            prompt_id: step.step.prompt_id,
-                            prompt_type: PromptType::ExtractionPrompt,
-                            prompt_text,
-                            boolean: None,
-                            value: None,
-                            weight: None,
-                            route: None,
-                            json_key: None,
-                            source: None,
-                            error: Some(e.to_string()),
-                            openai_raw: String::new(),
-                        });
-                    }
-                }
+                let pr = match openai_client::extract(step.step.prompt_id, &input).await {
+                    Ok(ans) => PromptResult {
+                        prompt_id: step.step.prompt_id,
+                        prompt_type: PromptType::ExtractionPrompt,
+                        prompt_text,
+                        boolean: None,
+                        value: ans.value,
+                        weight: None,
+                        route: None,
+                        json_key: None,
+                        source: ans.source,
+                        error: None,
+                        openai_raw: ans.raw,
+                    },
+                    Err(e) => PromptResult {
+                        prompt_id: step.step.prompt_id,
+                        prompt_type: PromptType::ExtractionPrompt,
+                        prompt_text,
+                        boolean: None,
+                        value: None,
+                        weight: None,
+                        route: None,
+                        json_key: None,
+                        source: None,
+                        error: Some(e.to_string()),
+                        openai_raw: String::new(),
+                    },
+                };
+                extraction.push(pr.clone());
+                run_log.push(RunStep {
+                    seq_no: seq,
+                    step_id: step.step.id.clone(),
+                    prompt_id: step.step.prompt_id,
+                    prompt_type: step.step.step_type,
+                    decision_key: None,
+                    route: step.step.route.clone(),
+                    merge_to: step.step.merge_to.clone(),
+                    result: serde_json::to_value(&pr)?,
+                });
+                seq += 1;
                 idx = step.next_idx.unwrap_or(exec.len());
             }
             PromptType::ScoringPrompt => {
@@ -94,23 +105,31 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     .await
                     .unwrap_or_default();
                 let res = openai_client::score(step.step.prompt_id, pdf_text).await;
-                match res {
-                    Ok(mut sr) => {
-                        scoring.push(sr);
-                    }
-                    Err(e) => {
-                        scoring.push(ScoringResult {
-                            prompt_id: step.step.prompt_id,
-                            result: false,
-                            source: TextPosition {
-                                page: 0,
-                                bbox: [0.0, 0.0, 0.0, 0.0],
-                                quote: Some(String::new()),
-                            },
-                            explanation: e.to_string(),
-                        });
-                    }
-                }
+                let sr = match res {
+                    Ok(sr) => sr,
+                    Err(e) => ScoringResult {
+                        prompt_id: step.step.prompt_id,
+                        result: false,
+                        source: TextPosition {
+                            page: 0,
+                            bbox: [0.0, 0.0, 0.0, 0.0],
+                            quote: Some(String::new()),
+                        },
+                        explanation: e.to_string(),
+                    },
+                };
+                scoring.push(sr.clone());
+                run_log.push(RunStep {
+                    seq_no: seq,
+                    step_id: step.step.id.clone(),
+                    prompt_id: step.step.prompt_id,
+                    prompt_type: step.step.step_type,
+                    decision_key: None,
+                    route: step.step.route.clone(),
+                    merge_to: step.step.merge_to.clone(),
+                    result: serde_json::to_value(&sr)?,
+                });
+                seq += 1;
                 idx = step.next_idx.unwrap_or(exec.len());
             }
             PromptType::DecisionPrompt => {
@@ -124,16 +143,44 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                         if let Some(r) = &ans.route {
                             state.insert("route".into(), Value::String(r.clone()));
                         }
-                        let decision_key = ans.route.clone().or_else(|| ans.boolean.map(|b| b.to_string()))
+                        let decision_key = ans
+                            .route
+                            .clone()
+                            .or_else(|| ans.boolean.map(|b| b.to_string()))
                             .or_else(|| decision_val.as_str().map(|s| s.to_string()));
                         if let (Some(key), Some(map)) = (decision_key.clone(), &step.targets_idx) {
                             if let Some(&jump) = map.get(&key) {
                                 idx = jump;
+                                let pr = PromptResult {
+                                    prompt_id: step.step.prompt_id,
+                                    prompt_type: PromptType::DecisionPrompt,
+                                    prompt_text,
+                                    boolean: ans.boolean,
+                                    value: ans.value.clone(),
+                                    weight: None,
+                                    route: ans.route.clone(),
+                                    json_key: None,
+                                    source: ans.source.clone(),
+                                    error: None,
+                                    openai_raw: ans.raw.clone(),
+                                };
+                                decision.push(pr.clone());
+                                run_log.push(RunStep {
+                                    seq_no: seq,
+                                    step_id: step.step.id.clone(),
+                                    prompt_id: step.step.prompt_id,
+                                    prompt_type: step.step.step_type,
+                                    decision_key: decision_key.clone(),
+                                    route: step.step.route.clone(),
+                                    merge_to: step.step.merge_to.clone(),
+                                    result: serde_json::to_value(&pr)?,
+                                });
+                                seq += 1;
                                 continue;
                             }
                         }
                         idx = step.next_idx.unwrap_or(exec.len());
-                        decision.push(PromptResult {
+                        let pr = PromptResult {
                             prompt_id: step.step.prompt_id,
                             prompt_type: PromptType::DecisionPrompt,
                             prompt_text,
@@ -145,10 +192,22 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             source: ans.source,
                             error: None,
                             openai_raw: ans.raw,
+                        };
+                        decision.push(pr.clone());
+                        run_log.push(RunStep {
+                            seq_no: seq,
+                            step_id: step.step.id.clone(),
+                            prompt_id: step.step.prompt_id,
+                            prompt_type: step.step.step_type,
+                            decision_key: decision_key,
+                            route: step.step.route.clone(),
+                            merge_to: step.step.merge_to.clone(),
+                            result: serde_json::to_value(&pr)?,
                         });
+                        seq += 1;
                     }
                     Err(e) => {
-                        decision.push(PromptResult {
+                        let pr = PromptResult {
                             prompt_id: step.step.prompt_id,
                             prompt_type: PromptType::DecisionPrompt,
                             prompt_text,
@@ -160,7 +219,19 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             source: None,
                             error: Some(e.to_string()),
                             openai_raw: String::new(),
+                        };
+                        decision.push(pr.clone());
+                        run_log.push(RunStep {
+                            seq_no: seq,
+                            step_id: step.step.id.clone(),
+                            prompt_id: step.step.prompt_id,
+                            prompt_type: step.step.step_type,
+                            decision_key: None,
+                            route: step.step.route.clone(),
+                            merge_to: step.step.merge_to.clone(),
+                            result: serde_json::to_value(&pr)?,
                         });
+                        seq += 1;
                         idx = step.next_idx.unwrap_or(exec.len());
                     }
                 }
@@ -174,6 +245,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
         extraction,
         scoring,
         decision,
+        log: run_log,
     })
 }
 

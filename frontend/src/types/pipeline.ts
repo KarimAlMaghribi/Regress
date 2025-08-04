@@ -33,6 +33,7 @@ export interface PipelineRunResult {
   extraction: PromptResult[];
   scoring: ScoringResult[];
   decision: PromptResult[];
+  log?: RunStep[];
 }
 
 export interface PipelineStep {
@@ -42,4 +43,10 @@ export interface PipelineStep {
   targets?: Record<string, string>;
   merge_to?: string;
   route?: string;
+}
+
+export interface RunStep {
+  seq_no:number; step_id:string; prompt_id:number; prompt_type:string;
+  decision_key?:string; route?:string; merge_to?:string; result:any;
+  depth?:number; color?:string;
 }

@@ -89,6 +89,7 @@ const renderList = (items: Entry[], finished: boolean) => (
           <TableCell>Name der PDF</TableCell>
           <TableCell>Prompts</TableCell>
           {finished && <TableCell>Summary</TableCell>}
+          {finished && <TableCell>Route</TableCell>}
           {finished && <TableCell align="right">Ergebnis</TableCell>}
         </TableRow>
       </TableHead>
@@ -100,8 +101,12 @@ const renderList = (items: Entry[], finished: boolean) => (
             {e.prompts.map((p, i) => (
               <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
             ))}
+            {finished && e.result?.log?.filter(l=>l.prompt_type==='DecisionPrompt').map(d => (
+              <Chip key={d.seq_no} label={`${d.seq_no}: ${d.decision_key}`} size="small" sx={{ ml:0.5 }} />
+            ))}
           </TableCell>
           {finished && <TableCell>{e.result?.overallScore?.toFixed(2) ?? ''}</TableCell>}
+          {finished && <TableCell>{e.result?.log?.map(l=>l.route??'root').join(' › ')}</TableCell>}
             {finished && (
               <TableCell align="right">
                 <Button
