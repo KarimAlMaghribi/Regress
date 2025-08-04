@@ -18,12 +18,16 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
   const rows: LayoutRow[] = [];
   const id2idx = Object.fromEntries(steps.map((s, i) => [s.id, i]));
   const seen = new Set<string>();
-  const counters: number[] = [0];
+  const counters: number[] = [];
 
   const nextIndex = (depth: number): string => {
     while (counters.length <= depth) counters.push(0);
     counters[depth]++;
-    for (let i = depth + 1; i < counters.length; i++) counters[i] = 0;
+    counters.length = depth + 1; // drop deeper levels
+    return counters.slice(0, depth + 1).join('.');
+  };
+  const currentIndex = (depth: number): string => {
+    while (counters.length <= depth) counters.push(0);
     return counters.slice(0, depth + 1).join('.');
   };
 
@@ -57,14 +61,13 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
         .filter(([, targetId]) => targetId)
         .forEach(([key, targetId]) => {
           const subKey = `${s.id}:${key}`;
-          counters.push(0);
-          const headerIdx = nextIndex(depth + 1);
+          counters.push(0); // new depth level for this branch
           rows.push({
             step: s,
             depth: depth + 1,
             branchKey: key,
             isBranchHeader: true,
-            rowIdx: headerIdx,
+            rowIdx: currentIndex(depth), // same index as decision step
             cKey: subKey,
           });
           const startIdx = id2idx[targetId];

@@ -4,7 +4,6 @@ import App from './App';
 import { LocalizationProvider } from '@mui/x-date-pickers';
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
 import './index.css';
-import './styles/route-colors.css';
 
 const root = createRoot(document.getElementById('root')!);
 root.render(

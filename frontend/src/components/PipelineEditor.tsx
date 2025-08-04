@@ -100,17 +100,21 @@ export default function PipelineEditor() {
   const handleRouteChange = async (stepId: string, newRoute: string) => {
     try {
       await updateStep(stepId, { route: newRoute || undefined });
-      const updated = useBranchLayout(usePipelineStore.getState().steps);
-      const indices = updated
-        .map((r, i) => ({ r, i }))
-        .filter(x => x.r.branchKey === newRoute);
-      const targetPos = indices.length
-        ? Math.max(...indices.map(x => x.i)) + 1
-        : updated.findIndex(x => x.step.id === stepId);
-      const ids = usePipelineStore.getState().steps.map(s => s.id);
+      const allSteps = usePipelineStore.getState().steps;
+      const layout = useBranchLayout(allSteps);
+      const ids = allSteps.map(s => s.id);
       const from = ids.indexOf(stepId);
       ids.splice(from, 1);
-      ids.splice(targetPos, 0, stepId);
+      const routeRows = layout.filter(r =>
+        !r.isBranchHeader && (r.branchKey ?? '') === newRoute && r.step.id !== stepId
+      );
+      if (routeRows.length) {
+        const lastRow = routeRows[routeRows.length - 1];
+        const lastIdx = allSteps.findIndex(s => s.id === lastRow.step.id);
+        ids.splice(lastIdx + 1, 0, stepId);
+      } else {
+        ids.push(stepId);
+      }
       await reorder(ids);
     } catch (err) {
       setError(String(err));
@@ -224,28 +228,11 @@ export default function PipelineEditor() {
                         {r.step.type === 'DecisionPrompt' && (
                           <TableRow>
                             <TableCell colSpan={totalCols} sx={{ p: 0 }}>
-                              <Box display="flex">
-                                {['yesKey', 'noKey', 'mergeKey'].map(keyName => {
-                                  const key = (r.step as any)[keyName] as string | undefined;
-                                  return (
-                                    <Box
-                                      key={keyName}
-                                      flex={1}
-                                      height={16}
-                                      sx={{
-                                        backgroundColor: getRouteColor(key || keyName),
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        justifyContent: 'center',
-                                        color: '#fff',
-                                        fontSize: '0.75rem',
-                                      }}
-                                    >
-                                      {key || keyName.replace('Key', '').toUpperCase()}
-                                    </Box>
-                                  );
-                                })}
-                              </Box>
+                              <Box
+                                width="100%"
+                                height="4px"
+                                sx={{ backgroundColor: getRouteColor(r.step.route || '') }}
+                              />
                             </TableCell>
                           </TableRow>
                         )}
