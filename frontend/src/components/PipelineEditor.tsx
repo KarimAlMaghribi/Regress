@@ -96,6 +96,26 @@ export default function PipelineEditor() {
     reorder(order).catch(e => setError(String(e)));
   };
 
+  const handleRouteChange = async (stepId: string, newRoute: string) => {
+    try {
+      await updateStep(stepId, { route: newRoute || undefined });
+      const updated = useBranchLayout(usePipelineStore.getState().steps);
+      const indices = updated
+        .map((r, i) => ({ r, i }))
+        .filter(x => x.r.branchKey === newRoute);
+      const targetPos = indices.length
+        ? Math.max(...indices.map(x => x.i)) + 1
+        : updated.findIndex(x => x.step.id === stepId);
+      const ids = usePipelineStore.getState().steps.map(s => s.id);
+      const from = ids.indexOf(stepId);
+      ids.splice(from, 1);
+      ids.splice(targetPos, 0, stepId);
+      await reorder(ids);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
   useEffect(() => {
     if (draft?.type) fetchPrompts(draft.type);
   }, [draft?.type]);
@@ -175,8 +195,9 @@ export default function PipelineEditor() {
                           <TableCell>{r.step.type==='DecisionPrompt' ? r.step.mergeKey : '—'}</TableCell>
                           <TableCell>
                               {r.step.type==='DecisionPrompt' ? '—' : (
-                                <Select value={r.step.route||''}
-                                        onChange={e=>updateStep(r.step.id,{ route:e.target.value||undefined }).catch(()=>{})}>
+                                <Select
+                                        value={r.step.route||''}
+                                        onChange={e => handleRouteChange(r.step.id, e.target.value as string)}>
                                   <MenuItem value=""><em>none</em></MenuItem>
                                   {routeKeysUpTo(idx).map(k => (
                                     <MenuItem key={k} value={k}>{k}</MenuItem>
