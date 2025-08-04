@@ -7,7 +7,7 @@ export interface LayoutRow {
   branchKey?: string;          // e.g. 'true'
   isBranchHeader?: boolean;
   isBranchEnd?: boolean;
-  rowIdx: number;             /* 1‑based visual row number */
+  rowIdx: string;             /* hierarchical row number e.g. 2.1 */
   cKey?: string;              /* composite key decisionID+route */
 }
 
@@ -16,35 +16,62 @@ export interface LayoutRow {
  */
 export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
   const rows: LayoutRow[] = [];
-  const id2idx = Object.fromEntries(steps.map((s,i)=>[s.id,i]));
-  let visual = 0;
+  const id2idx = Object.fromEntries(steps.map((s, i) => [s.id, i]));
+  const seen = new Set<string>();
+  const counters: number[] = [0];
 
-  steps.forEach((s) => {
+  const nextIndex = (depth: number): string => {
+    while (counters.length <= depth) counters.push(0);
+    counters[depth]++;
+    for (let i = depth + 1; i < counters.length; i++) counters[i] = 0;
+    return counters.slice(0, depth + 1).join('.');
+  };
+
+  const processBranchChain = (startIdx: number, depth: number, branchKey: string, cKey: string) => {
+    let idx = startIdx;
+    while (idx < steps.length) {
+      const cur = steps[idx];
+      if (seen.has(cur.id)) break;
+      processStep(idx, depth, branchKey, cKey);
+      if (cur.mergeTo) break;
+      idx += 1;
+    }
+  };
+
+  const processStep = (idx: number, depth: number, branchKey?: string, cKey?: string) => {
+    const s = steps[idx];
+    const rowIdx = nextIndex(depth);
+    rows.push({ step: s, depth, branchKey, isBranchEnd: !!s.mergeTo, rowIdx, cKey });
+    seen.add(s.id);
+
     if (s.targets) {
-      // Decision row itself
-      rows.push({ step:s, depth:0, rowIdx:++visual });
-
       Object.entries(s.targets)
         .filter(([, targetId]) => targetId)
         .forEach(([key, targetId]) => {
-          const cKey = `${s.id}:${key}`;
-          rows.push({ step:s, depth:1, branchKey:key, isBranchHeader:true, rowIdx:++visual, cKey });
-          let idx = id2idx[targetId];
-          while (idx !== undefined) {
-            const cur = steps[idx];
-            rows.push({
-              step:cur, depth:1, branchKey:key, isBranchEnd:!!cur.mergeTo,
-              rowIdx:++visual, cKey
-            });
-            if (cur.mergeTo) break;
-            idx += 1;
-            if (idx >= steps.length) break;           /* end of list */
-            if (idx in id2idx && steps[idx].targets) break;  /* nested decision */
+          const subKey = `${s.id}:${key}`;
+          counters.push(0);
+          const headerIdx = nextIndex(depth + 1);
+          rows.push({
+            step: s,
+            depth: depth + 1,
+            branchKey: key,
+            isBranchHeader: true,
+            rowIdx: headerIdx,
+            cKey: subKey,
+          });
+          const startIdx = id2idx[targetId];
+          if (startIdx !== undefined) {
+            processBranchChain(startIdx, depth + 1, key, subKey);
           }
+          counters.pop();
         });
-    } else if (!rows.find(r=>r.step.id===s.id)) {
-      rows.push({ step:s, depth:0, rowIdx:++visual });
     }
-  });
+  };
+
+  for (let i = 0; i < steps.length; i++) {
+    if (seen.has(steps[i].id)) continue;
+    processStep(i, 0);
+  }
+
   return rows;
 }
