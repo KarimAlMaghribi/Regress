@@ -62,6 +62,18 @@ pub struct PromptResult {
     pub openai_raw: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RunStep {
+    pub seq_no: u32,
+    pub step_id: String,
+    pub prompt_id: i32,
+    pub prompt_type: PromptType,
+    pub decision_key: Option<String>,
+    pub route: Option<String>,
+    pub merge_to: Option<String>,
+    pub result: serde_json::Value,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PipelineRunResult {
     pub pdf_id: i32,
@@ -71,6 +83,7 @@ pub struct PipelineRunResult {
     pub extraction: Vec<PromptResult>,
     pub scoring: Vec<ScoringResult>,
     pub decision: Vec<PromptResult>,
+    pub log: Vec<RunStep>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

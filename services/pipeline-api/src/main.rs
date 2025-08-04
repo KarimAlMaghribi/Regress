@@ -2,7 +2,7 @@ use actix_cors::Cors;
 use actix_web::web::Json;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
-use shared::dto::{PipelineConfig, PipelineStep, PdfUploaded, PipelineRunResult};
+use shared::dto::{PipelineConfig, PipelineRunResult, PipelineStep, PromptType, RunStep};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::{ClientConfig, Message};
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -101,6 +101,54 @@ async fn list_pipelines(data: web::Data<AppState>) -> impl Responder {
             HttpResponse::InternalServerError().finish()
         }
     }
+}
+
+#[derive(sqlx::FromRow)]
+struct RunMeta {
+    pipeline_id: uuid::Uuid,
+    pdf_id: i32,
+    overall_score: Option<f32>,
+    extracted: Option<serde_json::Value>,
+}
+
+async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl Responder {
+    let id = path.into_inner();
+    let meta = match sqlx::query_as!(
+        RunMeta,
+        "SELECT pipeline_id, pdf_id, overall_score, extracted FROM pipeline_runs WHERE id=$1",
+        id
+    )
+    .fetch_one(&data.pool)
+    .await
+    {
+        Ok(m) => m,
+        Err(_) => return HttpResponse::NotFound().finish(),
+    };
+    let steps = sqlx::query_as!(
+        RunStep,
+        "SELECT seq_no, step_id, prompt_id, prompt_type AS \"prompt_type: PromptType\", decision_key, route, merge_to, result FROM pipeline_run_steps WHERE run_id=$1 ORDER BY seq_no",
+        id
+    )
+    .fetch_all(&data.pool)
+    .await
+    .unwrap_or_default();
+    let extracted_map = meta
+        .extracted
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .collect();
+    let res = PipelineRunResult {
+        pdf_id: meta.pdf_id,
+        pipeline_id: meta.pipeline_id,
+        overall_score: meta.overall_score,
+        extracted: extracted_map,
+        extraction: vec![],
+        scoring: vec![],
+        decision: vec![],
+        log: steps,
+    };
+    HttpResponse::Ok().json(res)
 }
 
 async fn create_pipeline(
@@ -433,6 +481,7 @@ async fn main() -> std::io::Result<()> {
                     .route(web::patch().to(update_step))
                     .route(web::delete().to(delete_step)),
             )
+            .route("/runs/{id}", web::get().to(get_run))
     })
     .bind(("0.0.0.0", 8084))?
     .run()

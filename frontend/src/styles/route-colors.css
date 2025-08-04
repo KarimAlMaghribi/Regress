@@ -1,0 +1,4 @@
+:root {
+   --route-0:#FDE047; --route-1:#60A5FA; --route-2:#FB923C; --route-3:#91CF50;
+}
+.step{padding:.5rem .75rem;border-radius:.25rem;transition:background-color .2s}

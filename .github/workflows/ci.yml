@@ -7,62 +7,15 @@ on:
     branches: [ main ]
 
 jobs:
-  build-windows:
-    runs-on: windows-latest
-    env:
-      # Klone vcpkg ins Repo-Verzeichnis
-      VCPKG_ROOT: ${{ github.workspace }}\\vcpkg
-      # Triplet für Leptonica
-      VCPKG_DEFAULT_TRIPLET: x64-windows-static-md
-
+  node:
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
-
-      - name: Cache Cargo registry & git
-        uses: actions/cache@v3
-        with:
-          path: |
-            C:\Users\runneradmin\.cargo\registry
-            C:\Users\runneradmin\.cargo\git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-cargo-
-
-      - name: Cache vcpkg installed packages
-        uses: actions/cache@v3
-        with:
-          path: ${{ env.VCPKG_ROOT }}\installed
-          key: ${{ runner.os }}-vcpkg-${{ env.VCPKG_DEFAULT_TRIPLET }}
-          restore-keys: ${{ runner.os }}-vcpkg-
-
-      - name: Install Rust toolchain
-        uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          profile: minimal
-          override: true
-
-      - name: Setup vcpkg
-        shell: pwsh
-        run: |
-          git clone https://github.com/microsoft/vcpkg.git $Env:VCPKG_ROOT
-          Push-Location $Env:VCPKG_ROOT
-          .\bootstrap-vcpkg.bat
-          .\vcpkg integrate install
-          Pop-Location
-
-      - name: Install dependencies via vcpkg
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          & "$Env:VCPKG_ROOT\vcpkg.exe" install "leptonica:$Env:VCPKG_DEFAULT_TRIPLET" "tesseract:$Env:VCPKG_DEFAULT_TRIPLET" --recurse
-
-      - name: Build workspace
-        shell: pwsh
-        run: |
-          cargo clean
-          cargo build --workspace --release --verbose
-
-      - name: Run tests
-        shell: pwsh
-        run: cargo test --workspace --verbose
+      - uses: actions/checkout@v4
+      - run: npm ci --prefix frontend
+      - run: npm test --prefix frontend
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --workspace --all-features
+      - run: sqlx migrate run

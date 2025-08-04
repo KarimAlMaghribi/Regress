@@ -15,7 +15,8 @@ import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTheme } from '@mui/material/styles';
-import { PipelineRunResult, PromptResult, ScoringResult } from '../types/pipeline';
+import { PipelineRunResult } from '../types/pipeline';
+import { enrichRunLog } from '../utils/enrichRunLog';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -119,6 +120,12 @@ export default function History() {
       valueGetter: p => p.row.result?.overallScore?.toFixed(2) ?? '—',
     },
     {
+      field: 'route',
+      headerName: 'Route',
+      flex: 1,
+      valueGetter: p => p.row.result?.log?.map((l:any)=>l.route??'root').join(' › ') || '',
+    },
+    {
       field: 'actions',
       headerName: '',
       sortable: false,
@@ -180,6 +187,14 @@ export default function History() {
                 <PromptDetailsTable data={selected.result ? (selected.result as any)[cat] : []} />
               </Box>
             ))}
+            <Box sx={{ mt:2 }}>
+              <Typography variant="subtitle2">Route-Log</Typography>
+              {enrichRunLog(selected.result?.log ?? []).map(row => (
+                <div key={row.seq_no} style={{marginLeft:`calc(${row.depth}*1rem)`,backgroundColor:row.color}}>
+                  #{row.seq_no} {row.prompt_type} | {row.decision_key ?? '—'}
+                </div>
+              ))}
+            </Box>
 
           <iframe src={selected.pdfUrl} width="100%" height="400" title="pdf" />
           </Box>
