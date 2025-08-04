@@ -32,6 +32,40 @@ async fn app_main() -> anyhow::Result<()> {
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
     let pool = PgPool::connect(&db_url).await?;
 
+    // Ensure required tables exist. This avoids failures when the database
+    // starts empty and no migrations have been applied yet.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pipeline_runs (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            pipeline_id UUID NOT NULL,
+            pdf_id INT NOT NULL,
+            started_at TIMESTAMPTZ DEFAULT now(),
+            finished_at TIMESTAMPTZ,
+            overall_score REAL,
+            extracted JSONB
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pipeline_run_steps (
+            run_id UUID REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+            seq_no INT,
+            step_id TEXT,
+            prompt_id INT,
+            prompt_type TEXT,
+            decision_key TEXT,
+            route TEXT,
+            merge_to TEXT,
+            result JSONB,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            PRIMARY KEY (run_id, seq_no)
+        )",
+    )
+    .execute(&pool)
+    .await?;
+
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "pipeline-runner")
         .set("bootstrap.servers", &broker)
