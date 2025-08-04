@@ -43,6 +43,7 @@ export default function PipelineEditor() {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const toggleCollapse = (cKey: string) =>
     setCollapsed(c => ({ ...c, [cKey]: !c[cKey] }));
+  const totalCols = 10;
 
   /* memo‑ise hierarchical rows */
   const layoutRows = useMemo<LayoutRow[]>(() => useBranchLayout(steps), [steps]);
@@ -158,7 +159,7 @@ export default function PipelineEditor() {
                 {layoutRows.map(r => (
                   r.isBranchHeader ? (
                     <TableRow key={`bh-${r.cKey}`}>
-                      <TableCell colSpan={12} sx={{ bgcolor: '#f5f5f5', p: 0 }}>
+                      <TableCell colSpan={totalCols} sx={{ bgcolor: '#f5f5f5', p: 0 }}>
                         <BranchHeader
                           branchKey={r.branchKey!}
                           collapsed={!!collapsed[r.cKey!]}
@@ -222,26 +223,28 @@ export default function PipelineEditor() {
                         </TableRow>
                         {r.step.type === 'DecisionPrompt' && (
                           <TableRow>
-                            <TableCell colSpan={10} sx={{ p: 0 }}>
-                              <Box display="flex" width="100%">
-                                {['yesKey', 'noKey', 'mergeKey'].map(keyName => (
-                                  <Box
-                                    key={keyName}
-                                    flex={1}
-                                    height={16}
-                                    sx={{
-                                      backgroundColor: getRouteColor(r.step.id),
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      justifyContent: 'center',
-                                      color: '#fff',
-                                      fontSize: '0.75rem'
-                                    }}
-                                  >
-                                    {/* @ts-ignore */}
-                                    {r.step[keyName]}
-                                  </Box>
-                                ))}
+                            <TableCell colSpan={totalCols} sx={{ p: 0 }}>
+                              <Box display="flex">
+                                {['yesKey', 'noKey', 'mergeKey'].map(keyName => {
+                                  const key = (r.step as any)[keyName] as string | undefined;
+                                  return (
+                                    <Box
+                                      key={keyName}
+                                      flex={1}
+                                      height={16}
+                                      sx={{
+                                        backgroundColor: getRouteColor(key || keyName),
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        color: '#fff',
+                                        fontSize: '0.75rem',
+                                      }}
+                                    >
+                                      {key || keyName.replace('Key', '').toUpperCase()}
+                                    </Box>
+                                  );
+                                })}
                               </Box>
                             </TableCell>
                           </TableRow>
@@ -268,8 +271,11 @@ export default function PipelineEditor() {
             )}
               {edit.type!=='DecisionPrompt' && (
                 <>
-                  <Select fullWidth value={edit.route||''}
-                          onChange={e=>updateStep(edit.id,{route:e.target.value||undefined}).catch(er=>setError(String(er)))}>
+                  <Select
+                    fullWidth
+                    value={edit.route||''}
+                    onChange={e => handleRouteChange(edit.id, e.target.value as string)}
+                  >
                     <MenuItem value=""><em>none</em></MenuItem>
                     {routeKeysUpTo(steps.findIndex(s=>s.id===edit.id)).map(k => (
                       <MenuItem key={k} value={k}>{k}</MenuItem>

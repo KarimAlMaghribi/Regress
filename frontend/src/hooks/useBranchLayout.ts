@@ -27,13 +27,21 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
     return counters.slice(0, depth + 1).join('.');
   };
 
-  const processBranchChain = (startIdx: number, depth: number, branchKey: string, cKey: string) => {
+  const processBranchChain = (
+    startIdx: number,
+    depth: number,
+    branchKey: string,
+    cKey: string,
+  ) => {
     let idx = startIdx;
     while (idx < steps.length) {
       const cur = steps[idx];
       if (seen.has(cur.id)) break;
       processStep(idx, depth, branchKey, cKey);
-      if (cur.mergeTo) break;
+      if (cur.mergeTo) {
+        counters.pop();
+        break;
+      }
       idx += 1;
     }
   };
@@ -50,7 +58,7 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
         .forEach(([key, targetId]) => {
           const subKey = `${s.id}:${key}`;
           counters.push(0);
-          const headerIdx = counters.slice(0, depth + 1).join('.');
+          const headerIdx = nextIndex(depth + 1);
           rows.push({
             step: s,
             depth: depth + 1,
@@ -63,7 +71,7 @@ export function useBranchLayout(steps: PipelineStep[]): LayoutRow[] {
           if (startIdx !== undefined) {
             processBranchChain(startIdx, depth + 1, key, subKey);
           }
-          counters.pop();
+          if (counters.length > depth + 1) counters.pop();
         });
     }
   };
