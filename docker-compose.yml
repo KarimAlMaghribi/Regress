@@ -33,14 +33,29 @@ services:
     ports:
       - "9092:9092"
 
+  migrator:
+    build:
+      context: .
+      dockerfile: services/migrator/Dockerfile
+    depends_on:
+      - regressdb
+    networks:
+      - backendnet
+    environment:
+      # password must be URL-encoded
+      DATABASE_URL: 'postgres://regress:nITj%22+0(f89F@regressdb:5432/regress'
+
   api-gateway:
     build:
       context: .
       dockerfile: services/api-gateway/Dockerfile
     depends_on:
-      - regressdb
+      migrator:
+        condition: service_completed_successfully
     networks:
       - backendnet
+    environment:
+      RUN_MIGRATIONS: '0'
     ports:
       - "8080:8080"
 
@@ -49,11 +64,14 @@ services:
       context: .
       dockerfile: services/pdf-ingest/Dockerfile
     depends_on:
-      - regressdb
+      migrator:
+        condition: service_completed_successfully
     networks:
       - backendnet
     environment:
-      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      # password must be URL-encoded
+      DATABASE_URL: 'postgres://regress:nITj%22+0(f89F@regressdb:5432/regress'
+      RUN_MIGRATIONS: '0'
       MESSAGE_BROKER_URL: kafka:9092
     ports:
       - "8081:8081"
@@ -63,11 +81,14 @@ services:
       context: .
       dockerfile: services/text-extraction/Dockerfile
     depends_on:
-      - regressdb
+      migrator:
+        condition: service_completed_successfully
     networks:
       - backendnet
     environment:
-      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      # password must be URL-encoded
+      DATABASE_URL: 'postgres://regress:nITj%22+0(f89F@regressdb:5432/regress'
+      RUN_MIGRATIONS: '0'
       MESSAGE_BROKER_URL: kafka:9092
     ports:
       - "8083:8083"
@@ -77,14 +98,17 @@ services:
       context: .
       dockerfile: services/pipeline-runner/Dockerfile
     depends_on:
-      - regressdb
+      migrator:
+        condition: service_completed_successfully
     networks:
       - backendnet
     environment:
-      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      # password must be URL-encoded
+      DATABASE_URL: 'postgres://regress:nITj%22+0(f89F@regressdb:5432/regress'
       OPENAI_API_KEY: "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"
       PROMPT_MANAGER_URL: http://prompt-manager:8082
       MESSAGE_BROKER_URL: kafka:9092
+      RUN_MIGRATIONS: '0'
       RUST_LOG: info,pipeline_runner=debug,openai_client=debug
     ports:
       - "8087:8087"
@@ -94,11 +118,14 @@ services:
       context: .
       dockerfile: services/prompt-manager/Dockerfile
     depends_on:
-      - regressdb
+      migrator:
+        condition: service_completed_successfully
     networks:
       - backendnet
     environment:
-      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      # password must be URL-encoded
+      DATABASE_URL: 'postgres://regress:nITj%22+0(f89F@regressdb:5432/regress'
+      RUN_MIGRATIONS: '0'
       RUST_LOG: info,prompt_manager=debug,tower_http=info
     ports:
       - "8082:8082"
@@ -108,12 +135,15 @@ services:
       context: .
       dockerfile: services/pipeline-api/Dockerfile
     depends_on:
-      - regressdb
+      migrator:
+        condition: service_completed_successfully
     networks:
       - backendnet
     environment:
-      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      # password must be URL-encoded
+      DATABASE_URL: 'postgres://regress:nITj%22+0(f89F@regressdb:5432/regress'
       OPENAI_API_KEY: "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"
+      RUN_MIGRATIONS: '0'
     ports:
       - "8084:8084"
 
@@ -122,11 +152,14 @@ services:
       context: .
       dockerfile: services/metrics/Dockerfile
     depends_on:
-      - regressdb
+      migrator:
+        condition: service_completed_successfully
     networks:
       - backendnet
     environment:
-      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      # password must be URL-encoded
+      DATABASE_URL: 'postgres://regress:nITj%22+0(f89F@regressdb:5432/regress'
+      RUN_MIGRATIONS: '0'
     ports:
       - "8085:8085"
 
@@ -135,11 +168,14 @@ services:
       context: .
       dockerfile: services/history-service/Dockerfile
     depends_on:
-      - regressdb
+      migrator:
+        condition: service_completed_successfully
     networks:
       - backendnet
     environment:
-      DATABASE_URL: 'postgres://regress:nITj"+0(f89F@regressdb:5432/regress'
+      # password must be URL-encoded
+      DATABASE_URL: 'postgres://regress:nITj%22+0(f89F@regressdb:5432/regress'
+      RUN_MIGRATIONS: '0'
       MESSAGE_BROKER_URL: kafka:9092
       SERVER_PORT: 8090
     ports:
