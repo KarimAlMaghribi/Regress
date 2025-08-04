@@ -4,19 +4,19 @@ use actix_web::web::Payload;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
 use chrono::{DateTime, Utc};
+use native_tls::TlsConnector;
+use postgres_native_tls::MakeTlsConnector;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     ClientConfig, Message,
 };
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
+use shared::dto::PipelineRunResult;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
-use postgres_native_tls::MakeTlsConnector;
-use native_tls::TlsConnector;
 use tracing::{error, info};
 use uuid::Uuid;
-use shared::dto::PipelineRunResult;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HistoryEntry {
@@ -50,6 +50,7 @@ async fn init_db(db: &tokio_postgres::Client) {
             state JSONB,\
             pdf_url TEXT,\
             timestamp TIMESTAMPTZ,\
+            status TEXT DEFAULT 'running',\
             score DOUBLE PRECISION,\
             label TEXT\
         )",
@@ -363,7 +364,9 @@ async fn start_kafka(
                             {
                                 let ts = Utc::now();
                                 let pdf_url = format!("{}/pdf/{}", pdf_base, data.pdf_id);
-                                let id = mark_pending(&db, data.pdf_id, data.pipeline_id, &pdf_url, ts).await;
+                                let id =
+                                    mark_pending(&db, data.pdf_id, data.pipeline_id, &pdf_url, ts)
+                                        .await;
                                 let entry = HistoryEntry {
                                     id,
                                     pdf_id: data.pdf_id,
@@ -416,10 +419,9 @@ async fn main() -> std::io::Result<()> {
         std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
     let tls_connector = TlsConnector::builder().build().unwrap();
     let connector = MakeTlsConnector::new(tls_connector);
-    let (db_client, connection) =
-        tokio_postgres::connect(&settings.database_url, connector)
-            .await
-            .unwrap();
+    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, connector)
+        .await
+        .unwrap();
     tokio::spawn(async move {
         let _ = connection.await;
     });
