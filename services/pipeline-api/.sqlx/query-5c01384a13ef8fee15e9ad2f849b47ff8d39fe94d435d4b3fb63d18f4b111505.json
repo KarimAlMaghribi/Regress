@@ -1,0 +1,40 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT pipeline_id, pdf_id, overall_score, extracted FROM pipeline_runs WHERE id=$1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "pipeline_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "pdf_id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 2,
+        "name": "overall_score",
+        "type_info": "Float4"
+      },
+      {
+        "ordinal": 3,
+        "name": "extracted",
+        "type_info": "Jsonb"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "5c01384a13ef8fee15e9ad2f849b47ff8d39fe94d435d4b3fb63d18f4b111505"
+}
