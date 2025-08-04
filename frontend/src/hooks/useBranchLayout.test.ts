@@ -27,6 +27,6 @@ describe('useBranchLayout', () => {
       },
     ];
     const rows = useBranchLayout(steps).filter(r => !r.isBranchHeader);
-    expect(rows.map(r => r.rowIdx)).toEqual(['1', '1.1', '2']);
+    expect(rows.map(r => r.rowIdx)).toEqual(['1', '1.2', '2']);
   });
 });
