@@ -99,7 +99,7 @@ docker compose up --build
 3. Access the frontend at <http://localhost:3000>.
 4. Metrics are available at <http://localhost:8085/metrics>.
 5. History service runs at <http://localhost:8090>.
-6. Kafka UI is accessible at <http://localhost:8086> for browsing topics and viewing messages.
+6. Kafka UI is accessible at <http://localhost:8086> and automatically connects to the local Kafka broker for browsing topics and viewing messages.
 7. Pipeline API is available at <http://localhost:8084>.
 
 After the build completes, open <http://localhost:3000> in your browser to use the application.
