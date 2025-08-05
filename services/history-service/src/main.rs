@@ -275,6 +275,27 @@ async fn analyses(
     HttpResponse::Ok().json(items)
 }
 
+async fn result(
+    state: web::Data<AppState>,
+    path: web::Path<i32>,
+) -> impl Responder {
+    let pdf_id = path.into_inner();
+    let row = state
+        .db
+        .query_opt(
+            "SELECT state FROM analysis_history WHERE pdf_id=$1 AND status='completed' ORDER BY timestamp DESC LIMIT 1",
+            &[&pdf_id],
+        )
+        .await
+        .unwrap();
+    if let Some(r) = row {
+        let value: serde_json::Value = r.get(0);
+        HttpResponse::Ok().json(value)
+    } else {
+        HttpResponse::NotFound().finish()
+    }
+}
+
 async fn health() -> impl Responder {
     "OK"
 }
@@ -456,6 +477,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(state.clone())
             .route("/classifications", web::get().to(classifications))
             .route("/analyses", web::get().to(analyses))
+            .route("/results/{id}", web::get().to(result))
             .route("/", web::get().to(ws_index))
             .route("/health", web::get().to(health))
     })
