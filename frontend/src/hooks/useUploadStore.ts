@@ -101,11 +101,18 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     const raw = await res.text();
     console.log('📦 Raw response body:', raw);
     let data: any = {};
-    try {
-      data = JSON.parse(raw);
-      console.log('🔍 Parsed JSON:', data);
-    } catch (e) {
-      console.warn('⚠️ JSON.parse fehlgeschlagen:', e);
+    const contentType = res.headers.get('content-type') || '';
+    if (raw && contentType.includes('application/json')) {
+      try {
+        data = JSON.parse(raw);
+        console.log('🔍 Parsed JSON:', data);
+      } catch (e) {
+        console.warn('⚠️ JSON.parse fehlgeschlagen:', e);
+      }
+    } else if (!raw) {
+      console.log('ℹ️ Empty response body, skipping JSON parse');
+    } else {
+      console.log('ℹ️ Non-JSON response body, skipping JSON parse');
     }
     set(state => ({
       entries: state.entries.map(e =>
