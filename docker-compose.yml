@@ -151,6 +151,9 @@ services:
       - kafka
     networks:
       - backendnet
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
     ports:
       - "8086:8080"
 
