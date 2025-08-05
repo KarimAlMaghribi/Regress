@@ -218,20 +218,24 @@ function PromptDetailsTable({ data }: { data: any[] }) {
         </tr>
       </thead>
       <tbody>
-        {data.map(p => (
-          <tr key={p.promptId}>
-            <td>{p.promptId}</td>
-            <td title={p.promptText}>{p.promptText.slice(0, 40)}…</td>
-            <td>{p.source?.quote ?? '—'}</td>
-            <td>{(p as any).score ?? String((p as any).boolean ?? (p as any).result ?? '')}</td>
-            <td>{p.route ?? '—'}</td>
-            <td>
-              {p.source
-                ? `p${p.source.page} [${p.source.bbox.join(',')}]`
-                : '—'}
-            </td>
-          </tr>
-        ))}
+        {data.map((p, i) => {
+          const promptId = p.promptId ?? p.prompt_id ?? i;
+          const promptText = p.promptText ?? p.prompt_text;
+          return (
+            <tr key={promptId}>
+              <td>{promptId}</td>
+              <td title={promptText ?? ''}>{promptText ? `${promptText.slice(0, 40)}…` : '—'}</td>
+              <td>{p.source?.quote ?? '—'}</td>
+              <td>{(p as any).score ?? String((p as any).boolean ?? (p as any).result ?? '')}</td>
+              <td>{p.route ?? '—'}</td>
+              <td>
+                {p.source
+                  ? `p${p.source.page} [${p.source.bbox.join(',')}]`
+                  : '—'}
+              </td>
+            </tr>
+          );
+        })}
       </tbody>
     </table>
   );
