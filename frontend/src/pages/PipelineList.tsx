@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 
 export default function PipelineList() {
   const { listPipelines, deletePipeline, createPipeline, confirmIfDirty } = usePipelineStore();
-  const [rows, setRows] = useState<Array<{id:string;name:string}>>([]);
+  const [rows, setRows] = useState<Array<{id:string;name:string;overallScore?:number}>>([]);
   const navigate = useNavigate();
 
   const load = () => listPipelines().then(setRows).catch(() => {});
@@ -41,6 +41,7 @@ export default function PipelineList() {
   const columns: GridColDef[] = [
     { field: 'name', headerName: 'Name', flex: 1 },
     { field: 'id', headerName: 'ID', flex: 1 },
+    { field: 'overallScore', headerName: 'Score', flex: 0.5, valueGetter: p => p.row.overallScore?.toFixed(2) ?? '—' },
     {
       field: 'actions',
       headerName: 'Aktionen',
