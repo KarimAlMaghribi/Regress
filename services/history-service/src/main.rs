@@ -4,19 +4,19 @@ use actix_web::web::Payload;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
 use chrono::{DateTime, Utc};
+use native_tls::TlsConnector;
+use postgres_native_tls::MakeTlsConnector;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     ClientConfig, Message,
 };
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
+use shared::dto::PipelineRunResult;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
-use postgres_native_tls::MakeTlsConnector;
-use native_tls::TlsConnector;
 use tracing::{error, info};
 use uuid::Uuid;
-use shared::dto::PipelineRunResult;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HistoryEntry {
@@ -24,6 +24,7 @@ struct HistoryEntry {
     id: i32,
     /// ID of the processed PDF
     pdf_id: i32,
+    pipeline_id: Uuid,
     prompt: Option<String>,
     result: Option<serde_json::Value>,
     pdf_url: String,
@@ -50,6 +51,7 @@ async fn init_db(db: &tokio_postgres::Client) {
             state JSONB,\
             pdf_url TEXT,\
             timestamp TIMESTAMPTZ,\
+            status TEXT NOT NULL DEFAULT 'running',\
             score DOUBLE PRECISION,\
             label TEXT\
         )",
@@ -57,6 +59,13 @@ async fn init_db(db: &tokio_postgres::Client) {
     )
     .await
     .unwrap();
+    // Ensure column exists when table was created without status
+    let _ = db
+        .execute(
+            "ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'running'",
+            &[],
+        )
+        .await;
     info!("database schema ensured");
 }
 
@@ -69,8 +78,8 @@ async fn mark_pending(
 ) -> i32 {
     let row = db
         .query_one(
-            "INSERT INTO analysis_history (pdf_id, pipeline_id, pdf_url, timestamp) \
-             VALUES ($1,$2,$3,$4) RETURNING id",
+            "INSERT INTO analysis_history (pdf_id, pipeline_id, pdf_url, timestamp, status) \
+             VALUES ($1,$2,$3,$4,'running') RETURNING id",
             &[&pdf_id, &pipeline_id, &pdf_url, &timestamp],
         )
         .await
@@ -106,8 +115,8 @@ async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) -> i32
     } else {
         let row = db
             .query_one(
-                "INSERT INTO analysis_history (pdf_id, pipeline_id, state, pdf_url, timestamp, score, label) \
-                 VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
+                "INSERT INTO analysis_history (pdf_id, pipeline_id, state, pdf_url, timestamp, status, score, label) \
+                 VALUES ($1,$2,$3,$4,$5,'completed',$6,$7) RETURNING id",
                 &[
                     &entry.pdf_id,
                     &Uuid::nil(),
@@ -127,7 +136,7 @@ async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) -> i32
 async fn latest(db: &tokio_postgres::Client, limit: i64) -> Vec<HistoryEntry> {
     let stmt = db
         .prepare(
-            "SELECT id,pdf_id,state AS result,pdf_url,timestamp,status,score,label AS result_label FROM analysis_history ORDER BY timestamp DESC LIMIT $1",
+            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label FROM analysis_history ORDER BY timestamp DESC LIMIT $1",
         )
         .await
         .unwrap();
@@ -136,13 +145,14 @@ async fn latest(db: &tokio_postgres::Client, limit: i64) -> Vec<HistoryEntry> {
         .map(|r| HistoryEntry {
             id: r.get(0),
             pdf_id: r.get(1),
+            pipeline_id: r.get(2),
             prompt: None,
-            result: r.get(2),
-            pdf_url: r.get(3),
-            timestamp: r.get(4),
-            status: r.get(5),
-            score: r.get(6),
-            result_label: r.get(7),
+            result: r.get(3),
+            pdf_url: r.get(4),
+            timestamp: r.get(5),
+            status: r.get(6),
+            score: r.get(7),
+            result_label: r.get(8),
         })
         .collect()
 }
@@ -150,7 +160,7 @@ async fn latest(db: &tokio_postgres::Client, limit: i64) -> Vec<HistoryEntry> {
 async fn all_entries(db: &tokio_postgres::Client) -> Vec<HistoryEntry> {
     let stmt = db
         .prepare(
-            "SELECT id,pdf_id,state AS result,pdf_url,timestamp,status,score,label AS result_label FROM analysis_history ORDER BY timestamp DESC",
+            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label FROM analysis_history ORDER BY timestamp DESC",
         )
         .await
         .unwrap();
@@ -159,13 +169,14 @@ async fn all_entries(db: &tokio_postgres::Client) -> Vec<HistoryEntry> {
         .map(|r| HistoryEntry {
             id: r.get(0),
             pdf_id: r.get(1),
+            pipeline_id: r.get(2),
             prompt: None,
-            result: r.get(2),
-            pdf_url: r.get(3),
-            timestamp: r.get(4),
-            status: r.get(5),
-            score: r.get(6),
-            result_label: r.get(7),
+            result: r.get(3),
+            pdf_url: r.get(4),
+            timestamp: r.get(5),
+            status: r.get(6),
+            score: r.get(7),
+            result_label: r.get(8),
         })
         .collect()
 }
@@ -175,12 +186,12 @@ async fn list_by_status(db: &tokio_postgres::Client, status: Option<String>) -> 
         &status
     {
         (
-            "SELECT id,pdf_id,state AS result,pdf_url,timestamp,status,score,label AS result_label FROM analysis_history WHERE status = $1 ORDER BY timestamp DESC",
+            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label FROM analysis_history WHERE status = $1 ORDER BY timestamp DESC",
             vec![s],
         )
     } else {
         (
-            "SELECT id,pdf_id,state AS result,pdf_url,timestamp,status,score,label AS result_label FROM analysis_history ORDER BY timestamp DESC",
+            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label FROM analysis_history ORDER BY timestamp DESC",
             vec![],
         )
     };
@@ -190,13 +201,14 @@ async fn list_by_status(db: &tokio_postgres::Client, status: Option<String>) -> 
         .map(|r| HistoryEntry {
             id: r.get(0),
             pdf_id: r.get(1),
+            pipeline_id: r.get(2),
             prompt: None,
-            result: r.get(2),
-            pdf_url: r.get(3),
-            timestamp: r.get(4),
-            status: r.get(5),
-            score: r.get(6),
-            result_label: r.get(7),
+            result: r.get(3),
+            pdf_url: r.get(4),
+            timestamp: r.get(5),
+            status: r.get(6),
+            score: r.get(7),
+            result_label: r.get(8),
         })
         .collect()
 }
@@ -210,7 +222,7 @@ async fn latest_by_status(
     {
         (
             "SELECT * FROM (\
-                SELECT DISTINCT ON (pdf_id) id, pdf_id, state AS result, pdf_url, timestamp, status, score, label AS result_label \
+                SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, pdf_url, timestamp, status, score, label AS result_label \
                 FROM analysis_history WHERE status = $1 ORDER BY pdf_id, timestamp DESC\
             ) AS t ORDER BY timestamp DESC",
             vec![s],
@@ -218,7 +230,7 @@ async fn latest_by_status(
     } else {
         (
             "SELECT * FROM (\
-                SELECT DISTINCT ON (pdf_id) id, pdf_id, state AS result, pdf_url, timestamp, status, score, label AS result_label \
+                SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, pdf_url, timestamp, status, score, label AS result_label \
                 FROM analysis_history ORDER BY pdf_id, timestamp DESC\
             ) AS t ORDER BY timestamp DESC",
             vec![],
@@ -230,13 +242,14 @@ async fn latest_by_status(
         .map(|r| HistoryEntry {
             id: r.get(0),
             pdf_id: r.get(1),
+            pipeline_id: r.get(2),
             prompt: None,
-            result: r.get(2),
-            pdf_url: r.get(3),
-            timestamp: r.get(4),
-            status: r.get(5),
-            score: r.get(6),
-            result_label: r.get(7),
+            result: r.get(3),
+            pdf_url: r.get(4),
+            timestamp: r.get(5),
+            status: r.get(6),
+            score: r.get(7),
+            result_label: r.get(8),
         })
         .collect()
 }
@@ -363,10 +376,13 @@ async fn start_kafka(
                             {
                                 let ts = Utc::now();
                                 let pdf_url = format!("{}/pdf/{}", pdf_base, data.pdf_id);
-                                let id = mark_pending(&db, data.pdf_id, data.pipeline_id, &pdf_url, ts).await;
+                                let id =
+                                    mark_pending(&db, data.pdf_id, data.pipeline_id, &pdf_url, ts)
+                                        .await;
                                 let entry = HistoryEntry {
                                     id,
                                     pdf_id: data.pdf_id,
+                                    pipeline_id: data.pipeline_id,
                                     prompt: None,
                                     result: None,
                                     pdf_url,
@@ -384,6 +400,7 @@ async fn start_kafka(
                                 let entry = HistoryEntry {
                                     id: 0,
                                     pdf_id: data.pdf_id,
+                                    pipeline_id: data.pipeline_id,
                                     prompt: None,
                                     result: Some(value.clone()),
                                     pdf_url: format!("{}/pdf/{}", pdf_base, data.pdf_id),
@@ -393,7 +410,7 @@ async fn start_kafka(
                                     result_label: None,
                                 };
                                 let _ = db.execute(
-                                    "INSERT INTO analysis_history (pdf_id, pipeline_id, state, pdf_url, timestamp, score, label) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                                    "INSERT INTO analysis_history (pdf_id, pipeline_id, state, pdf_url, timestamp, status, score, label) VALUES ($1,$2,$3,$4,$5,'completed',$6,$7)",
                                     &[&data.pdf_id, &data.pipeline_id, &value, &entry.pdf_url, &entry.timestamp, &entry.score, &entry.result_label],
                                 ).await;
                                 let _ = tx.send(entry);
@@ -416,10 +433,9 @@ async fn main() -> std::io::Result<()> {
         std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
     let tls_connector = TlsConnector::builder().build().unwrap();
     let connector = MakeTlsConnector::new(tls_connector);
-    let (db_client, connection) =
-        tokio_postgres::connect(&settings.database_url, connector)
-            .await
-            .unwrap();
+    let (db_client, connection) = tokio_postgres::connect(&settings.database_url, connector)
+        .await
+        .unwrap();
     tokio::spawn(async move {
         let _ = connection.await;
     });
