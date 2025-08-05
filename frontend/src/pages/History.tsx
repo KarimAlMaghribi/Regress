@@ -15,9 +15,10 @@ import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
 import { useTheme } from '@mui/material/styles';
-import { PipelineRunResult } from '../types/pipeline';
+import { PipelineRunResult, TextPosition } from '../types/pipeline';
 import { enrichRunLog } from '../utils/enrichRunLog';
 import PromptDetailsTable from '../components/PromptDetailsTable';
+import PdfViewer from '../components/PdfViewer';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -44,6 +45,7 @@ function normalizeEntry(e: any): HistoryEntry {
 export default function History() {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [selected, setSelected] = useState<HistoryEntry | null>(null);
+  const [highlight, setHighlight] = useState<TextPosition | null>(null);
   const [search, setSearch] = useState('');
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
@@ -65,6 +67,10 @@ export default function History() {
     });
     return () => socket.close();
   }, []);
+
+  useEffect(() => {
+    setHighlight(null);
+  }, [selected]);
 
 
   const filtered = entries.filter(e => {
@@ -185,7 +191,10 @@ export default function History() {
             {(['extraction','scoring','decision'] as const).map(cat => (
               <Box key={cat} sx={{ mb: 1 }}>
                 <Typography variant="subtitle2" gutterBottom>{cat}</Typography>
-                <PromptDetailsTable data={selected.result ? (selected.result as any)[cat] : []} />
+                <PromptDetailsTable
+                  data={selected.result ? (selected.result as any)[cat] : []}
+                  onSelect={setHighlight}
+                />
               </Box>
             ))}
             <Box sx={{ mt:2 }}>
@@ -196,8 +205,9 @@ export default function History() {
                 </div>
               ))}
             </Box>
-
-          <iframe src={selected.pdfUrl} width="100%" height="400" title="pdf" />
+            <Box sx={{ mt: 2 }}>
+              <PdfViewer url={selected.pdfUrl} highlight={highlight} />
+            </Box>
           </Box>
         )}
       </Drawer>
