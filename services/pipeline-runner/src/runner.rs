@@ -139,14 +139,25 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     Ok(ans) => {
                         let decision_val = serde_json::from_str(&ans.raw).unwrap_or(Value::Null);
                         state.insert("result".into(), decision_val.clone());
-                        if let Some(r) = &ans.route {
-                            state.insert("route".into(), Value::String(r.clone()));
-                        }
-                        let decision_key = ans
-                            .route
-                            .clone()
-                            .or_else(|| ans.boolean.map(|b| b.to_string()))
-                            .or_else(|| decision_val.as_str().map(|s| s.to_string()));
+                        // Override default "true"/"false" with the pipeline step's yes_key/no_key:
+                        let route_key = if let Some(r) = &ans.route {
+                            // If the model returned an explicit "route" field, use it directly
+                            r.clone()
+                        } else if ans.boolean == Some(true) {
+                            // Otherwise if the decision was true, use the UI-defined yes_key (fallback to "true")
+                            step.step
+                                .yes_key
+                                .clone()
+                                .unwrap_or_else(|| "true".to_string())
+                        } else {
+                            // If the decision was false, use the UI-defined no_key (fallback to "false")
+                            step.step
+                                .no_key
+                                .clone()
+                                .unwrap_or_else(|| "false".to_string())
+                        };
+                        state.insert("route".into(), Value::String(route_key.clone()));
+                        let decision_key = Some(route_key.clone());
                         if let (Some(key), Some(map)) = (decision_key.clone(), &step.targets_idx) {
                             if let Some(&jump) = map.get(&key) {
                                 idx = jump;
