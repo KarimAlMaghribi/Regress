@@ -3,6 +3,7 @@ WORKDIR /app
 COPY Cargo.toml ./Cargo.toml
 COPY shared ./shared
 COPY services ./services
+COPY migrations ./migrations
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential pkg-config clang libssl-dev ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

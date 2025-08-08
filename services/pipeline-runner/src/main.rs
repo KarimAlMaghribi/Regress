@@ -31,6 +31,7 @@ async fn app_main() -> anyhow::Result<()> {
         .unwrap_or_else(|_| "kafka:9092".into());
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
     let pool = PgPool::connect(&db_url).await?;
+    sqlx::migrate!("../../migrations").run(&pool).await?;
 
     // Ensure required tables exist. This avoids failures when the database
     // starts empty and no migrations have been applied yet.
