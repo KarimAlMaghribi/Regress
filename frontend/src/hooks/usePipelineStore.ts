@@ -7,7 +7,7 @@ export interface PipelineStep {
   /** Wizard keys for DecisionPrompts */
   yesKey?: string;
   noKey?: string;
-  mergeKey?: string;
+  mergeKey?: boolean;
   targets?: Record<string, string>;
   mergeTo?: string;
   route?: string;
@@ -196,11 +196,8 @@ export function validatePipeline(steps: PipelineStep[]): string[] {
   steps.forEach((s, idx) => {
     if (!s.type) errors.push(`Step ${idx + 1}: type missing`);
     if (s.type === 'DecisionPrompt') {
-      if (!s.yesKey || !s.noKey || !s.mergeKey) {
+      if (!s.yesKey || !s.noKey) {
         errors.push(`Step ${idx + 1}: decision keys required`);
-      }
-      if (!s.targets) {
-        errors.push(`Step ${idx + 1}: targets required`);
       }
     }
   });

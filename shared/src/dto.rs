@@ -1,3 +1,4 @@
+use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, EnumString};
 
@@ -104,8 +105,12 @@ pub struct PipelineStep {
     pub yes_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub merge_key: Option<String>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_merge_key"
+    )]
+    pub merge_key: Option<bool>,
     /* legacy fields kept for migration only */
     #[serde(default, skip)]
     pub true_target: Option<String>,
@@ -120,4 +125,18 @@ pub struct PipelineStep {
 pub struct PipelineConfig {
     pub name: String,
     pub steps: Vec<PipelineStep>,
+}
+
+fn de_merge_key<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    Ok(match v {
+        Some(serde_json::Value::Bool(b)) => Some(b),
+        Some(serde_json::Value::String(_)) => Some(true),
+        Some(serde_json::Value::Number(n)) => n.as_u64().map(|x| x > 0),
+        Some(_) => None,
+        None => None,
+    })
 }
