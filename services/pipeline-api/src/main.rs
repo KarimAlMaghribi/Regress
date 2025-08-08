@@ -302,7 +302,7 @@ struct StepPatch {
     merge_to: Option<Option<String>>,
     yes_key: Option<Option<String>>,
     no_key: Option<Option<String>>,
-    merge_key: Option<Option<String>>,
+    merge_key: Option<Option<bool>>,
     true_target: Option<Option<String>>,
     false_target: Option<Option<String>>,
     enum_targets: Option<Option<HashMap<String, String>>>,
