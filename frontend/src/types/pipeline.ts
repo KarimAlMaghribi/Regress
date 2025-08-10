@@ -43,6 +43,9 @@ export interface PipelineStep {
   targets?: Record<string, string>;
   merge_to?: string;
   route?: string;
+  yes_key?: string;
+  no_key?: string;
+  merge_key?: boolean;
 }
 
 export interface RunStep {
