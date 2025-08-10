@@ -52,10 +52,9 @@ export default function PipelineEditor() {
     const set = new Set<string>();
     for (let i = 0; i < idx; i++) {
       const d = steps[i];
-      if (d.type === 'DecisionPrompt' && d.yesKey && d.noKey && d.mergeKey) {
-        set.add(d.yesKey);
-        set.add(d.noKey);
-        set.add(d.mergeKey);
+      if (d.type === 'DecisionPrompt') {
+        if (d.yesKey) set.add(d.yesKey);
+        if (d.noKey) set.add(d.noKey);
       }
     }
     return Array.from(set);
