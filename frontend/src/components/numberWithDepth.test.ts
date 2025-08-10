@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { numberWithDepth } from './PipelineLinearView';
+import { numberWithDepth } from '../utils/numberWithDepth';
 import { PipelineStep } from '../hooks/usePipelineStore';
 
 describe('numberWithDepth', () => {
