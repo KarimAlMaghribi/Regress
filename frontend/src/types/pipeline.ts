@@ -40,8 +40,6 @@ export interface PipelineStep {
   id: string;
   step_type: 'ExtractionPrompt' | 'ScoringPrompt' | 'DecisionPrompt';
   prompt_id: number;
-  targets?: Record<string, string>;
-  merge_to?: string;
   route?: string;
   yes_key?: string;
   no_key?: string;
@@ -50,6 +48,6 @@ export interface PipelineStep {
 
 export interface RunStep {
   seq_no:number; step_id:string; prompt_id:number; prompt_type:string;
-  decision_key?:string; route?:string; merge_to?:string; result:any;
+  decision_key?:string; route?:string; merge_key?:boolean; result:any;
   depth?:number; color?:string;
 }

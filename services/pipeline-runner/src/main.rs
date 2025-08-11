@@ -8,7 +8,6 @@ use shared::dto::{PipelineConfig, PipelineRunResult, TextExtracted};
 use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
-mod builder;
 mod runner;
 use sqlx::PgPool;
 use sqlx::Row;
@@ -57,7 +56,7 @@ async fn app_main() -> anyhow::Result<()> {
             prompt_type TEXT,
             decision_key TEXT,
             route TEXT,
-            merge_to TEXT,
+            merge_key BOOLEAN,
             result JSONB,
             created_at TIMESTAMPTZ DEFAULT now(),
             PRIMARY KEY (run_id, seq_no)
@@ -109,15 +108,15 @@ async fn app_main() -> anyhow::Result<()> {
                                         }
                                     }
                                     for rs in &outcome.log {
-                                        sqlx::query("INSERT INTO pipeline_run_steps (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, merge_to, result) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
+                                        sqlx::query("INSERT INTO pipeline_run_steps (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, merge_key, result) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)")
                                             .bind(run_id)
                                             .bind(rs.seq_no as i32)
                                             .bind(&rs.step_id)
-                                            .bind(rs.prompt_id)
+                                            .bind(rs.prompt_id as i32)
                                             .bind(rs.prompt_type.to_string())
                                             .bind(&rs.decision_key)
                                             .bind(&rs.route)
-                                            .bind(&rs.merge_to)
+                                            .bind(rs.merge_key.unwrap_or(false))
                                             .bind(&rs.result)
                                             .execute(&pool)
                                             .await?;

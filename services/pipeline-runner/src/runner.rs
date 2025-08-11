@@ -5,7 +5,12 @@ use shared::{
 };
 use std::collections::HashMap;
 
-pub type RunState = HashMap<String, Value>;
+#[derive(Default, Clone)]
+pub struct RunState {
+    pub route_stack: Vec<String>,
+    pub route: Option<String>,
+    pub result: Option<Value>,
+}
 
 pub struct RunOutcome {
     pub extraction: Vec<PromptResult>,
@@ -25,32 +30,48 @@ pub fn compute_overall_score(results: &[ScoringResult]) -> Option<f32> {
     Some(sum / results.len() as f32)
 }
 
-pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<RunOutcome> {
-    let mut state: RunState = HashMap::new();
-
-    // route_stack laden oder initialisieren
-    let mut route_stack: Vec<String> = state
-        .get("route_stack")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut set_top = |stack: &Vec<String>, state: &mut RunState| {
-        if let Some(top) = stack.last() {
-            state.insert("route".into(), Value::String(top.clone()));
+fn normalize_decision(
+    res_json: &Value,
+    ans_route: Option<&str>,
+    ans_bool: Option<bool>,
+    yes: &str,
+    no: &str,
+) -> String {
+    // helper to map string/bool-like values onto yes/no keys
+    let map_str = |s: &str| -> Option<String> {
+        if s == yes || s == no {
+            Some(s.to_string())
+        } else if s.eq_ignore_ascii_case("true") {
+            Some(yes.to_string())
+        } else if s.eq_ignore_ascii_case("false") {
+            Some(no.to_string())
         } else {
-            state.remove("route");
+            None
         }
-        state.insert(
-            "route_stack".into(),
-            Value::Array(stack.iter().map(|s| Value::String(s.clone())).collect()),
-        );
     };
-    set_top(&route_stack, &mut state);
+
+    if let Some(r) = res_json.get("route").and_then(|v| v.as_str()).and_then(|r| map_str(r)) {
+        return r;
+    }
+    if let Some(b) = res_json
+        .get("bool")
+        .and_then(|v| v.as_bool())
+        .or_else(|| res_json.get("boolean").and_then(|v| v.as_bool()))
+        .or_else(|| res_json.as_bool())
+    {
+        return if b { yes.to_string() } else { no.to_string() };
+    }
+    if let Some(r) = ans_route.and_then(|r| map_str(r)) {
+        return r;
+    }
+    if let Some(b) = ans_bool {
+        return if b { yes.to_string() } else { no.to_string() };
+    }
+    yes.to_string()
+}
+
+pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<RunOutcome> {
+    let mut state = RunState::default();
 
     let mut extraction = Vec::new();
     let mut scoring = Vec::new();
@@ -59,32 +80,33 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
     let mut seq: u32 = 1;
 
     for step in &cfg.steps {
-        if step.active == Some(false) {
-            continue;
-        }
-
-        // Impliziter Merge vor gemeinsamen Steps
-        if step.route.is_none() && !route_stack.is_empty() {
-            route_stack.pop();
-            set_top(&route_stack, &mut state);
+        // impliziter Merge vor Anzeige
+        if step.route.is_none() && !state.route_stack.is_empty() {
+            state.route_stack.pop();
+            state.route = state.route_stack.last().cloned();
         }
 
         // Gate: Step läuft nur im passenden Branch
         if let Some(req) = &step.route {
-            if route_stack.last().map(|s| s != req).unwrap_or(true) {
+            if state.route.as_deref() != Some(req.as_str()) {
                 continue;
             }
         }
 
+        // Inaktive Steps überspringen
+        if !step.active {
+            continue;
+        }
+
         match step.step_type {
             PromptType::ExtractionPrompt => {
-                let prompt_text = openai_client::fetch_prompt_text(step.prompt_id)
+                let prompt_text = openai_client::fetch_prompt_text(step.prompt_id as i32)
                     .await
                     .unwrap_or_default();
                 let input = pdf_text.to_string();
-                let pr = match openai_client::extract(step.prompt_id, &input).await {
+                let pr = match openai_client::extract(step.prompt_id as i32, &input).await {
                     Ok(ans) => PromptResult {
-                        prompt_id: step.prompt_id,
+                        prompt_id: step.prompt_id as i32,
                         prompt_type: PromptType::ExtractionPrompt,
                         prompt_text,
                         boolean: None,
@@ -97,7 +119,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                         openai_raw: ans.raw,
                     },
                     Err(e) => PromptResult {
-                        prompt_id: step.prompt_id,
+                        prompt_id: step.prompt_id as i32,
                         prompt_type: PromptType::ExtractionPrompt,
                         prompt_text,
                         boolean: None,
@@ -118,20 +140,20 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     prompt_type: step.step_type.clone(),
                     decision_key: None,
                     route: step.route.clone(),
-                    merge_to: step.merge_to.clone(),
+                    merge_key: Some(step.merge_key.unwrap_or(false)),
                     result: serde_json::to_value(&pr)?,
                 });
                 seq += 1;
             }
             PromptType::ScoringPrompt => {
-                let _prompt_text = openai_client::fetch_prompt_text(step.prompt_id)
+                let _prompt_text = openai_client::fetch_prompt_text(step.prompt_id as i32)
                     .await
                     .unwrap_or_default();
-                let res = openai_client::score(step.prompt_id, pdf_text).await;
+                let res = openai_client::score(step.prompt_id as i32, pdf_text).await;
                 let sr = match res {
                     Ok(sr) => sr,
                     Err(e) => ScoringResult {
-                        prompt_id: step.prompt_id,
+                        prompt_id: step.prompt_id as i32,
                         result: false,
                         source: TextPosition {
                             page: 0,
@@ -149,64 +171,66 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     prompt_type: step.step_type.clone(),
                     decision_key: None,
                     route: step.route.clone(),
-                    merge_to: step.merge_to.clone(),
+                    merge_key: Some(step.merge_key.unwrap_or(false)),
                     result: serde_json::to_value(&sr)?,
                 });
                 seq += 1;
             }
             PromptType::DecisionPrompt => {
-                let prompt_text = openai_client::fetch_prompt_text(step.prompt_id)
+                let prompt_text = openai_client::fetch_prompt_text(step.prompt_id as i32)
                     .await
                     .unwrap_or_default();
-                match openai_client::decide(step.prompt_id, pdf_text, &state).await {
-                    Ok(ans) => {
-                        // Map "true"/"false" -> yes_key/no_key
-                        let choose = |ans_route: Option<&str>,
-                                      ans_bool: Option<bool>,
-                                      yes: &Option<String>,
-                                      no: &Option<String>|
-                         -> String {
-                            match (ans_route, ans_bool, yes, no) {
-                                (Some("true"), _, Some(yk), _) => yk.clone(),
-                                (Some("false"), _, _, Some(nk)) => nk.clone(),
-                                (Some(r), _, _, _) => r.to_string(),
-                                (None, Some(true), Some(yk), _) => yk.clone(),
-                                (None, Some(false), _, Some(nk)) => nk.clone(),
-                                (None, Some(true), _, _) => "true".into(),
-                                (None, Some(false), _, _) => "false".into(),
-                                _ => "true".into(),
-                            }
-                        };
 
-                        let route_key = choose(
+                let mut state_map = HashMap::new();
+                if let Some(r) = &state.route {
+                    state_map.insert("route".into(), Value::String(r.clone()));
+                }
+                if !state.route_stack.is_empty() {
+                    state_map.insert(
+                        "route_stack".into(),
+                        Value::Array(
+                            state
+                                .route_stack
+                                .iter()
+                                .map(|s| Value::String(s.clone()))
+                                .collect(),
+                        ),
+                    );
+                }
+                if let Some(res) = &state.result {
+                    state_map.insert("result".into(), res.clone());
+                }
+
+                match openai_client::decide(step.prompt_id as i32, pdf_text, &state_map).await {
+                    Ok(ans) => {
+                        let res_json = serde_json::from_str::<Value>(&ans.raw).unwrap_or(Value::Null);
+                        let yes = step.yes_key.as_deref().unwrap_or("yes");
+                        let no = step.no_key.as_deref().unwrap_or("no");
+                        let route_key = normalize_decision(
+                            &res_json,
                             ans.route.as_deref(),
                             ans.boolean,
-                            &step.yes_key,
-                            &step.no_key,
+                            yes,
+                            no,
                         );
 
-                        if let Ok(decision_val) = serde_json::from_str::<Value>(&ans.raw) {
-                            state.insert("result".into(), decision_val);
-                        }
+                        state.result = Some(res_json.clone());
+                        state.route_stack.push(route_key.clone());
+                        state.route = Some(route_key.clone());
 
-                        route_stack.push(route_key.clone());
-                        set_top(&route_stack, &mut state);
-
-                        let mut pr = PromptResult {
-                            prompt_id: step.prompt_id,
+                        let pr = PromptResult {
+                            prompt_id: step.prompt_id as i32,
                             prompt_type: PromptType::DecisionPrompt,
                             prompt_text,
                             boolean: ans.boolean,
                             value: ans.value,
                             weight: None,
-                            route: ans.route,
+                            route: Some(route_key.clone()),
                             json_key: None,
                             source: ans.source,
                             error: None,
                             openai_raw: ans.raw.clone(),
                         };
-
-                        pr.route = Some(route_key.clone());
                         decision.push(pr.clone());
                         run_log.push(RunStep {
                             seq_no: seq,
@@ -215,14 +239,14 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_type: step.step_type.clone(),
                             decision_key: Some(route_key),
                             route: step.route.clone(),
-                            merge_to: step.merge_to.clone(),
+                            merge_key: Some(step.merge_key.unwrap_or(false)),
                             result: serde_json::to_value(&pr)?,
                         });
                         seq += 1;
                     }
                     Err(e) => {
                         let pr = PromptResult {
-                            prompt_id: step.prompt_id,
+                            prompt_id: step.prompt_id as i32,
                             prompt_type: PromptType::DecisionPrompt,
                             prompt_text,
                             boolean: None,
@@ -242,7 +266,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_type: step.step_type.clone(),
                             decision_key: None,
                             route: step.route.clone(),
-                            merge_to: step.merge_to.clone(),
+                            merge_key: Some(step.merge_key.unwrap_or(false)),
                             result: serde_json::to_value(&pr)?,
                         });
                         seq += 1;
@@ -251,10 +275,10 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
             }
         }
 
-        // Expliziter Merge nach dem Step
-        if step.merge_key == Some(true) && !route_stack.is_empty() {
-            route_stack.pop();
-            set_top(&route_stack, &mut state);
+        // expliziter Merge nach dem Step
+        if step.merge_key == Some(true) && !state.route_stack.is_empty() {
+            state.route_stack.pop();
+            state.route = state.route_stack.last().cloned();
         }
     }
 

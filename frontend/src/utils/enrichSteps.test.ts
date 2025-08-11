@@ -13,14 +13,13 @@ describe('enrichSteps', () => {
 
   it('handles branches', () => {
     const steps = [
-      { id: 'a', step_type: 'DecisionPrompt', merge_to: 'c', route: 'r1' },
+      { id: 'a', step_type: 'DecisionPrompt' },
       { id: 'b', step_type: 'ExtractionPrompt', route: 'r1' },
-      { id: 'c', step_type: 'ScoringPrompt' },
+      { id: 'c', step_type: 'ScoringPrompt', route: 'r1', merge_key: true },
+      { id: 'd', step_type: 'ExtractionPrompt' },
     ];
     const res = enrichSteps(steps);
-    expect(res[0].depth).toBe(0);
-    expect(res[1].depth).toBe(1);
-    expect(res[2].depth).toBe(0);
-    expect(res[0].color).toBe(res[1].color);
+    expect(res.map(s => s.depth)).toEqual([0,1,1,0]);
+    expect(res[1].color).toBe(res[2].color);
   });
 });

@@ -1,71 +1,50 @@
 import React, { useState } from 'react';
-import { usePipelineStore, PipelineStep } from '../../hooks/usePipelineStore';
 import { Box, TextField, Button } from '@mui/material';
+import { PipelineStep, usePipelineStore } from '../../hooks/usePipelineStore';
 
-export default function StepDialog({ step }: { step: PipelineStep }) {
-  const { updateStep, steps: allSteps } = usePipelineStore();
-  const [keyInputs, setKeyInputs] = useState<{yes?:string,no?:string,merge?:string}>({});
+interface Props {
+  step: PipelineStep;
+  onSave?: (changes: Partial<PipelineStep>) => void;
+}
 
-  const writeKeys = () => {
-    updateStep(step.id, {
-      yesKey: keyInputs.yes,
-      noKey:  keyInputs.no,
-      mergeKey: keyInputs.merge,
-      targets: { [keyInputs.yes!]: '', [keyInputs.no!]: '' },
-      mergeTo: ''
-    }).catch(()=>{});
+export default function StepDialog({ step, onSave }: Props) {
+  const { updateStep } = usePipelineStore();
+  const [yesKey, setYesKey] = useState(step.yesKey || '');
+  const [noKey, setNoKey] = useState(step.noKey || '');
+
+  const valid = yesKey.trim() !== '' && noKey.trim() !== '';
+
+  const handleSave = () => {
+    if (!valid) return;
+    const changes = { yesKey, noKey };
+    if (onSave) {
+      onSave(changes);
+    } else {
+      updateStep(step.id, changes).catch(() => {});
+    }
   };
 
-  // Wizard: require yes/no/merge
-  if (step.type === 'DecisionPrompt' && (!step.yesKey || !step.noKey || !step.mergeKey)) {
-    return (
-      <Box sx={{ p:2 }}>
-        <TextField label="Yes-Key" fullWidth required
-          value={keyInputs.yes||''}
-          onChange={e=>setKeyInputs(k=>({ ...k, yes:e.target.value }))} />
-        <TextField label="No-Key" fullWidth required sx={{ mt:2 }}
-          value={keyInputs.no||''}
-          onChange={e=>setKeyInputs(k=>({ ...k, no:e.target.value }))} />
-        <TextField label="Merge-Key" fullWidth required sx={{ mt:2 }}
-          value={keyInputs.merge||''}
-          onChange={e=>setKeyInputs(k=>({ ...k, merge:e.target.value }))} />
-        <Button variant="contained" fullWidth sx={{ mt:2 }}
-          disabled={!(keyInputs.yes && keyInputs.no && keyInputs.merge)}
-          onClick={writeKeys}>
-          Save Routes
-        </Button>
-      </Box>
-    );
-  }
-
-  // Fixed 3-row branch panel
   return (
-    <table>
-      <thead><tr><th>Route</th><th>Next Step</th></tr></thead>
-      <tbody>
-        {[[step.yesKey,''],[step.noKey,'']].map(([k])=> (
-          <tr key={k as string}>
-            <td>{k}</td>
-            <td>
-              <select value={step.targets?.[k as string]||''}
-                      onChange={e=>updateStep(step.id,{ targets:{ ...step.targets, [k as string]:e.target.value } }).catch(()=>{})}>
-                <option value="">(none)</option>
-                {allSteps.map(s=><option key={s.id} value={s.id}>{s.id}</option>)}
-              </select>
-            </td>
-          </tr>
-        ))}
-        <tr key="merge">
-          <td>{step.mergeKey}</td>
-          <td>
-            <select value={step.mergeTo||''}
-                    onChange={e=>updateStep(step.id,{ mergeTo:e.target.value }).catch(()=>{})}>
-              <option value="">(none)</option>
-              {allSteps.map(s=><option key={s.id} value={s.id}>{s.id}</option>)}
-            </select>
-          </td>
-        </tr>
-      </tbody>
-    </table>
+    <Box sx={{ p: 2, display: 'flex', flexDirection: 'column', gap: 2 }}>
+      <TextField
+        label="Yes-Key"
+        fullWidth
+        required
+        value={yesKey}
+        onChange={e => setYesKey(e.target.value)}
+        error={yesKey.trim() === ''}
+      />
+      <TextField
+        label="No-Key"
+        fullWidth
+        required
+        value={noKey}
+        onChange={e => setNoKey(e.target.value)}
+        error={noKey.trim() === ''}
+      />
+      <Button variant="contained" disabled={!valid} onClick={handleSave}>
+        Save Keys
+      </Button>
+    </Box>
   );
 }

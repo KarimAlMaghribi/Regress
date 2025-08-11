@@ -131,7 +131,7 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
                   prompt_type   as "prompt_type!",
                   decision_key,
                   route,
-                  merge_to,
+                  merge_key,
                   result        as "result!"
            FROM pipeline_run_steps WHERE run_id=$1 ORDER BY seq_no"#,
         id
@@ -144,14 +144,14 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
         .map(|row| RunStep {
             seq_no: row.seq_no as u32,
             step_id: row.step_id,
-            prompt_id: row.prompt_id,
+            prompt_id: row.prompt_id as i64,
             prompt_type: row
                 .prompt_type
                 .parse()
                 .unwrap_or(PromptType::ExtractionPrompt),
             decision_key: row.decision_key,
             route: row.route,
-            merge_to: row.merge_to,
+            merge_key: row.merge_key,
             result: row.result,
         })
         .collect();
@@ -296,17 +296,14 @@ async fn add_step(
 struct StepPatch {
     #[serde(rename = "type")]
     step_type: Option<shared::dto::PromptType>,
-    prompt_id: Option<i32>,
+    prompt_id: Option<i64>,
     route: Option<Option<String>>,
-    targets: Option<Option<HashMap<String, String>>>,
-    merge_to: Option<Option<String>>,
     yes_key: Option<Option<String>>,
     no_key: Option<Option<String>>,
     merge_key: Option<Option<bool>>,
-    true_target: Option<Option<String>>,
-    false_target: Option<Option<String>>,
-    enum_targets: Option<Option<HashMap<String, String>>>,
     active: Option<bool>,
+    #[serde(flatten)]
+    _extras: std::collections::HashMap<String, serde_json::Value>,
 }
 
 async fn update_step(
@@ -331,12 +328,6 @@ async fn update_step(
     if let Some(v) = patch.route {
         step.route = v;
     }
-    if let Some(v) = patch.targets {
-        step.targets = v;
-    }
-    if let Some(v) = patch.merge_to {
-        step.merge_to = v;
-    }
     if let Some(v) = patch.yes_key {
         step.yes_key = v;
     }
@@ -346,17 +337,8 @@ async fn update_step(
     if let Some(v) = patch.merge_key {
         step.merge_key = v;
     }
-    if let Some(v) = patch.true_target {
-        step.true_target = v;
-    }
-    if let Some(v) = patch.false_target {
-        step.false_target = v;
-    }
-    if let Some(v) = patch.enum_targets {
-        step.enum_targets = v;
-    }
     if let Some(v) = patch.active {
-        step.active = Some(v);
+        step.active = v;
     }
     match store_config(&data.pool, id, &cfg).await {
         Ok(()) => HttpResponse::NoContent().finish(),

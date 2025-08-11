@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
-  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip
+  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip, FormControlLabel
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -9,9 +9,8 @@ import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import debounce from 'lodash.debounce';
 import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
-import { useBranchLayout, LayoutRow } from '../hooks/useBranchLayout';
+import { useLinearIndentLayout, LayoutRow } from '../hooks/useLinearIndentLayout';
 import StepDialog from './PipelineEditor/StepDialog';
-import BranchHeader from './PipelineEditor/BranchHeader';
 import { useNavigate } from 'react-router-dom';
 import uuid from '../utils/uuid';
 
@@ -40,13 +39,10 @@ export default function PipelineEditor() {
   const [promptOptions, setPromptOptions] = useState<Record<string, PromptOption[]>>({});
   const [error, setError] = useState('');
   const debounced = useMemo(() => debounce(updateName, 300), [updateName]);
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const toggleCollapse = (cKey: string) =>
-    setCollapsed(c => ({ ...c, [cKey]: !c[cKey] }));
   const totalCols = 10;
 
-  /* memo‑ise hierarchical rows */
-  const layoutRows = useMemo<LayoutRow[]>(() => useBranchLayout(steps), [steps]);
+  /* memo‑ise linear rows with depth */
+  const layoutRows = useMemo<LayoutRow[]>(() => useLinearIndentLayout(steps), [steps]);
 
   const routeKeysUpTo = (idx: number): string[] => {
     const set = new Set<string>();
@@ -99,22 +95,6 @@ export default function PipelineEditor() {
   const handleRouteChange = async (stepId: string, newRoute: string) => {
     try {
       await updateStep(stepId, { route: newRoute || undefined });
-      const allSteps = usePipelineStore.getState().steps;
-      const layout = useBranchLayout(allSteps);
-      const ids = allSteps.map(s => s.id);
-      const from = ids.indexOf(stepId);
-      ids.splice(from, 1);
-      const routeRows = layout.filter(r =>
-        !r.isBranchHeader && (r.branchKey ?? '') === newRoute && r.step.id !== stepId
-      );
-      if (routeRows.length) {
-        const lastRow = routeRows[routeRows.length - 1];
-        const lastIdx = allSteps.findIndex(s => s.id === lastRow.step.id);
-        ids.splice(lastIdx + 1, 0, stepId);
-      } else {
-        ids.push(stepId);
-      }
-      await reorder(ids);
     } catch (err) {
       setError(String(err));
     }
@@ -158,87 +138,50 @@ export default function PipelineEditor() {
                 <TableCell></TableCell>
               </TableRow>
             </TableHead>
-            <TableBody>
-                {layoutRows.map(r => (
-                  r.isBranchHeader ? (
-                    <TableRow key={`bh-${r.cKey}`}>
-                      <TableCell colSpan={totalCols} sx={{ bgcolor: '#f5f5f5', p: 0 }}>
-                        <BranchHeader
-                          branchKey={r.branchKey!}
-                          collapsed={!!collapsed[r.cKey!]}
-                          onToggle={()=>toggleCollapse(r.cKey!)}
-                          onAdd={()=>{
-            /* insert directly after the last row inside this branch */
-            const lastRowIndex = layoutRows
-               .filter(x=>x.cKey===r.cKey && !x.isBranchHeader)
-               .map(x=>steps.findIndex(s=>s.id===x.step.id))
-               .reduce((a,b)=>Math.max(a,b), -1) + 1;
-            setInsertPos(lastRowIndex);
-            setDraft({ id: uuid(), type:'ExtractionPrompt', promptId:0, active:true });
-          }}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ) : collapsed[r.cKey || ''] ? null : (() => {
-                    const idx = steps.findIndex(s => s.id === r.step.id);
-                    return (
-                      <>
-                        <TableRow key={r.step.id}>
-                          <TableCell sx={{ pl: r.depth * 4 }}>
-                            {r.rowIdx}
-                          </TableCell>
-                          <TableCell>
-                            <IconButton size="small" onClick={() => moveStep(idx, idx - 1)}><ArrowUpwardIcon fontSize="small" /></IconButton>
-                            <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}><ArrowDownwardIcon fontSize="small" /></IconButton>
-                            <IconButton size="small" onClick={() => { setInsertPos(idx + 1); setDraft({ ...r.step, id: uuid() }); }}><AddIcon fontSize="small" /></IconButton>
-                          </TableCell>
-                          <TableCell>{r.step.type}</TableCell>
-                          <TableCell>{r.step.promptId}</TableCell>
-                          <TableCell>{r.step.type==='DecisionPrompt' ? r.step.yesKey : '—'}</TableCell>
-                          <TableCell>{r.step.type==='DecisionPrompt' ? r.step.noKey : '—'}</TableCell>
-                          <TableCell>{r.step.type==='DecisionPrompt' ? r.step.mergeKey : '—'}</TableCell>
-                          <TableCell>
-                              {r.step.type==='DecisionPrompt' ? '—' : (
-                                <Select
-                                        value={r.step.route||''}
-                                        onChange={e => handleRouteChange(r.step.id, e.target.value as string)}>
-                                  <MenuItem value=""><em>none</em></MenuItem>
-                                  {routeKeysUpTo(idx).map(k => (
-                                    <MenuItem key={k} value={k}>{k}</MenuItem>
-                                  ))}
-                                </Select>
-                              )}
-                            </TableCell>
-                          <TableCell><Checkbox checked={r.step.active !== false} onChange={e => updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))} /></TableCell>
-                          <TableCell>
-                            {r.isBranchEnd && (
-                              <Chip
-                                label={`merge→${r.step.mergeTo || '—'}`}
-                                size="small"
-                                onClick={() => setEdit(r.step)}
-                                color="info"
-                                variant="outlined"
-                              />
-                            )}
-                            <IconButton onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}><DeleteIcon /></IconButton>
-                            <Button size="small" onClick={() => setEdit(r.step)}>Edit</Button>
+              <TableBody>
+                {layoutRows.map(r => {
+                  const idx = steps.findIndex(s => s.id === r.step.id);
+                  return (
+                    <>
+                      <TableRow key={r.step.id}>
+                        <TableCell sx={{ pl: r.depth * 4 }}>{r.rowLabel}</TableCell>
+                        <TableCell>
+                          <IconButton size="small" onClick={() => moveStep(idx, idx - 1)}><ArrowUpwardIcon fontSize="small" /></IconButton>
+                          <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}><ArrowDownwardIcon fontSize="small" /></IconButton>
+                          <IconButton size="small" onClick={() => { setInsertPos(idx + 1); setDraft({ ...r.step, id: uuid() }); }}><AddIcon fontSize="small" /></IconButton>
+                        </TableCell>
+                        <TableCell>{r.step.type}</TableCell>
+                        <TableCell>{r.step.promptId}</TableCell>
+                        <TableCell>{r.step.type==='DecisionPrompt' ? r.step.yesKey : '—'}</TableCell>
+                        <TableCell>{r.step.type==='DecisionPrompt' ? r.step.noKey : '—'}</TableCell>
+                        <TableCell>
+                          <Checkbox checked={!!r.step.mergeKey} onChange={e => updateStep(r.step.id, { mergeKey: e.target.checked }).catch(err => setError(String(err)))} />
+                        </TableCell>
+                        <TableCell>
+                          <Select value={r.step.route||''} onChange={e => handleRouteChange(r.step.id, e.target.value as string)}>
+                            <MenuItem value=""><em>none</em></MenuItem>
+                            {routeKeysUpTo(idx).map(k => (<MenuItem key={k} value={k}>{k}</MenuItem>))}
+                          </Select>
+                        </TableCell>
+                        <TableCell>
+                          <Checkbox checked={r.step.active !== false} onChange={e => updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))} />
+                        </TableCell>
+                        <TableCell>
+                          {r.warnings.map((w, i) => (<Chip key={i} label={w} size="small" color="warning" sx={{ mr: 0.5 }} />))}
+                          <IconButton onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}><DeleteIcon /></IconButton>
+                          <Button size="small" onClick={() => setEdit(r.step)}>Edit</Button>
+                        </TableCell>
+                      </TableRow>
+                      {r.step.type === 'DecisionPrompt' && (
+                        <TableRow>
+                          <TableCell colSpan={totalCols} sx={{ p: 0 }}>
+                            <Box width="100%" height="4px" sx={{ backgroundColor: getRouteColor(r.step.route || r.step.yesKey || '') }} />
                           </TableCell>
                         </TableRow>
-                        {r.step.type === 'DecisionPrompt' && (
-                          <TableRow>
-                            <TableCell colSpan={totalCols} sx={{ p: 0 }}>
-                              <Box
-                                width="100%"
-                                height="4px"
-                                sx={{ backgroundColor: getRouteColor(r.step.route || '') }}
-                              />
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </>
-                    );
-                  })()
-                ))}
+                      )}
+                    </>
+                  );
+                })}
               </TableBody>
       </Table>
       <Drawer open={!!edit} onClose={() => setEdit(null)} anchor="right">
@@ -255,25 +198,20 @@ export default function PipelineEditor() {
             {edit.type==='DecisionPrompt' && (
               <StepDialog step={edit} />
             )}
-              {edit.type!=='DecisionPrompt' && (
-                <>
-                  <Select
-                    fullWidth
-                    value={edit.route||''}
-                    onChange={e => handleRouteChange(edit.id, e.target.value as string)}
-                  >
-                    <MenuItem value=""><em>none</em></MenuItem>
-                    {routeKeysUpTo(steps.findIndex(s=>s.id===edit.id)).map(k => (
-                      <MenuItem key={k} value={k}>{k}</MenuItem>
-                    ))}
-                  </Select>
-                  <Select fullWidth value={edit.mergeTo||''}
-                          onChange={e=>updateStep(edit.id,{mergeTo:e.target.value||undefined}).catch(er=>setError(String(er)))}>
-                    <MenuItem value="">(linear)</MenuItem>
-                    {steps.map(s=>(<MenuItem key={s.id} value={s.id}>{s.id}</MenuItem>))}
-                  </Select>
-                </>
-              )}
+            <Select
+              fullWidth
+              value={edit.route||''}
+              onChange={e => handleRouteChange(edit.id, e.target.value as string)}
+            >
+              <MenuItem value=""><em>none</em></MenuItem>
+              {routeKeysUpTo(steps.findIndex(s=>s.id===edit.id)).map(k => (
+                <MenuItem key={k} value={k}>{k}</MenuItem>
+              ))}
+            </Select>
+              <FormControlLabel
+                control={<Checkbox checked={!!edit.mergeKey} onChange={e => updateStep(edit.id, { mergeKey: e.target.checked }).catch(er => setError(String(er)))} />}
+                label="Merge"
+              />
           </Box>
         )}
       </Drawer>
@@ -286,30 +224,28 @@ export default function PipelineEditor() {
               <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
             </Select>
             <Select fullWidth value={draft.promptId} onChange={e=>setDraft({...draft, promptId:Number(e.target.value)})}>
-              {(promptOptions[draft.type]||[]).map(p=>(<MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>))}
+                {(promptOptions[draft.type]||[]).map(p=>(<MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>))}
             </Select>
-              {draft.type!=='DecisionPrompt' && (
-                <>
-                  <Select fullWidth value={draft.route||''}
-                          onChange={e=>setDraft({...draft, route:e.target.value||undefined})}>
-                    <MenuItem value=""><em>none</em></MenuItem>
-                    {routeKeysUpTo(insertPos).map(k => (
-                      <MenuItem key={k} value={k}>{k}</MenuItem>
-                    ))}
-                  </Select>
-                  <Select fullWidth value={draft.mergeTo||''}
-                          onChange={e=>setDraft({...draft, mergeTo:e.target.value||undefined})}>
-                    <MenuItem value="">(linear)</MenuItem>
-                    {steps.map(s=>(<MenuItem key={s.id} value={s.id}>{s.id}</MenuItem>))}
-                  </Select>
-                </>
-              )}
+            {draft.type==='DecisionPrompt' && (
+              <StepDialog step={draft} onSave={changes => setDraft({ ...draft, ...changes })} />
+            )}
+            <Select fullWidth value={draft.route||''}
+                    onChange={e=>setDraft({...draft, route:e.target.value||undefined})}>
+              <MenuItem value=""><em>none</em></MenuItem>
+              {routeKeysUpTo(insertPos).map(k => (
+                <MenuItem key={k} value={k}>{k}</MenuItem>
+              ))}
+            </Select>
+              <FormControlLabel
+                control={<Checkbox checked={!!draft.mergeKey} onChange={e=>setDraft({...draft, mergeKey:e.target.checked})} />}
+                label="Merge"
+              />
             <Box sx={{ display:'flex', justifyContent:'flex-end', mt:2 }}>
-              <Button variant="outlined" onClick={() => setDraft(null)}>Cancel</Button>
-              <Button variant="contained" onClick={saveNewStep}>Add</Button>
+                <Button variant="outlined" onClick={() => setDraft(null)}>Cancel</Button>
+                <Button variant="contained" onClick={saveNewStep} disabled={draft.type==='DecisionPrompt' && !(draft.yesKey && draft.noKey)}>Add</Button>
+              </Box>
             </Box>
-          </Box>
-        )}
+          )}
       </Drawer>
       <Snackbar open={!!error} autoHideDuration={6000} onClose={()=>setError('')}>
         <Alert severity="error" onClose={()=>setError('')}>{error}</Alert>
