@@ -113,46 +113,49 @@ struct RunMeta {
 
 async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl Responder {
     let id = path.into_inner();
-    let meta = match sqlx::query_as!(
-        RunMeta,
+    let meta = match sqlx::query_as::<_, RunMeta>(
         "SELECT pipeline_id, pdf_id, overall_score, extracted FROM pipeline_runs WHERE id=$1",
-        id
     )
+    .bind(id)
     .fetch_one(&data.pool)
     .await
     {
         Ok(m) => m,
         Err(_) => return HttpResponse::NotFound().finish(),
     };
-    let step_rows = sqlx::query!(
-        r#"SELECT seq_no        as "seq_no!",
-                  step_id       as "step_id!",
-                  prompt_id     as "prompt_id!",
-                  prompt_type   as "prompt_type!",
+    let step_rows = sqlx::query(
+        r#"SELECT seq_no,
+                  step_id,
+                  prompt_id,
+                  prompt_type,
                   decision_key,
                   route,
                   merge_key,
-                  result        as "result!"
+                  result
            FROM pipeline_run_steps WHERE run_id=$1 ORDER BY seq_no"#,
-        id
     )
+    .bind(id)
     .fetch_all(&data.pool)
     .await
     .unwrap_or_default();
     let steps: Vec<RunStep> = step_rows
         .into_iter()
-        .map(|row| RunStep {
-            seq_no: row.seq_no as u32,
-            step_id: row.step_id,
-            prompt_id: row.prompt_id as i64,
-            prompt_type: row
-                .prompt_type
-                .parse()
-                .unwrap_or(PromptType::ExtractionPrompt),
-            decision_key: row.decision_key,
-            route: row.route,
-            merge_key: row.merge_key,
-            result: row.result,
+        .map(|row| {
+            let prompt_type: PromptType = row
+                .try_get::<String, _>("prompt_type")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(PromptType::ExtractionPrompt);
+            RunStep {
+                seq_no: row.try_get::<i32, _>("seq_no").unwrap_or_default() as u32,
+                step_id: row.try_get::<String, _>("step_id").unwrap_or_default(),
+                prompt_id: row.try_get::<i64, _>("prompt_id").unwrap_or_default(),
+                prompt_type,
+                decision_key: row.try_get("decision_key").ok(),
+                route: row.try_get("route").ok(),
+                merge_key: row.try_get("merge_key").ok(),
+                result: row.try_get("result").unwrap_or_default(),
+            }
         })
         .collect();
     let extracted_map = meta
