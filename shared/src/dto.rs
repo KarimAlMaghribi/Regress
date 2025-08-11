@@ -67,11 +67,11 @@ pub struct PromptResult {
 pub struct RunStep {
     pub seq_no: u32,
     pub step_id: String,
-    pub prompt_id: i32,
+    pub prompt_id: i64,
     pub prompt_type: PromptType,
     pub decision_key: Option<String>,
     pub route: Option<String>,
-    pub merge_to: Option<String>,
+    pub merge_key: Option<bool>,
     pub result: serde_json::Value,
 }
 
@@ -93,32 +93,22 @@ pub struct PipelineStep {
     pub id: String,
     #[serde(rename = "type")]
     pub step_type: PromptType,
-    pub prompt_id: i32,
+    #[serde(rename = "prompt_id")]
+    pub prompt_id: i64,
+    #[serde(default)]
     pub route: Option<String>,
-    /// generic branching: route-value → next-step-id
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub targets: Option<std::collections::HashMap<String, String>>,
-    /// first step after the branch rejoins (optional)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub merge_to: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "yes_key")]
     pub yes_key: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, rename = "no_key")]
     pub no_key: Option<String>,
     #[serde(
         default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "de_merge_key"
+        rename = "merge_key",
+        deserialize_with = "de_merge_key_opt"
     )]
     pub merge_key: Option<bool>,
-    /* legacy fields kept for migration only */
-    #[serde(default, skip)]
-    pub true_target: Option<String>,
-    #[serde(default, skip)]
-    pub false_target: Option<String>,
-    #[serde(default, skip)]
-    pub enum_targets: Option<std::collections::HashMap<String, String>>,
-    pub active: Option<bool>,
+    #[serde(default = "default_true")]
+    pub active: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -127,16 +117,20 @@ pub struct PipelineConfig {
     pub steps: Vec<PipelineStep>,
 }
 
-fn de_merge_key<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+fn default_true() -> bool {
+    true
+}
+
+fn de_merge_key_opt<'de, D>(d: D) -> Result<Option<bool>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let v: Option<serde_json::Value> = Option::deserialize(deserializer)?;
-    Ok(match v {
-        Some(serde_json::Value::Bool(b)) => Some(b),
-        Some(serde_json::Value::String(_)) => Some(true),
-        Some(serde_json::Value::Number(n)) => n.as_u64().map(|x| x > 0),
-        Some(_) => None,
-        None => None,
-    })
+    use serde_json::Value;
+    let v: Option<Value> = Option::deserialize(d)?;
+    Ok(v.and_then(|x| match x {
+        Value::Bool(b) => Some(b),
+        Value::String(s) => Some(!s.is_empty()),
+        Value::Number(n) => Some(n.as_i64().unwrap_or(0) > 0),
+        _ => None,
+    }))
 }

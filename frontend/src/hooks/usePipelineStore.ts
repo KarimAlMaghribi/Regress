@@ -8,8 +8,6 @@ export interface PipelineStep {
   yesKey?: string;
   noKey?: string;
   mergeKey?: boolean;
-  targets?: Record<string, string>;
-  mergeTo?: string;
   route?: string;
   active?: boolean;
 }
@@ -33,24 +31,13 @@ interface PipelineState {
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 
-// when loading old pipelines → migrate
-interface Pipeline { name: string; steps: PipelineStep[] }
-const migrate = (p: Pipeline): Pipeline => ({
-  ...p,
-  steps: p.steps.map(s => {
-    if (!s.targets) {
-      const t: Record<string, string> = {};
-      // @ts-ignore legacy fields
-      if (s.trueTarget) t['true'] = s.trueTarget;
-      // @ts-ignore legacy fields
-      if (s.falseTarget) t['false'] = s.falseTarget;
-      // @ts-ignore legacy fields
-      if (s.enumTargets) Object.assign(t, s.enumTargets);
-      return { ...s, targets: Object.keys(t).length ? t : undefined };
-    }
-    return s;
-  }),
-});
+function normalizeMergeKey(v: any): boolean | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v > 0;
+  if (typeof v === 'string') return v !== '';
+  return undefined;
+}
 
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
@@ -75,8 +62,18 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
   async loadPipeline(id) {
     const res = await fetch(`${API}/pipelines/${id}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const json = migrate(await res.json());
-    set({ name: json.name, steps: json.steps, currentPipelineId: id, dirty: false });
+    const json = await res.json();
+    const steps: PipelineStep[] = (json.steps || []).map((s: any) => ({
+      id: s.id,
+      type: s.type,
+      promptId: s.promptId ?? s.prompt_id,
+      yesKey: s.yesKey ?? s.yes_key || undefined,
+      noKey: s.noKey ?? s.no_key || undefined,
+      mergeKey: normalizeMergeKey(s.mergeKey ?? s.merge_key),
+      route: s.route || undefined,
+      active: s.active !== false,
+    }));
+    set({ name: json.name, steps, currentPipelineId: id, dirty: false });
   },
 
   async createPipeline(name) {

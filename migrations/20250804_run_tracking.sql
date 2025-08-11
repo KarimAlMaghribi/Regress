@@ -6,7 +6,7 @@ CREATE TABLE pipeline_runs (
 CREATE TABLE pipeline_run_steps (
   run_id UUID REFERENCES pipeline_runs(id) ON DELETE CASCADE,
   seq_no INT, step_id TEXT, prompt_id INT, prompt_type TEXT,
-  decision_key TEXT, route TEXT, merge_to TEXT, result JSONB,
+  decision_key TEXT, route TEXT, result JSONB,
   created_at TIMESTAMPTZ DEFAULT now(),
   PRIMARY KEY (run_id, seq_no)
 );
