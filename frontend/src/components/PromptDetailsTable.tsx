@@ -38,7 +38,7 @@ export default function PromptDetailsTable({ data, onSelect }: Props) {
               <TableCell title={promptText ?? ''}>{promptText ? `${promptText.slice(0, 40)}…` : '—'}</TableCell>
               <TableCell>{p.source?.quote ?? '—'}</TableCell>
               <TableCell>{(p as any).score ?? String((p as any).boolean ?? (p as any).result ?? '')}</TableCell>
-              <TableCell>{p.route ?? '—'}</TableCell>
+              <TableCell>{p.route ?? 'Root'}</TableCell>
               <TableCell>
                 {p.source ? `p${p.source.page} [${p.source.bbox.join(',')}]` : '—'}
               </TableCell>
