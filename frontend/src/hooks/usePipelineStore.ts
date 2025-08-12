@@ -179,7 +179,8 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       set({ steps: prev, dirty: true });
       throw new Error(`HTTP ${res.status}`);
     }
-    set({ dirty: false });
+    // Ensure the latest order is treated as clean once persisted
+    set({ steps: next, dirty: false });
   },
 
   confirmIfDirty() {
