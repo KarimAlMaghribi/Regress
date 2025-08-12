@@ -5,8 +5,9 @@ use rdkafka::{
 };
 use serde_json::Value;
 use shared::dto::{PipelineConfig, PipelineRunResult, TextExtracted};
+use shared::kafka;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 mod runner;
 use sqlx::PgPool;
@@ -28,6 +29,9 @@ async fn app_main() -> anyhow::Result<()> {
     let broker = std::env::var("MESSAGE_BROKER_URL")
         .or_else(|_| std::env::var("BROKER"))
         .unwrap_or_else(|_| "kafka:9092".into());
+    if let Err(e) = kafka::ensure_topics(&broker, &["text-extracted", "pipeline-result"]).await {
+        warn!(%e, "failed to ensure kafka topics");
+    }
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
     let pool = PgPool::connect(&db_url).await?;
 

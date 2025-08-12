@@ -3,3 +3,4 @@ pub mod dto;
 pub mod error;
 pub mod openai_client;
 pub mod utils;
+pub mod kafka;

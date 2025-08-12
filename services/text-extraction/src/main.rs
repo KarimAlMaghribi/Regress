@@ -4,6 +4,7 @@ use shared::{
     config::Settings,
     dto::{PdfUploaded, TextExtracted},
     error::Result,
+    kafka,
 };
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -13,7 +14,7 @@ use rdkafka::{
 use std::time::Duration;
 use postgres_native_tls::MakeTlsConnector;
 use native_tls::TlsConnector;
-use tracing::{info, error};
+use tracing::{info, error, warn};
 use text_extraction::{extract_text, extract_text_layout};
 
 
@@ -80,6 +81,9 @@ async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting text-extraction service");
     let settings = Settings::new().unwrap();
+    if let Err(e) = kafka::ensure_topics(&settings.message_broker_url, &["pdf-merged", "text-extracted"]).await {
+        warn!(%e, "failed to ensure kafka topics");
+    }
     let tls_connector = TlsConnector::builder().build().unwrap();
     let connector = MakeTlsConnector::new(tls_connector);
     let (db_client, connection) =
