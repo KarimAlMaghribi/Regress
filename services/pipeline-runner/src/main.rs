@@ -4,7 +4,7 @@ use rdkafka::{
     ClientConfig, Message,
 };
 use serde_json::Value;
-use shared::dto::{PipelineConfig, PipelineRunResult, TextExtracted};
+use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult};
 use shared::kafka;
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -29,7 +29,7 @@ async fn app_main() -> anyhow::Result<()> {
     let broker = std::env::var("MESSAGE_BROKER_URL")
         .or_else(|_| std::env::var("BROKER"))
         .unwrap_or_else(|_| "kafka:9092".into());
-    if let Err(e) = kafka::ensure_topics(&broker, &["text-extracted", "pipeline-result"]).await {
+    if let Err(e) = kafka::ensure_topics(&broker, &["pipeline-run", "pipeline-result"]).await {
         warn!(%e, "failed to ensure kafka topics");
     }
     let db_url = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
@@ -73,7 +73,7 @@ async fn app_main() -> anyhow::Result<()> {
         .set("group.id", "pipeline-runner")
         .set("bootstrap.servers", &broker)
         .create()?;
-    consumer.subscribe(&["text-extracted"])?;
+    consumer.subscribe(&["pipeline-run"])?;
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &broker)
         .create()?;
@@ -83,7 +83,7 @@ async fn app_main() -> anyhow::Result<()> {
             Err(e) => error!(%e, "kafka error"),
             Ok(m) => {
                 if let Some(Ok(payload)) = m.payload_view::<str>() {
-                    if let Ok(evt) = serde_json::from_str::<TextExtracted>(payload) {
+                    if let Ok(evt) = serde_json::from_str::<PdfUploaded>(payload) {
                         info!(id = evt.pdf_id, pipeline = %evt.pipeline_id, "process event");
                         let row = sqlx::query("SELECT config_json FROM pipelines WHERE id = $1")
                             .bind(evt.pipeline_id)
@@ -91,6 +91,12 @@ async fn app_main() -> anyhow::Result<()> {
                             .await?;
                         let config_json: Value = row.try_get("config_json")?;
                         if let Ok(cfg) = serde_json::from_value::<PipelineConfig>(config_json) {
+                            let row = sqlx::query("SELECT text FROM pdf_texts WHERE pdf_id = $1")
+                                .bind(evt.pdf_id)
+                                .fetch_one(&pool)
+                                .await?;
+                            let text: String = row.try_get("text")?;
+                            info!(id = evt.pdf_id, len = text.len(), "loaded text from db");
                             let row = sqlx::query(
                                 "INSERT INTO pipeline_runs (pipeline_id, pdf_id) VALUES ($1,$2) RETURNING id",
                             )
@@ -100,7 +106,7 @@ async fn app_main() -> anyhow::Result<()> {
                             .await?;
                             let run_id: Uuid = row.try_get("id")?;
 
-                            match runner::execute(&cfg, &evt.text).await {
+                            match runner::execute(&cfg, &text).await {
                                 Ok(outcome) => {
                                     let overall = runner::compute_overall_score(&outcome.scoring);
                                     let mut extracted = std::collections::HashMap::new();

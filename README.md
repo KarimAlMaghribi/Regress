@@ -17,8 +17,8 @@ graph TD;
 
 * **api-gateway** – performs health checks and forwards requests to the internal services.
 * **pdf-ingest** – stores uploaded PDFs and triggers text extraction.
-* **text-extraction** – runs OCR on new files and publishes `text-extracted` events.
-* **pipeline-runner** – consumes those events, executes the configured pipeline and emits `pipeline-result`.
+* **text-extraction** – runs OCR on new files and stores the text in the database.
+* **pipeline-runner** – consumes `pipeline-run` events, loads the stored text, executes the configured pipeline and emits `pipeline-result`.
 * **prompt-manager** – persists prompts and pipelines.
 * **pipeline-api** – REST API for editing and executing pipelines.
 * **metrics** – exposes Prometheus metrics and a `/health` route.
@@ -61,21 +61,16 @@ Defaults are provided in `docker-compose.yml`. The metrics service reads from th
 
 1. Upload a PDF via `POST http://localhost:8081/upload` with a multipart field
    named `file`. The response contains the generated id.
-2. The `text-extraction` service processes the file asynchronously and publishes
-   a `text-extracted` event.
-3. The `pipeline-runner` consumes that event, executes the configured pipeline
-   and stores the result in the `analysis_history` table. Use
+2. The `text-extraction` service processes the file asynchronously and stores
+   the extracted text in the `pdf_texts` table.
+3. Trigger a pipeline run by calling
+   `POST http://localhost:8084/pipelines/{id}/run` with
+   `{ "file_id": <upload id> }`. The request publishes a `pipeline-run` event.
+4. The `pipeline-runner` consumes that event, loads the text from the database,
+   executes the configured pipeline and stores the result in the
+   `analysis_history` table. Use
    `GET http://localhost:8090/analyses?status=completed` or open the WebSocket on
    the same port to receive updates while processing is running.
-4. To re-run classification on already extracted texts, first fetch available
-   ids via `GET http://localhost:8083/texts` and then submit them to
-   `POST http://localhost:8083/analyze` together with a prompt. The endpoint does
-   not repeat OCR but simply republishes a `text-extracted` event to start
-   classification again.
-5. Analyses can also be triggered manually by calling
-   `POST http://localhost:8084/pipelines/{id}/run` with
-   `{ "file_id": <upload id> }`. The request returns the result JSON once the
-   pipeline finishes or `202 Accepted` while still running.
 
 The `prompt-manager` reads the database connection string from `DATABASE_URL`.
 If the variable is not supplied it defaults to

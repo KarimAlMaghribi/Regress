@@ -7,12 +7,13 @@ processed by backend services and where they are stored.
 - **file** (`File`): selected PDF uploaded from the browser.
 
 The file is sent to the `pdf-ingest` service at `/upload`. It stores the bytes
-and publishes a `pdf-merged` event. The other services react on this event:
+and publishes a `pdf-merged` event. The `text-extraction` service reacts on this
+event, performs OCR and stores the text in the database.
 
-1. `text-extraction` retrieves the PDF, performs OCR and publishes a
-   `text-extracted` message.
-2. `pipeline-runner` consumes that message, executes the pipeline and writes to
-   the `analysis_history` table before emitting `pipeline-result`.
+A pipeline run is triggered via the pipeline API. It emits a `pipeline-run`
+event which the `pipeline-runner` consumes. The runner loads the stored text,
+executes the pipeline and writes to the `analysis_history` table before
+emitting `pipeline-result`.
 
 The `classifications` table contains:
 

@@ -1,12 +1,14 @@
 use actix_cors::Cors;
 use actix_web::web::Json;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
-use serde::{Deserialize, Serialize};
-use shared::dto::{PipelineConfig, PipelineRunResult, PipelineStep, PromptType, RunStep, PdfUploaded};
-use shared::kafka;
+use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::{ClientConfig, Message};
-use rdkafka::consumer::{Consumer, StreamConsumer};
+use serde::{Deserialize, Serialize};
+use shared::dto::{
+    PdfUploaded, PipelineConfig, PipelineRunResult, PipelineStep, PromptType, RunStep,
+};
+use shared::kafka;
 use sqlx::{PgPool, Row};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -422,16 +424,20 @@ async fn run_pipeline(
         Ok(v) => v,
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
-    let _ = sqlx::query("UPDATE uploads SET pipeline_id=$1, status='ocr' WHERE id=$2")
+    let _ = sqlx::query("UPDATE uploads SET pipeline_id=$1 WHERE id=$2")
         .bind(*path)
         .bind(input.file_id)
         .execute(&data.pool)
         .await;
-    let payload = serde_json::to_string(&PdfUploaded { pdf_id, pipeline_id: *path }).unwrap();
+    let payload = serde_json::to_string(&PdfUploaded {
+        pdf_id,
+        pipeline_id: *path,
+    })
+    .unwrap();
     let _ = data
         .producer
         .send(
-            FutureRecord::to("pdf-merged").payload(&payload).key(&()),
+            FutureRecord::to("pipeline-run").payload(&payload).key(&()),
             Duration::from_secs(0),
         )
         .await;
@@ -443,7 +449,9 @@ async fn run_pipeline(
         .create::<StreamConsumer>()
     {
         if consumer.subscribe(&["pipeline-result"]).is_ok() {
-            if let Ok(Ok(msg)) = tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await {
+            if let Ok(Ok(msg)) =
+                tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await
+            {
                 if let Some(Ok(payload)) = msg.payload_view::<str>() {
                     if let Ok(res) = serde_json::from_str::<PipelineRunResult>(payload) {
                         if res.pdf_id == pdf_id && res.pipeline_id == *path {
@@ -462,17 +470,23 @@ async fn run_pipeline(
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     let settings = shared::config::Settings::new().unwrap();
-    let topics = ["pdf-merged", "pipeline-result"];
+    let topics = ["pipeline-run", "pipeline-result"];
     if let Err(e) = kafka::ensure_topics(&settings.message_broker_url, &topics).await {
         error!(%e, "failed to ensure topics");
     }
-    let pool = PgPool::connect(&settings.database_url).await.expect("db connect");
+    let pool = PgPool::connect(&settings.database_url)
+        .await
+        .expect("db connect");
     init_db(&pool).await;
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &settings.message_broker_url)
         .create()
         .expect("producer");
-    let state = AppState { pool, producer, broker: settings.message_broker_url.clone() };
+    let state = AppState {
+        pool,
+        producer,
+        broker: settings.message_broker_url.clone(),
+    };
     info!("starting pipeline-api");
     HttpServer::new(move || {
         App::new()
