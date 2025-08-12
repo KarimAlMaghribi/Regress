@@ -47,7 +47,7 @@ export default function PipelineLinearView({ steps }: { steps: PipelineStep[] })
               &nbsp;({step.yesKey} / {step.noKey})
             </span>
           )}
-          {step.route && <span style={{ opacity: 0.6 }}>&nbsp;[route: {step.route}]</span>}
+          <span style={{ opacity: 0.6 }}>&nbsp;[route: {step.route ?? 'Root'}]</span>
           {step.mergeKey && <span style={{ opacity: 0.6 }}>&nbsp;[merge]</span>}
         </div>
       ))}

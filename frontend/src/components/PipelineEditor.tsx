@@ -17,6 +17,7 @@ import uuid from '../utils/uuid';
 interface PromptOption { id: number; text: string; }
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
+const ROOT = 'Root';
 
 export default function PipelineEditor() {
   const {
@@ -45,7 +46,7 @@ export default function PipelineEditor() {
   const layoutRows = useMemo<LayoutRow[]>(() => useLinearIndentLayout(steps), [steps]);
 
   const routeKeysUpTo = (idx: number): string[] => {
-    const set = new Set<string>();
+    const set = new Set<string>([ROOT]);
     for (let i = 0; i < idx; i++) {
       const d = steps[i];
       if (d.type === 'DecisionPrompt') {
@@ -79,7 +80,11 @@ export default function PipelineEditor() {
 
   const saveNewStep = () => {
     if (!draft) return;
-    addStepAt(insertPos, draft)
+    const route = draft.route;
+    let idx = -1;
+    steps.forEach((s, i) => { if (s.route === route) idx = i + 1; });
+    if (idx === -1) idx = steps.length;
+    addStepAt(idx, draft)
       .then(() => setDraft(null))
       .catch(e => setError(String(e)));
   };
@@ -94,7 +99,15 @@ export default function PipelineEditor() {
 
   const handleRouteChange = async (stepId: string, newRoute: string) => {
     try {
-      await updateStep(stepId, { route: newRoute || undefined });
+      const routeValue = newRoute === ROOT ? undefined : newRoute;
+      await updateStep(stepId, { route: routeValue });
+      const others = usePipelineStore.getState().steps.filter(s => s.id !== stepId);
+      let idx = -1;
+      others.forEach((s, i) => { if (s.route === routeValue) idx = i + 1; });
+      if (idx === -1) idx = others.length;
+      const order = others.map(s => s.id);
+      order.splice(idx, 0, stepId);
+      await reorder(order);
     } catch (err) {
       setError(String(err));
     }
@@ -158,8 +171,7 @@ export default function PipelineEditor() {
                           <Checkbox checked={!!r.step.mergeKey} onChange={e => updateStep(r.step.id, { mergeKey: e.target.checked }).catch(err => setError(String(err)))} />
                         </TableCell>
                         <TableCell>
-                          <Select value={r.step.route||''} onChange={e => handleRouteChange(r.step.id, e.target.value as string)}>
-                            <MenuItem value=""><em>none</em></MenuItem>
+                          <Select value={r.step.route||ROOT} onChange={e => handleRouteChange(r.step.id, e.target.value as string)}>
                             {routeKeysUpTo(idx).map(k => (<MenuItem key={k} value={k}>{k}</MenuItem>))}
                           </Select>
                         </TableCell>
@@ -200,10 +212,9 @@ export default function PipelineEditor() {
             )}
             <Select
               fullWidth
-              value={edit.route||''}
+              value={edit.route||ROOT}
               onChange={e => handleRouteChange(edit.id, e.target.value as string)}
             >
-              <MenuItem value=""><em>none</em></MenuItem>
               {routeKeysUpTo(steps.findIndex(s=>s.id===edit.id)).map(k => (
                 <MenuItem key={k} value={k}>{k}</MenuItem>
               ))}
@@ -229,9 +240,8 @@ export default function PipelineEditor() {
             {draft.type==='DecisionPrompt' && (
               <StepDialog step={draft} onSave={changes => setDraft({ ...draft, ...changes })} />
             )}
-            <Select fullWidth value={draft.route||''}
-                    onChange={e=>setDraft({...draft, route:e.target.value||undefined})}>
-              <MenuItem value=""><em>none</em></MenuItem>
+            <Select fullWidth value={draft.route||ROOT}
+                    onChange={e=>setDraft({...draft, route:e.target.value===ROOT?undefined:e.target.value})}>
               {routeKeysUpTo(insertPos).map(k => (
                 <MenuItem key={k} value={k}>{k}</MenuItem>
               ))}
