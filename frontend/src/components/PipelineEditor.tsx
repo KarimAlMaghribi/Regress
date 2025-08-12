@@ -89,12 +89,16 @@ export default function PipelineEditor() {
       .catch(e => setError(String(e)));
   };
 
-  const moveStep = (from: number, to: number) => {
+  const moveStep = async (from: number, to: number) => {
     if (to < 0 || to >= steps.length) return;
     const order = [...steps.map(s => s.id)];
     const [id] = order.splice(from, 1);
     order.splice(to, 0, id);
-    reorder(order).catch(e => setError(String(e)));
+    try {
+      await reorder(order);
+    } catch (e) {
+      setError(String(e));
+    }
   };
 
   const handleRouteChange = async (stepId: string, newRoute: string) => {
