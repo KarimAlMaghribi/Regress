@@ -7,7 +7,6 @@ export interface PipelineStep {
   /** Wizard keys for DecisionPrompts */
   yesKey?: string;
   noKey?: string;
-  mergeKey?: boolean;
   route?: string;
   active?: boolean;
 }
@@ -30,15 +29,6 @@ interface PipelineState {
 }
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
-
-function normalizeMergeKey(v: any): boolean | undefined {
-  if (v === undefined || v === null) return undefined;
-  if (typeof v === 'boolean') return v;
-  if (typeof v === 'number') return v > 0;
-  if (typeof v === 'string') return v !== '';
-  return undefined;
-}
-
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   name: '',
@@ -69,7 +59,6 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       promptId: s.promptId ?? s.prompt_id,
       yesKey: (s.yesKey ?? s.yes_key) || undefined,
       noKey: (s.noKey ?? s.no_key) || undefined,
-      mergeKey: normalizeMergeKey(s.mergeKey ?? s.merge_key),
       route: s.route || undefined,
       active: s.active !== false,
     }));

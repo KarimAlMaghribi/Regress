@@ -15,7 +15,7 @@ describe('enrichSteps', () => {
     const steps = [
       { id: 'a', step_type: 'DecisionPrompt' },
       { id: 'b', step_type: 'ExtractionPrompt', route: 'r1' },
-      { id: 'c', step_type: 'ScoringPrompt', route: 'r1', merge_key: true },
+      { id: 'c', step_type: 'ScoringPrompt', route: 'r1' },
       { id: 'd', step_type: 'ExtractionPrompt' },
     ];
     const res = enrichSteps(steps);

@@ -43,11 +43,10 @@ export interface PipelineStep {
   route?: string;
   yes_key?: string;
   no_key?: string;
-  merge_key?: boolean;
 }
 
 export interface RunStep {
   seq_no:number; step_id:string; prompt_id:number; prompt_type:string;
-  decision_key?:string; route?:string; merge_key?:boolean; result:any;
+  decision_key?:string; route?:string; result:any;
   depth?:number; color?:string;
 }

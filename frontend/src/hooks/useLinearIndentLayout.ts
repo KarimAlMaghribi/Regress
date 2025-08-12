@@ -10,13 +10,10 @@ export interface LayoutRow {
 
 function toWarnings(step: PipelineStep, depth: number): string[] {
   const w: string[] = [];
-  if (step.mergeKey && depth === 0) {
-    w.push('mergeKey ohne aktive Branch-Zugehörigkeit');
-  }
   if (step.route && depth === 0) {
     w.push('route bei leerem Branch-Stack');
   }
-  if (depth > 0 && !step.route) {
+  if (depth > 0 && (!step.route || step.route === 'ROOT')) {
     w.push('impliziter Merge an erster gemeinsamer Stelle');
   }
   return w;
@@ -29,8 +26,8 @@ export function useLinearIndentLayout(steps: PipelineStep[]): LayoutRow[] {
   let depth = 0;
   let idx = 1;
   for (const step of steps) {
-    if (!step.route && stack.length > 0) {
-      stack.pop();
+    if ((!step.route || step.route === 'ROOT') && stack.length > 0) {
+      stack.length = 0;
     }
     depth = stack.length;
     // adjust hierarchical counters
@@ -42,11 +39,6 @@ export function useLinearIndentLayout(steps: PipelineStep[]): LayoutRow[] {
     rows.push({ step, depth, rowIdx: idx++, rowLabel, warnings });
     if (step.type === 'DecisionPrompt') {
       stack.push('__branch__');
-    }
-    if (step.mergeKey) {
-      if (stack.length > 0) {
-        stack.pop();
-      }
     }
   }
   return rows;
