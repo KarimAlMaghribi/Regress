@@ -4003,6 +4003,7 @@ dependencies = [
  "awc",
  "config",
  "openai",
+ "rdkafka",
  "reqwest 0.11.27",
  "rhai",
  "serde",

@@ -19,3 +19,4 @@ tokio = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
+rdkafka.workspace = true

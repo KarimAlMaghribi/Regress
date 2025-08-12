@@ -3,6 +3,7 @@ use actix_web::web::Json;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use serde::{Deserialize, Serialize};
 use shared::dto::{PipelineConfig, PipelineRunResult, PipelineStep, PromptType, RunStep, PdfUploaded};
+use shared::kafka;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::{ClientConfig, Message};
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -461,6 +462,10 @@ async fn run_pipeline(
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     let settings = shared::config::Settings::new().unwrap();
+    let topics = ["pdf-merged", "pipeline-result"];
+    if let Err(e) = kafka::ensure_topics(&settings.message_broker_url, &topics).await {
+        error!(%e, "failed to ensure topics");
+    }
     let pool = PgPool::connect(&settings.database_url).await.expect("db connect");
     init_db(&pool).await;
     let producer: FutureProducer = ClientConfig::new()
