@@ -93,19 +93,14 @@ pub struct PipelineStep {
     pub id: String,
     #[serde(rename = "type")]
     pub step_type: PromptType,
-    #[serde(rename = "prompt_id")]
     pub prompt_id: i64,
     #[serde(default)]
     pub route: Option<String>,
-    #[serde(default, rename = "yes_key")]
+    #[serde(default)]
     pub yes_key: Option<String>,
-    #[serde(default, rename = "no_key")]
+    #[serde(default)]
     pub no_key: Option<String>,
-    #[serde(
-        default,
-        rename = "merge_key",
-        deserialize_with = "de_merge_key_opt"
-    )]
+    #[serde(default, deserialize_with = "de_merge_key_opt")]
     pub merge_key: Option<bool>,
     #[serde(default = "default_true")]
     pub active: bool,
