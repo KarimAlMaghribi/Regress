@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
-  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip, FormControlLabel
+  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
@@ -40,7 +40,7 @@ export default function PipelineEditor() {
   const [promptOptions, setPromptOptions] = useState<Record<string, PromptOption[]>>({});
   const [error, setError] = useState('');
   const debounced = useMemo(() => debounce(updateName, 300), [updateName]);
-  const totalCols = 10;
+  const totalCols = 9;
 
   /* memo‑ise linear rows with depth */
   const layoutRows = useMemo<LayoutRow[]>(() => useLinearIndentLayout(steps), [steps]);
@@ -149,7 +149,6 @@ export default function PipelineEditor() {
                 <TableCell>Prompt</TableCell>
                 <TableCell>Yes-Key</TableCell>
                 <TableCell>No-Key</TableCell>
-                <TableCell>Merge-Key</TableCell>
                 <TableCell>Route</TableCell>
                 <TableCell>Active</TableCell>
                 <TableCell></TableCell>
@@ -171,9 +170,6 @@ export default function PipelineEditor() {
                         <TableCell>{r.step.promptId}</TableCell>
                         <TableCell>{r.step.type==='DecisionPrompt' ? r.step.yesKey : '—'}</TableCell>
                         <TableCell>{r.step.type==='DecisionPrompt' ? r.step.noKey : '—'}</TableCell>
-                        <TableCell>
-                          <Checkbox checked={!!r.step.mergeKey} onChange={e => updateStep(r.step.id, { mergeKey: e.target.checked }).catch(err => setError(String(err)))} />
-                        </TableCell>
                         <TableCell>
                           <Select value={r.step.route||ROOT} onChange={e => handleRouteChange(r.step.id, e.target.value as string)}>
                             {routeKeysUpTo(idx).map(k => (<MenuItem key={k} value={k}>{k}</MenuItem>))}
@@ -223,10 +219,6 @@ export default function PipelineEditor() {
                 <MenuItem key={k} value={k}>{k}</MenuItem>
               ))}
             </Select>
-              <FormControlLabel
-                control={<Checkbox checked={!!edit.mergeKey} onChange={e => updateStep(edit.id, { mergeKey: e.target.checked }).catch(er => setError(String(er)))} />}
-                label="Merge"
-              />
           </Box>
         )}
       </Drawer>
@@ -250,10 +242,6 @@ export default function PipelineEditor() {
                 <MenuItem key={k} value={k}>{k}</MenuItem>
               ))}
             </Select>
-              <FormControlLabel
-                control={<Checkbox checked={!!draft.mergeKey} onChange={e=>setDraft({...draft, mergeKey:e.target.checked})} />}
-                label="Merge"
-              />
             <Box sx={{ display:'flex', justifyContent:'flex-end', mt:2 }}>
                 <Button variant="outlined" onClick={() => setDraft(null)}>Cancel</Button>
                 <Button variant="contained" onClick={saveNewStep} disabled={draft.type==='DecisionPrompt' && !(draft.yesKey && draft.noKey)}>Add</Button>

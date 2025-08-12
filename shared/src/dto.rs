@@ -1,4 +1,3 @@
-use serde::de::Deserializer;
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, EnumString};
 
@@ -71,7 +70,6 @@ pub struct RunStep {
     pub prompt_type: PromptType,
     pub decision_key: Option<String>,
     pub route: Option<String>,
-    pub merge_key: bool,
     pub result: serde_json::Value,
 }
 
@@ -100,8 +98,6 @@ pub struct PipelineStep {
     pub yes_key: Option<String>,
     #[serde(default)]
     pub no_key: Option<String>,
-    #[serde(default, deserialize_with = "de_merge_key")]
-    pub merge_key: bool,
     #[serde(default = "default_true")]
     pub active: bool,
 }
@@ -114,18 +110,4 @@ pub struct PipelineConfig {
 
 fn default_true() -> bool {
     true
-}
-
-fn de_merge_key<'de, D>(d: D) -> Result<bool, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    use serde_json::Value;
-    let v: Option<Value> = Option::deserialize(d)?;
-    Ok(match v {
-        Some(Value::Bool(b)) => b,
-        Some(Value::String(s)) => !s.is_empty(),
-        Some(Value::Number(n)) => n.as_i64().unwrap_or(0) > 0,
-        _ => false,
-    })
 }

@@ -7,7 +7,7 @@ describe('numberWithDepth', () => {
     const steps: PipelineStep[] = [
       { id: 'D1', type: 'DecisionPrompt', promptId: 0, yesKey: 'y', noKey: 'n' },
       { id: 'A1', type: 'ExtractionPrompt', promptId: 0, route: 'y' },
-      { id: 'R1', type: 'ScoringPrompt', promptId: 0, route: 'n', mergeKey: true },
+      { id: 'R1', type: 'ScoringPrompt', promptId: 0, route: 'n' },
       { id: 'M1', type: 'ExtractionPrompt', promptId: 0 },
     ];
     const rows = numberWithDepth(steps);

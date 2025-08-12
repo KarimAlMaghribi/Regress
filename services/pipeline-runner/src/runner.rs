@@ -88,21 +88,23 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
     let mut seq: u32 = 1;
 
     for step in &cfg.steps {
-        // expliziter Merge vor dem Step
-        if step.merge_key && state.route_stack.len() > 1 {
-            state.route_stack.pop();
-            state.route = state.route_stack.last().cloned();
-        }
-
-        // impliziter Merge vor ROOT-/unroutetem Step
-        if state.route_stack.len() > 1
-            && (step.route.is_none() || step.route.as_deref() == Some("ROOT"))
-            && !step.merge_key
-        {
+        // Align route stack before gating
+        if step.route.is_none() || step.route.as_deref() == Some("ROOT") {
             while state.route_stack.len() > 1 {
                 state.route_stack.pop();
             }
             state.route = Some("ROOT".to_string());
+        } else if let Some(req) = &step.route {
+            if state.route.as_deref() != Some(req.as_str()) {
+                if let Some(pos) =
+                    state.route_stack.iter().rposition(|r| r == req)
+                {
+                    state.route_stack.truncate(pos + 1);
+                    state.route = state.route_stack.last().cloned();
+                } else {
+                    continue;
+                }
+            }
         }
 
         // Gate: Step läuft nur im passenden Branch
@@ -159,7 +161,6 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     prompt_type: step.step_type.clone(),
                     decision_key: None,
                     route: state.route.clone(),
-                    merge_key: step.merge_key,
                     result: serde_json::to_value(&pr)?,
                 });
                 seq += 1;
@@ -190,7 +191,6 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     prompt_type: step.step_type.clone(),
                     decision_key: None,
                     route: state.route.clone(),
-                    merge_key: step.merge_key,
                     result: serde_json::to_value(&sr)?,
                 });
                 seq += 1;
@@ -260,7 +260,6 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_type: step.step_type.clone(),
                             decision_key: Some(route_key),
                             route: exec_route,
-                            merge_key: step.merge_key,
                             result: serde_json::to_value(&pr)?,
                         });
                         seq += 1;
@@ -287,7 +286,6 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_type: step.step_type.clone(),
                             decision_key: None,
                             route: state.route.clone(),
-                            merge_key: step.merge_key,
                             result: serde_json::to_value(&pr)?,
                         });
                         seq += 1;

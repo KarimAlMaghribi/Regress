@@ -9,9 +9,9 @@ export function numberWithDepth(steps: PipelineStep[]): NumberedRow[] {
   let no = 1;
   const rows: NumberedRow[] = [];
   for (const s of steps) {
-    if (!s.route && stack.length > 0) {
-      stack.pop();
-      depth = stack.length;
+    if (!s.route || s.route === 'ROOT') {
+      stack.length = 0;
+      depth = 0;
     }
     let curDepth = depth;
     if (s.route && stack.length === 0) {
@@ -22,10 +22,6 @@ export function numberWithDepth(steps: PipelineStep[]): NumberedRow[] {
       stack.push('__branch__');
       depth = stack.length;
       continue;
-    }
-    if (s.mergeKey === true && stack.length > 0) {
-      stack.pop();
-      depth = stack.length;
     }
   }
   return rows;
@@ -48,7 +44,6 @@ export default function PipelineLinearView({ steps }: { steps: PipelineStep[] })
             </span>
           )}
           <span style={{ opacity: 0.6 }}>&nbsp;[route: {step.route ?? 'Root'}]</span>
-          {step.mergeKey && <span style={{ opacity: 0.6 }}>&nbsp;[merge]</span>}
         </div>
       ))}
     </div>
