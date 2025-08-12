@@ -71,7 +71,7 @@ pub struct RunStep {
     pub prompt_type: PromptType,
     pub decision_key: Option<String>,
     pub route: Option<String>,
-    pub merge_key: Option<bool>,
+    pub merge_key: bool,
     pub result: serde_json::Value,
 }
 
@@ -100,8 +100,8 @@ pub struct PipelineStep {
     pub yes_key: Option<String>,
     #[serde(default)]
     pub no_key: Option<String>,
-    #[serde(default, deserialize_with = "de_merge_key_opt")]
-    pub merge_key: Option<bool>,
+    #[serde(default, deserialize_with = "de_merge_key")]
+    pub merge_key: bool,
     #[serde(default = "default_true")]
     pub active: bool,
 }
@@ -116,16 +116,16 @@ fn default_true() -> bool {
     true
 }
 
-fn de_merge_key_opt<'de, D>(d: D) -> Result<Option<bool>, D::Error>
+fn de_merge_key<'de, D>(d: D) -> Result<bool, D::Error>
 where
     D: Deserializer<'de>,
 {
     use serde_json::Value;
     let v: Option<Value> = Option::deserialize(d)?;
-    Ok(v.and_then(|x| match x {
-        Value::Bool(b) => Some(b),
-        Value::String(s) => Some(!s.is_empty()),
-        Value::Number(n) => Some(n.as_i64().unwrap_or(0) > 0),
-        _ => None,
-    }))
+    Ok(match v {
+        Some(Value::Bool(b)) => b,
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Number(n)) => n.as_i64().unwrap_or(0) > 0,
+        _ => false,
+    })
 }

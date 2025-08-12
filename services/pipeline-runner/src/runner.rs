@@ -50,7 +50,11 @@ fn normalize_decision(
         }
     };
 
-    if let Some(r) = res_json.get("route").and_then(|v| v.as_str()).and_then(|r| map_str(r)) {
+    if let Some(r) = res_json
+        .get("route")
+        .and_then(|v| v.as_str())
+        .and_then(|r| map_str(r))
+    {
         return r;
     }
     if let Some(b) = res_json
@@ -71,7 +75,11 @@ fn normalize_decision(
 }
 
 pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<RunOutcome> {
-    let mut state = RunState::default();
+    let mut state = RunState {
+        route_stack: vec!["ROOT".to_string()],
+        route: Some("ROOT".to_string()),
+        result: None,
+    };
 
     let mut extraction = Vec::new();
     let mut scoring = Vec::new();
@@ -80,10 +88,21 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
     let mut seq: u32 = 1;
 
     for step in &cfg.steps {
-        // impliziter Merge vor Anzeige
-        if step.route.is_none() && !state.route_stack.is_empty() {
+        // expliziter Merge vor dem Step
+        if step.merge_key && state.route_stack.len() > 1 {
             state.route_stack.pop();
             state.route = state.route_stack.last().cloned();
+        }
+
+        // impliziter Merge vor ROOT-/unroutetem Step
+        if state.route_stack.len() > 1
+            && (step.route.is_none() || step.route.as_deref() == Some("ROOT"))
+            && !step.merge_key
+        {
+            while state.route_stack.len() > 1 {
+                state.route_stack.pop();
+            }
+            state.route = Some("ROOT".to_string());
         }
 
         // Gate: Step läuft nur im passenden Branch
@@ -139,8 +158,8 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     prompt_id: step.prompt_id,
                     prompt_type: step.step_type.clone(),
                     decision_key: None,
-                    route: step.route.clone(),
-                    merge_key: Some(step.merge_key.unwrap_or(false)),
+                    route: state.route.clone(),
+                    merge_key: step.merge_key,
                     result: serde_json::to_value(&pr)?,
                 });
                 seq += 1;
@@ -170,8 +189,8 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                     prompt_id: step.prompt_id,
                     prompt_type: step.step_type.clone(),
                     decision_key: None,
-                    route: step.route.clone(),
-                    merge_key: Some(step.merge_key.unwrap_or(false)),
+                    route: state.route.clone(),
+                    merge_key: step.merge_key,
                     result: serde_json::to_value(&sr)?,
                 });
                 seq += 1;
@@ -203,7 +222,8 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
 
                 match openai_client::decide(step.prompt_id as i32, pdf_text, &state_map).await {
                     Ok(ans) => {
-                        let res_json = serde_json::from_str::<Value>(&ans.raw).unwrap_or(Value::Null);
+                        let res_json =
+                            serde_json::from_str::<Value>(&ans.raw).unwrap_or(Value::Null);
                         let yes = step.yes_key.as_deref().unwrap_or("yes");
                         let no = step.no_key.as_deref().unwrap_or("no");
                         let route_key = normalize_decision(
@@ -214,6 +234,7 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             no,
                         );
 
+                        let exec_route = state.route.clone();
                         state.result = Some(res_json.clone());
                         state.route_stack.push(route_key.clone());
                         state.route = Some(route_key.clone());
@@ -238,8 +259,8 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_id: step.prompt_id,
                             prompt_type: step.step_type.clone(),
                             decision_key: Some(route_key),
-                            route: step.route.clone(),
-                            merge_key: Some(step.merge_key.unwrap_or(false)),
+                            route: exec_route,
+                            merge_key: step.merge_key,
                             result: serde_json::to_value(&pr)?,
                         });
                         seq += 1;
@@ -265,20 +286,14 @@ pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> anyhow::Result<Run
                             prompt_id: step.prompt_id,
                             prompt_type: step.step_type.clone(),
                             decision_key: None,
-                            route: step.route.clone(),
-                            merge_key: Some(step.merge_key.unwrap_or(false)),
+                            route: state.route.clone(),
+                            merge_key: step.merge_key,
                             result: serde_json::to_value(&pr)?,
                         });
                         seq += 1;
                     }
                 }
             }
-        }
-
-        // expliziter Merge nach dem Step
-        if step.merge_key == Some(true) && !state.route_stack.is_empty() {
-            state.route_stack.pop();
-            state.route = state.route_stack.last().cloned();
         }
     }
 
