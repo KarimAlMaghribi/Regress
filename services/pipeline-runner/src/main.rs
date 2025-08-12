@@ -69,6 +69,20 @@ async fn app_main() -> anyhow::Result<()> {
     .execute(&pool)
     .await?;
 
+    // Ensure merge_key column exists for deployments that predate it
+    sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS merge_key BOOLEAN")
+        .execute(&pool)
+        .await?;
+    sqlx::query("ALTER TABLE pipeline_run_steps ALTER COLUMN merge_key SET DEFAULT FALSE")
+        .execute(&pool)
+        .await?;
+    sqlx::query("UPDATE pipeline_run_steps SET merge_key = COALESCE(merge_key, FALSE)")
+        .execute(&pool)
+        .await?;
+    sqlx::query("ALTER TABLE pipeline_run_steps ALTER COLUMN merge_key SET NOT NULL")
+        .execute(&pool)
+        .await?;
+
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "pipeline-runner")
         .set("bootstrap.servers", &broker)
@@ -126,7 +140,7 @@ async fn app_main() -> anyhow::Result<()> {
                                             .bind(rs.prompt_type.to_string())
                                             .bind(&rs.decision_key)
                                             .bind(&rs.route)
-                                            .bind(rs.merge_key.unwrap_or(false))
+                                            .bind(rs.merge_key)
                                             .bind(&rs.result)
                                             .execute(&pool)
                                             .await?;

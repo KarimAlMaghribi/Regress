@@ -156,7 +156,7 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
                 prompt_type,
                 decision_key: row.try_get("decision_key").ok(),
                 route: row.try_get("route").ok(),
-                merge_key: row.try_get("merge_key").ok(),
+                merge_key: row.try_get::<bool, _>("merge_key").unwrap_or_default(),
                 result: row.try_get("result").unwrap_or_default(),
             }
         })
@@ -306,7 +306,7 @@ struct StepPatch {
     route: Option<Option<String>>,
     yes_key: Option<Option<String>>,
     no_key: Option<Option<String>>,
-    merge_key: Option<Option<bool>>,
+    merge_key: Option<bool>,
     active: Option<bool>,
     #[serde(flatten)]
     _extras: std::collections::HashMap<String, serde_json::Value>,
@@ -334,14 +334,14 @@ async fn update_step(
     if let Some(v) = patch.route {
         step.route = v;
     }
+    if let Some(v) = patch.merge_key {
+        step.merge_key = v;
+    }
     if let Some(v) = patch.yes_key {
         step.yes_key = v;
     }
     if let Some(v) = patch.no_key {
         step.no_key = v;
-    }
-    if let Some(v) = patch.merge_key {
-        step.merge_key = v;
     }
     if let Some(v) = patch.active {
         step.active = v;
