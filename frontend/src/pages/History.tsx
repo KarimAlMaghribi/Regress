@@ -14,11 +14,8 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
-import { useTheme } from '@mui/material/styles';
-import { PipelineRunResult, TextPosition } from '../types/pipeline';
-import { enrichRunLog } from '../utils/enrichRunLog';
-import PromptDetailsTable from '../components/PromptDetailsTable';
-import PdfViewer from '../components/PdfViewer';
+import { PipelineRunResult } from '../types/pipeline';
+import RunDetails from '../components/RunDetails';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -45,11 +42,9 @@ function normalizeEntry(e: any): HistoryEntry {
 export default function History() {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [selected, setSelected] = useState<HistoryEntry | null>(null);
-  const [highlight, setHighlight] = useState<TextPosition | null>(null);
   const [search, setSearch] = useState('');
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
-  const theme = useTheme();
 
   useEffect(() => {
     const url = import.meta.env.VITE_HISTORY_WS || 'ws://localhost:8090';
@@ -67,11 +62,6 @@ export default function History() {
     });
     return () => socket.close();
   }, []);
-
-  useEffect(() => {
-    setHighlight(null);
-  }, [selected]);
-
 
   const filtered = entries.filter(e => {
     const ts = dayjs(e.timestamp);
@@ -93,12 +83,6 @@ export default function History() {
     return acc;
   }, {});
   const groupKeys = Object.keys(groups).sort((a, b) => (a > b ? -1 : 1));
-
-  const pctFmt = new Intl.NumberFormat('de-DE', {
-    style: 'percent',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
 
   const baseCols: GridColDef[] = [
     {
@@ -177,37 +161,17 @@ export default function History() {
       ))}
 
       <Drawer anchor="right" open={!!selected} onClose={() => setSelected(null)}>
-        {selected && (
+        {selected && selected.result && (
           <Box sx={{ width: { xs: 280, sm: 400 }, p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              {selected.prompt || 'Eintrag'}
-            </Typography>
+            {selected.prompt && (
+              <Typography variant="h6" gutterBottom>
+                {selected.prompt}
+              </Typography>
+            )}
             <Typography variant="body2" gutterBottom>
               {dayjs(selected.timestamp).format('LLL')}
             </Typography>
-            <Typography variant="body2" gutterBottom>
-              Score: {selected.result?.overallScore?.toFixed(2)}
-            </Typography>
-            {(['extraction','scoring','decision'] as const).map(cat => (
-              <Box key={cat} sx={{ mb: 1 }}>
-                <Typography variant="subtitle2" gutterBottom>{cat}</Typography>
-                <PromptDetailsTable
-                  data={selected.result ? (selected.result as any)[cat] : []}
-                  onSelect={setHighlight}
-                />
-              </Box>
-            ))}
-            <Box sx={{ mt:2 }}>
-              <Typography variant="subtitle2">Route-Log</Typography>
-              {enrichRunLog(selected.result?.log ?? []).map(row => (
-                <div key={row.seq_no} style={{marginLeft:`calc(${row.depth}*1rem)`,backgroundColor:row.color}}>
-                  #{row.seq_no} {row.prompt_type} | {row.decision_key ?? '—'}
-                </div>
-              ))}
-            </Box>
-            <Box sx={{ mt: 2 }}>
-              <PdfViewer url={selected.pdfUrl} highlight={highlight} />
-            </Box>
+            <RunDetails run={selected.result} pdfUrl={selected.pdfUrl} />
           </Box>
         )}
       </Drawer>
