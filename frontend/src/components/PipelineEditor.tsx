@@ -91,11 +91,11 @@ export default function PipelineEditor() {
 
   const moveStep = async (from: number, to: number) => {
     if (to < 0 || to >= steps.length) return;
-    const order = [...steps.map(s => s.id)];
-    const [id] = order.splice(from, 1);
-    order.splice(to, 0, id);
+    const newOrder = [...steps.map(s => s.id)];
+    const [id] = newOrder.splice(from, 1);
+    newOrder.splice(to, 0, id);
     try {
-      await reorder(order);
+      await reorder(newOrder);
     } catch (e) {
       setError(String(e));
     }

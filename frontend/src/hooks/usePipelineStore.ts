@@ -165,11 +165,12 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       body: JSON.stringify({ order }),
     });
     if (!res.ok) {
-      set({ steps: prev, dirty: true });
+      // Revert to the previous order which is still persisted
+      set({ steps: prev, dirty: false });
       throw new Error(`HTTP ${res.status}`);
     }
     // Ensure the latest order is treated as clean once persisted
-    set({ steps: next, dirty: false });
+    set({ dirty: false });
   },
 
   confirmIfDirty() {
