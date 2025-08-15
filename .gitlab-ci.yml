@@ -1,0 +1,64 @@
+stages:
+  - build
+  - deploy
+
+variables:
+  DOCKER_TLS_CERTDIR: ""
+  IMAGE_TAG: "latest"
+  IMAGE_PREFIX: "$CI_REGISTRY_IMAGE"
+  ENDPOINT_ID: "21"
+
+build_images:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  before_script:
+    - echo "Logging in to GitLab Registry..."
+    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+  script:
+    - echo "Building and pushing images..."
+    - docker build -t "$IMAGE_PREFIX/api-gateway:$IMAGE_TAG" -f services/api-gateway/Dockerfile .
+    - docker push "$IMAGE_PREFIX/api-gateway:$IMAGE_TAG"
+
+    - docker build -t "$IMAGE_PREFIX/pdf-ingest:$IMAGE_TAG" -f services/pdf-ingest/Dockerfile .
+    - docker push "$IMAGE_PREFIX/pdf-ingest:$IMAGE_TAG"
+
+    - docker build -t "$IMAGE_PREFIX/text-extraction:$IMAGE_TAG" -f services/text-extraction/Dockerfile .
+    - docker push "$IMAGE_PREFIX/text-extraction:$IMAGE_TAG"
+
+    - docker build -t "$IMAGE_PREFIX/pipeline-runner:$IMAGE_TAG" -f services/pipeline-runner/Dockerfile .
+    - docker push "$IMAGE_PREFIX/pipeline-runner:$IMAGE_TAG"
+
+    - docker build -t "$IMAGE_PREFIX/prompt-manager:$IMAGE_TAG" -f services/prompt-manager/Dockerfile .
+    - docker push "$IMAGE_PREFIX/prompt-manager:$IMAGE_TAG"
+
+    - docker build -t "$IMAGE_PREFIX/pipeline-api:$IMAGE_TAG" -f services/pipeline-api/Dockerfile .
+    - docker push "$IMAGE_PREFIX/pipeline-api:$IMAGE_TAG"
+
+    - docker build -t "$IMAGE_PREFIX/metrics:$IMAGE_TAG" -f services/metrics/Dockerfile .
+    - docker push "$IMAGE_PREFIX/metrics:$IMAGE_TAG"
+
+    - docker build -t "$IMAGE_PREFIX/history-service:$IMAGE_TAG" -f services/history-service/Dockerfile .
+    - docker push "$IMAGE_PREFIX/history-service:$IMAGE_TAG"
+
+    - docker build -t "$IMAGE_PREFIX/frontend:$IMAGE_TAG" -f frontend/Dockerfile .
+    - docker push "$IMAGE_PREFIX/frontend:$IMAGE_TAG"
+
+deploy_stack:
+  stage: deploy
+  image: curlimages/curl:latest
+  script:
+    - echo "Deploying updated docker-compose to Portainer..."
+    - |
+      curl -X POST "https://portainer.adesso.claims/api/stacks?method=string&type=1&endpointId=$ENDPOINT_ID" \
+        -H "Authorization: Bearer $PORTAINER_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+              "Name": "regress",
+              "StackFileContent": "'"$(sed 's/"/\\"/g' docker-compose.prod.yml)"'"
+            }'
+  only:
+    - main
+  dependencies:
+    - build_images
