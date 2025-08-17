@@ -9,25 +9,17 @@ RUN apt-get update \
 
 WORKDIR /usr/src/app
 
-# Cargo-Resolver/Cache vorbereiten (ohne Build)
-# - Workspace/Cargo.lock + Paket-Manifest vom api-gateway kopieren
-COPY Cargo.toml Cargo.lock ./
-COPY services/api-gateway/Cargo.toml services/api-gateway/Cargo.toml
-
-# Nur Dependencies auflösen/cachen (keine Targets nötig)
-RUN cargo fetch --locked --manifest-path services/api-gateway/Cargo.toml
-
-# Jetzt erst den gesamten Code (damit obiger Cache maximal greift)
+# Gesamten Code kopieren (einfach & robust)
 COPY . .
 
-# Speicher-schonendes Build
+# Speicher-schonendes Build (verhindert OOM)
 ENV CARGO_BUILD_JOBS=1 \
     RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld -C codegen-units=1" \
     CC=clang \
     CXX=clang++ \
     MALLOC_ARENA_MAX=2
 
-# Release-Build nur für das api-gateway, mit minimaler Parallelität
+# Nur das api-gateway bauen, mit minimaler Parallelität
 RUN cargo build --release --package api-gateway --manifest-path services/api-gateway/Cargo.toml -j1 --locked
 
 # ---- Runtime Stage ----
