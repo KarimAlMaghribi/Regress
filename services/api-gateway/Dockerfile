@@ -1,7 +1,7 @@
 # ---- Build Stage ----
 FROM rust:1.80-slim AS builder
 
-# Speicherschonende Toolchain + Linker
+# Minimal nötige System-Dependencies für den Build
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        build-essential pkg-config clang lld libssl-dev ca-certificates tesseract-ocr \
@@ -9,33 +9,34 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Erzwinge STABLE (ignoriert rust-toolchain.toml/nightly im Repo)
+# Erzwinge stable-Toolchain (falls im Repo nightly konfiguriert ist)
 ENV RUSTUP_TOOLCHAIN=stable
 
-# Aggressive RAM-Drosselung beim Build
+# RAM-schonende Defaults
 ENV CARGO_BUILD_JOBS=1 \
-    CARGO_BUILD_INCREMENTAL=false \
-    CARGO_TERM_COLOR=never \
-    CARGO_PROFILE_RELEASE_LTO=false \
-    CARGO_PROFILE_RELEASE_DEBUG=0 \
-    CARGO_PROFILE_RELEASE_PANIC=abort \
-    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld -C codegen-units=1 -C debuginfo=0 -C target-cpu=x86-64 -C prefer-dynamic" \
     CC=clang \
     CXX=clang++ \
-    MALLOC_ARENA_MAX=2
+    MALLOC_ARENA_MAX=2 \
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld -C codegen-units=1 -C debuginfo=0 -C target-cpu=x86-64"
 
-# Gesamten Code kopieren (robust gegen Workspace-Spezifika)
+# Gesamten Code kopieren
 COPY . .
 
-# Nur das api-gateway bauen – minimal parallel
-RUN cargo build --release --package api-gateway --manifest-path services/api-gateway/Cargo.toml -j1 --locked
+# Wichtig: explizit mit panic=unwind bauen, um Konflikte mit evtl. panic=abort in Cargo-Profilen zu vermeiden.
+# cargo rustc erlaubt zusätzliche rustc-Flags nach dem "--".
+RUN cargo rustc --release \
+    --package api-gateway \
+    --manifest-path services/api-gateway/Cargo.toml \
+    -j1 --locked -- \
+    -C panic=unwind
 
 # ---- Runtime Stage ----
 FROM debian:bookworm-slim AS runtime
 
+# Laufzeit-Dependencies (SSL für openssl, Tesseract falls benötigt)
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-       ca-certificates tesseract-ocr \
+       ca-certificates tesseract-ocr libssl3 \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/local/bin
