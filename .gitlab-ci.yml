@@ -22,13 +22,14 @@ variables:
     - docker buildx create --use || docker buildx use default
     - mkdir -p "$CACHE_DIR"
   script:
-    - docker buildx build --pull --push \
-        --build-arg BUILDKIT_INLINE_CACHE=1 \
-        --cache-from=type=local,src=$CACHE_DIR \
-        --cache-to=type=local,dest=$CACHE_DIR-new,mode=max \
-        --cache-from=type=registry,ref=$CI_REGISTRY_IMAGE/cache:$CI_JOB_NAME \
-        --cache-to=type=registry,ref=$CI_REGISTRY_IMAGE/cache:$CI_JOB_NAME,mode=max \
-        -t "$IMAGE_PREFIX/$IMAGE_NAME:$IMAGE_TAG" -f $DOCKERFILE .
+    docker buildx build --pull --push
+    --build-arg BUILDKIT_INLINE_CACHE=1
+    --cache-from=type=local,src="$CACHE_DIR"
+    --cache-to=type=local,dest="$CACHE_DIR-new",mode=max
+    --cache-from=type=registry,ref="$CI_REGISTRY_IMAGE/cache:$CI_JOB_NAME"
+    --cache-to=type=registry,ref="$CI_REGISTRY_IMAGE/cache:$CI_JOB_NAME",mode=max
+    -t "$IMAGE_PREFIX/$IMAGE_NAME:$IMAGE_TAG"
+    -f "$DOCKERFILE" .
     - rm -rf "$CACHE_DIR" && mv "$CACHE_DIR-new" "$CACHE_DIR"
   cache:
     key:
@@ -44,7 +45,7 @@ variables:
       - frontend/node_modules/.cache
       - .buildx-cache
   timeout: 90m
-  needs: []
+  needs: [ ]
 
 build_api_gateway:
   <<: *docker-build
