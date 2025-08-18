@@ -1,30 +1,32 @@
-# ---- Build Stage ----
-FROM rust:1.80-slim AS builder
+# syntax=docker/dockerfile:1.7-labs
+FROM --platform=$BUILDPLATFORM rust:1.80-slim AS builder
 
-# System-Dependencies
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-       build-essential pkg-config clang lld libssl-dev ca-certificates tesseract-ocr \
+       build-essential pkg-config clang lld libssl-dev ca-certificates tesseract-ocr sccache \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /usr/src/app
 
-# Gesamten Code kopieren (einfach & robust)
-COPY . .
-
-# Speicher-schonendes Build (verhindert OOM)
-ENV CARGO_BUILD_JOBS=1 \
-    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld -C codegen-units=1" \
+ENV RUSTUP_TOOLCHAIN=stable \
+    RUSTC_WRAPPER=sccache \
     CC=clang \
     CXX=clang++ \
     MALLOC_ARENA_MAX=2
 
-# Nur das api-gateway bauen, mit minimaler Parallelität
-RUN cargo build --release --package api-gateway --manifest-path services/api-gateway/Cargo.toml -j1 --locked
+COPY Cargo.toml Cargo.lock ./
+COPY services/api-gateway/Cargo.toml services/api-gateway/Cargo.toml
+COPY shared/Cargo.toml shared/Cargo.toml
 
-# ---- Runtime Stage ----
+COPY shared ./shared
+COPY services/api-gateway ./services/api-gateway
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/sccache \
+    cargo build --release --package api-gateway --manifest-path services/api-gateway/Cargo.toml --locked
+
 FROM debian:bookworm-slim AS runtime
-
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        ca-certificates tesseract-ocr \
@@ -32,6 +34,5 @@ RUN apt-get update \
 
 WORKDIR /usr/local/bin
 COPY --from=builder /usr/src/app/target/release/api-gateway .
-
 EXPOSE 8080
 CMD ["./api-gateway"]

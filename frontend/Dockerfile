@@ -1,7 +1,10 @@
-FROM node:18 AS builder
+# syntax=docker/dockerfile:1.7-labs
+FROM node:20 AS builder
 WORKDIR /app
-COPY frontend/package.json ./package.json
-RUN npm install
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm corepack enable && npm ci
+
 COPY frontend/ .
 ARG VITE_INGEST_URL=http://localhost:8081
 ARG VITE_HISTORY_WS=ws://localhost:8090
@@ -15,7 +18,7 @@ ENV VITE_INGEST_URL=$VITE_INGEST_URL \
     VITE_UPLOAD_API_URL=$VITE_UPLOAD_API_URL
 RUN npm run build
 
-FROM nginx:alpine
+FROM nginx:alpine AS runtime
 COPY --from=builder /app/dist /usr/share/nginx/html
 COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
 EXPOSE 80

@@ -1,17 +1,29 @@
-FROM rustlang/rust:nightly-slim as builder
+# syntax=docker/dockerfile:1.7-labs
+FROM --platform=$BUILDPLATFORM rust:1.80-slim as builder
 WORKDIR /app
-# Install system packages required to compile the text-extraction crate
+
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential pkg-config clang libtesseract-dev libleptonica-dev tesseract-ocr ca-certificates libssl-dev \
+    && apt-get install -y --no-install-recommends build-essential pkg-config clang lld libtesseract-dev libleptonica-dev tesseract-ocr ca-certificates libssl-dev sccache \
     && rm -rf /var/lib/apt/lists/*
-COPY Cargo.toml ./Cargo.toml
+
+ENV RUSTUP_TOOLCHAIN=stable \
+    RUSTC_WRAPPER=sccache \
+    CC=clang \
+    CXX=clang++ \
+    MALLOC_ARENA_MAX=2
+
+COPY Cargo.toml Cargo.lock ./
+COPY shared/Cargo.toml shared/Cargo.toml
+COPY services/text-extraction/Cargo.toml services/text-extraction/Cargo.toml
 COPY shared ./shared
-# Copy all service crates so the workspace is complete
-COPY services ./services
-RUN cargo build --release --package text-extraction --manifest-path services/text-extraction/Cargo.toml
+COPY services/text-extraction ./services/text-extraction
+
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/sccache \
+    cargo build --release --package text-extraction --manifest-path services/text-extraction/Cargo.toml --locked
 
 FROM debian:bookworm-slim
-# Runtime dependencies for the built binary
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         tesseract-ocr \
