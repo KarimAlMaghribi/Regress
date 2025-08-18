@@ -192,7 +192,6 @@ deploy_stack:
       fi
       echo "Using compose file: $COMPOSE_FILE"
       CONTENT=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g' "$COMPOSE_FILE")
-      # Optional Reachability check to avoid long hangs
       if ! curl -sS --connect-timeout 5 -o /dev/null "https://portainer.adesso.claims/api/status"; then
         echo "Portainer not reachable from runner. Skipping deploy."
         exit 0
