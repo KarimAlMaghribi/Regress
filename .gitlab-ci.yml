@@ -2,7 +2,7 @@ stages:
   - build
   - deploy
 
-# Pipeline IMMER erstellen (auch wenn alle Jobs übersprungen würden)
+# Pipeline immer erzeugen – auch wenn alle Jobs sonst "skipped" wären
 workflow:
   rules:
     - when: always
@@ -16,7 +16,7 @@ variables:
   CACHE_DIR: ".buildx-cache"
   ENDPOINT_ID: "21"
 
-# No-Op, damit immer mind. 1 Job existiert → Pipeline wird getriggert
+# No-Op, damit immer mindestens 1 Job existiert
 ci_noop:
   stage: build
   image: alpine:3.19
@@ -68,6 +68,10 @@ build_api_gateway:
     IMAGE_NAME: api-gateway
     DOCKERFILE: services/api-gateway/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - Cargo.toml
         - Cargo.lock
@@ -80,6 +84,10 @@ build_pdf_ingest:
     IMAGE_NAME: pdf-ingest
     DOCKERFILE: services/pdf-ingest/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - Cargo.toml
         - Cargo.lock
@@ -92,6 +100,10 @@ build_text_extraction:
     IMAGE_NAME: text-extraction
     DOCKERFILE: services/text-extraction/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - Cargo.toml
         - Cargo.lock
@@ -104,6 +116,10 @@ build_pipeline_runner:
     IMAGE_NAME: pipeline-runner
     DOCKERFILE: services/pipeline-runner/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - Cargo.toml
         - Cargo.lock
@@ -116,6 +132,10 @@ build_prompt_manager:
     IMAGE_NAME: prompt-manager
     DOCKERFILE: services/prompt-manager/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - Cargo.toml
         - Cargo.lock
@@ -128,6 +148,10 @@ build_pipeline_api:
     IMAGE_NAME: pipeline-api
     DOCKERFILE: services/pipeline-api/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - Cargo.toml
         - Cargo.lock
@@ -140,6 +164,10 @@ build_metrics:
     IMAGE_NAME: metrics
     DOCKERFILE: services/metrics/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - Cargo.toml
         - Cargo.lock
@@ -152,6 +180,10 @@ build_history_service:
     IMAGE_NAME: history-service
     DOCKERFILE: services/history-service/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - Cargo.toml
         - Cargo.lock
@@ -164,6 +196,10 @@ build_frontend:
     IMAGE_NAME: frontend
     DOCKERFILE: frontend/Dockerfile
   rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.yml
     - changes:
         - frontend/**/*
 
@@ -206,7 +242,7 @@ deploy_stack:
       fi
       echo "Using compose file: $COMPOSE_FILE"
       CONTENT=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g' "$COMPOSE_FILE")
-      # Optional reachability check to avoid long hangs
+      # Reachability check, um lange Hänger zu vermeiden
       if ! curl -sS --connect-timeout 5 -o /dev/null "https://portainer.adesso.claims/api/status"; then
         echo "Portainer not reachable from runner. Skipping deploy."
         exit 0
