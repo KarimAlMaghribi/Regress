@@ -1,7 +1,7 @@
 # ---- Build Stage ----
 FROM rust:1.80-slim AS builder
 
-# Minimal nötige System-Dependencies für den Build
+# RAM-schonender Linker & Build-Tools
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        build-essential pkg-config clang lld libssl-dev ca-certificates tesseract-ocr \
@@ -9,31 +9,45 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Erzwinge stable-Toolchain (falls im Repo nightly konfiguriert ist)
+# Stable kompromisslos erzwingen (über alles, inkl. rust-toolchain.toml)
 ENV RUSTUP_TOOLCHAIN=stable
+RUN rustup toolchain install stable && rustup default stable && rustup override set stable
 
-# RAM-schonende Defaults
-ENV CARGO_BUILD_JOBS=1 \
-    CC=clang \
-    CXX=clang++ \
-    MALLOC_ARENA_MAX=2 \
-    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=lld -C codegen-units=1 -C debuginfo=0 -C target-cpu=x86-64"
-
-# Gesamten Code kopieren
+# Projekt kopieren
 COPY . .
 
-# Wichtig: explizit mit panic=unwind bauen, um Konflikte mit evtl. panic=abort in Cargo-Profilen zu vermeiden.
-# cargo rustc erlaubt zusätzliche rustc-Flags nach dem "--".
-RUN cargo rustc --release \
+# Low-Memory Release-Profil direkt im Container setzen (überschreibt Repo-Defaults nur im Build)
+RUN mkdir -p .cargo && printf '\
+[build]\n\
+jobs = 1\n\
+\n\
+[target.x86_64-unknown-linux-gnu]\n\
+linker = "clang"\n\
+rustflags = ["-C","link-arg=-fuse-ld=lld","-C","codegen-units=1","-C","debuginfo=0"]\n\
+\n\
+[profile.release]\n\
+opt-level = 1\n\
+codegen-units = 1\n\
+debug = 0\n\
+lto = "off"\n\
+panic = "unwind"\n\
+incremental = false\n' > .cargo/config.toml
+
+# Weitere RAM-Schoner
+ENV CC=clang \
+    CXX=clang++ \
+    MALLOC_ARENA_MAX=2
+
+# Build: stable + minimal parallel
+RUN RUSTUP_TOOLCHAIN=stable cargo +stable build \
+    --release \
     --package api-gateway \
     --manifest-path services/api-gateway/Cargo.toml \
-    -j1 --locked -- \
-    -C panic=unwind
+    --locked -j 1
 
 # ---- Runtime Stage ----
 FROM debian:bookworm-slim AS runtime
 
-# Laufzeit-Dependencies (SSL für openssl, Tesseract falls benötigt)
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
        ca-certificates tesseract-ocr libssl3 \
