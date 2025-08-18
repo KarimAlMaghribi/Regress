@@ -105,3 +105,23 @@ The frontend expects these environment variables:
 `VITE_HISTORY_URL` for the history API (defaults to `http://localhost:8090`) and
 `VITE_HISTORY_WS` for the history WebSocket (defaults to `ws://localhost:8090`).
 
+
+## CI Pipeline Optimizations
+
+### Was wurde optimiert?
+- Dockerfiles nutzen BuildKit, `docker buildx` und einen Registry-Layer-Cache.
+- Rust-Builds laufen mit stabilem Toolchain, `sccache` und speicherschonendem Profil aus `.cargo/config.toml`.
+- Frontend nutzt `npm ci` mit Cache-Mount, wodurch keine dev-server-Abhängigkeiten installiert werden.
+
+### Wie funktionieren die Caches?
+- `cargo`- und Git-Dependencies werden in BuildKit-Cache-Mounts (`/usr/local/cargo/registry`, `/usr/local/cargo/git`) gespeichert.
+- `sccache` liegt unter `/sccache` und beschleunigt erneute Builds.
+- `docker buildx` nutzt einen lokalen Cache (`.buildx-cache`) und synchronisiert einen Inline-Cache mit `$CI_REGISTRY_IMAGE/cache:*`.
+- Node-Module werden über einen NPM-Cache (`/root/.npm`) wiederverwendet.
+
+### Cache gezielt invalidieren
+- Änderungen an `Cargo.lock` oder `package-lock.json` erzeugen neue Cache-Schlüssel.
+- Zum vollständigen Leeren die Cache-Images `registry/cache:*` löschen oder das Pipeline-Variable `CACHE_BUST` setzen.
+
+### Rollback
+- Mit `CI_LOW_MEM=false` können Builds wieder mit mehr Parallelität und Optimierungen ausgeführt werden; dazu die entsprechenden Build-Args setzen oder `.cargo/config.toml` überschreiben.

@@ -1,0 +1,7 @@
+target
+**/*.rs.bk
+**/node_modules
+frontend/dist
+.git
+.gitlab
+.buildx-cache

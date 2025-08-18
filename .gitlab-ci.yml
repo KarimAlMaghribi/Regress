@@ -4,50 +4,166 @@ stages:
 
 variables:
   DOCKER_TLS_CERTDIR: ""
+  DOCKER_BUILDKIT: 1
+  BUILDKIT_PROGRESS: plain
   IMAGE_TAG: "latest"
   IMAGE_PREFIX: "$CI_REGISTRY_IMAGE"
+  CACHE_DIR: ".buildx-cache"
   ENDPOINT_ID: "21"
 
-build_images:
+.docker-build: &docker-build
   stage: build
-  image: docker:latest
+  image: docker:24
   services:
-    - docker:dind
+    - docker:24-dind
   before_script:
     - echo "Logging in to GitLab Registry..."
     - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
+    - docker buildx create --use || docker buildx use default
+    - mkdir -p "$CACHE_DIR"
   script:
-    - echo "Building and pushing images..."
-    - docker build -t "$IMAGE_PREFIX/api-gateway:$IMAGE_TAG" -f services/api-gateway/Dockerfile .
-    - docker push "$IMAGE_PREFIX/api-gateway:$IMAGE_TAG"
+    - docker buildx build --pull --push \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        --cache-from=type=local,src=$CACHE_DIR \
+        --cache-to=type=local,dest=$CACHE_DIR-new,mode=max \
+        --cache-from=type=registry,ref=$CI_REGISTRY_IMAGE/cache:$CI_JOB_NAME \
+        --cache-to=type=registry,ref=$CI_REGISTRY_IMAGE/cache:$CI_JOB_NAME,mode=max \
+        -t "$IMAGE_PREFIX/$IMAGE_NAME:$IMAGE_TAG" -f $DOCKERFILE .
+    - rm -rf "$CACHE_DIR" && mv "$CACHE_DIR-new" "$CACHE_DIR"
+  cache:
+    key:
+      files:
+        - Cargo.lock
+        - frontend/package-lock.json
+      prefix: "$CI_JOB_NAME"
+    paths:
+      - ~/.cargo/registry
+      - ~/.cargo/git
+      - ~/.cache/sccache
+      - target
+      - frontend/node_modules/.cache
+      - .buildx-cache
+  timeout: 90m
+  needs: []
 
-    - docker build -t "$IMAGE_PREFIX/pdf-ingest:$IMAGE_TAG" -f services/pdf-ingest/Dockerfile .
-    - docker push "$IMAGE_PREFIX/pdf-ingest:$IMAGE_TAG"
+build_api_gateway:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: api-gateway
+    DOCKERFILE: services/api-gateway/Dockerfile
+  rules:
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - shared/**/*
+        - services/api-gateway/**/*
 
-    - docker build -t "$IMAGE_PREFIX/text-extraction:$IMAGE_TAG" -f services/text-extraction/Dockerfile .
-    - docker push "$IMAGE_PREFIX/text-extraction:$IMAGE_TAG"
+build_pdf_ingest:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: pdf-ingest
+    DOCKERFILE: services/pdf-ingest/Dockerfile
+  rules:
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - shared/**/*
+        - services/pdf-ingest/**/*
 
-    - docker build -t "$IMAGE_PREFIX/pipeline-runner:$IMAGE_TAG" -f services/pipeline-runner/Dockerfile .
-    - docker push "$IMAGE_PREFIX/pipeline-runner:$IMAGE_TAG"
+build_text_extraction:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: text-extraction
+    DOCKERFILE: services/text-extraction/Dockerfile
+  rules:
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - shared/**/*
+        - services/text-extraction/**/*
 
-    - docker build -t "$IMAGE_PREFIX/prompt-manager:$IMAGE_TAG" -f services/prompt-manager/Dockerfile .
-    - docker push "$IMAGE_PREFIX/prompt-manager:$IMAGE_TAG"
+build_pipeline_runner:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: pipeline-runner
+    DOCKERFILE: services/pipeline-runner/Dockerfile
+  rules:
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - shared/**/*
+        - services/pipeline-runner/**/*
 
-    - docker build -t "$IMAGE_PREFIX/pipeline-api:$IMAGE_TAG" -f services/pipeline-api/Dockerfile .
-    - docker push "$IMAGE_PREFIX/pipeline-api:$IMAGE_TAG"
+build_prompt_manager:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: prompt-manager
+    DOCKERFILE: services/prompt-manager/Dockerfile
+  rules:
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - shared/**/*
+        - services/prompt-manager/**/*
 
-    - docker build -t "$IMAGE_PREFIX/metrics:$IMAGE_TAG" -f services/metrics/Dockerfile .
-    - docker push "$IMAGE_PREFIX/metrics:$IMAGE_TAG"
+build_pipeline_api:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: pipeline-api
+    DOCKERFILE: services/pipeline-api/Dockerfile
+  rules:
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - shared/**/*
+        - services/pipeline-api/**/*
 
-    - docker build -t "$IMAGE_PREFIX/history-service:$IMAGE_TAG" -f services/history-service/Dockerfile .
-    - docker push "$IMAGE_PREFIX/history-service:$IMAGE_TAG"
+build_metrics:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: metrics
+    DOCKERFILE: services/metrics/Dockerfile
+  rules:
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - shared/**/*
+        - services/metrics/**/*
 
-    - docker build -t "$IMAGE_PREFIX/frontend:$IMAGE_TAG" -f frontend/Dockerfile .
-    - docker push "$IMAGE_PREFIX/frontend:$IMAGE_TAG"
+build_history_service:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: history-service
+    DOCKERFILE: services/history-service/Dockerfile
+  rules:
+    - changes:
+        - Cargo.toml
+        - Cargo.lock
+        - shared/**/*
+        - services/history-service/**/*
+
+build_frontend:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: frontend
+    DOCKERFILE: frontend/Dockerfile
+  rules:
+    - changes:
+        - frontend/**/*
 
 deploy_stack:
   stage: deploy
   image: curlimages/curl:latest
+  needs:
+    - build_api_gateway
+    - build_pdf_ingest
+    - build_text_extraction
+    - build_pipeline_runner
+    - build_prompt_manager
+    - build_pipeline_api
+    - build_metrics
+    - build_history_service
+    - build_frontend
   script:
     - echo "Deploying updated docker-compose to Portainer..."
     - |
@@ -60,5 +176,3 @@ deploy_stack:
             }'
   only:
     - main
-  dependencies:
-    - build_images
