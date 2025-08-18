@@ -176,11 +176,26 @@ deploy_stack:
     - job: build_frontend
       optional: true
   rules:
-    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "main" && $PORTAINER_TOKEN'
+      changes:
+        - docker-compose.yml
+        - docker-compose.prod.yml
+        - services/**/*
+        - frontend/**/*
   script:
     - echo "Deploying updated docker-compose to Portainer..."
-    - >
-      curl -X POST "https://portainer.adesso.claims/api/stacks?method=string&type=1&endpointId=$ENDPOINT_ID"
-      -H "Authorization: Bearer $PORTAINER_TOKEN"
-      -H "Content-Type: application/json"
-      -d '{"Name":"regress","StackFileContent":"'"$(sed 's/"/\\"/g' docker-compose.prod.yml)"'"}'
+    - |
+      set -euo pipefail
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
+      if [ ! -f "$COMPOSE_FILE" ] && [ -f docker-compose.yml ]; then COMPOSE_FILE="docker-compose.yml"; fi
+      if [ ! -f "$COMPOSE_FILE" ]; then
+        echo "No compose file found (docker-compose.prod.yml / docker-compose.yml). Skipping deploy."
+        exit 0
+      fi
+      echo "Using compose file: $COMPOSE_FILE"
+      CONTENT=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g' "$COMPOSE_FILE")
+      curl -sS --fail-with-body --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
+        -X POST "https://portainer.adesso.claims/api/stacks?method=string&type=1&endpointId=$ENDPOINT_ID" \
+        -H "Authorization: Bearer $PORTAINER_TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "{\"Name\":\"regress\",\"StackFileContent\":\"$CONTENT\"}"
