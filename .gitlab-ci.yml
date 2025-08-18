@@ -157,15 +157,26 @@ deploy_stack:
   stage: deploy
   image: curlimages/curl:latest
   needs:
-    - build_api_gateway
-    - build_pdf_ingest
-    - build_text_extraction
-    - build_pipeline_runner
-    - build_prompt_manager
-    - build_pipeline_api
-    - build_metrics
-    - build_history_service
-    - build_frontend
+    - job: build_api_gateway
+      optional: true
+    - job: build_pdf_ingest
+      optional: true
+    - job: build_text_extraction
+      optional: true
+    - job: build_pipeline_runner
+      optional: true
+    - job: build_prompt_manager
+      optional: true
+    - job: build_pipeline_api
+      optional: true
+    - job: build_metrics
+      optional: true
+    - job: build_history_service
+      optional: true
+    - job: build_frontend
+      optional: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
   script:
     - echo "Deploying updated docker-compose to Portainer..."
     - >
@@ -173,5 +184,3 @@ deploy_stack:
       -H "Authorization: Bearer $PORTAINER_TOKEN"
       -H "Content-Type: application/json"
       -d '{"Name":"regress","StackFileContent":"'"$(sed 's/"/\\"/g' docker-compose.prod.yml)"'"}'
-  only:
-    - main
