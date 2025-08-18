@@ -179,17 +179,15 @@ deploy_stack:
     - if: '$CI_COMMIT_BRANCH == "main" && $PORTAINER_TOKEN'
       changes:
         - docker-compose.yml
-        - docker-compose.prod.yml
         - services/**/*
         - frontend/**/*
   script:
     - echo "Deploying updated docker-compose to Portainer..."
-    - |
+    - >
       set -euo pipefail
-      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.prod.yml}"
-      if [ ! -f "$COMPOSE_FILE" ] && [ -f docker-compose.yml ]; then COMPOSE_FILE="docker-compose.yml"; fi
+      COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
       if [ ! -f "$COMPOSE_FILE" ]; then
-        echo "No compose file found (docker-compose.prod.yml / docker-compose.yml). Skipping deploy."
+        echo "No compose file found ($COMPOSE_FILE). Skipping deploy."
         exit 0
       fi
       echo "Using compose file: $COMPOSE_FILE"
