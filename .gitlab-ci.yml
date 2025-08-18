@@ -2,6 +2,11 @@ stages:
   - build
   - deploy
 
+# Pipeline IMMER erstellen (auch wenn alle Jobs übersprungen würden)
+workflow:
+  rules:
+    - when: always
+
 variables:
   DOCKER_TLS_CERTDIR: ""
   DOCKER_BUILDKIT: 1
@@ -10,6 +15,15 @@ variables:
   IMAGE_PREFIX: "$CI_REGISTRY_IMAGE"
   CACHE_DIR: ".buildx-cache"
   ENDPOINT_ID: "21"
+
+# No-Op, damit immer mind. 1 Job existiert → Pipeline wird getriggert
+ci_noop:
+  stage: build
+  image: alpine:3.19
+  rules:
+    - when: always
+  script:
+    - echo "No buildable changes detected. CI is alive ✅"
 
 .docker-build: &docker-build
   stage: build
@@ -192,6 +206,7 @@ deploy_stack:
       fi
       echo "Using compose file: $COMPOSE_FILE"
       CONTENT=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g' "$COMPOSE_FILE")
+      # Optional reachability check to avoid long hangs
       if ! curl -sS --connect-timeout 5 -o /dev/null "https://portainer.adesso.claims/api/status"; then
         echo "Portainer not reachable from runner. Skipping deploy."
         exit 0
