@@ -212,8 +212,10 @@ build_frontend:
 deploy_stack:
   stage: deploy
   image: curlimages/curl:latest
+  # falls du einen speziellen Runner im Portainer-Netz hast:
+  # tags: ['portainer-net']
   needs:
-    - job: build_api_gateway
+    - job: build_api_gateway     # bleiben optional, dann läuft Deploy auch ohne Build
       optional: true
     - job: build_pdf_ingest
       optional: true
@@ -232,11 +234,12 @@ deploy_stack:
     - job: build_frontend
       optional: true
   rules:
+    # -> immer deployen, sobald main gebaut wird (kein changes-Filter mehr)
     - if: '$CI_COMMIT_BRANCH == "main" && $PORTAINER_TOKEN'
-      changes:
-        - docker-compose.yml
-        - services/**/*
-        - frontend/**/*
+      when: on_success
+    # optional: auf anderen Branches manuell verfügbar machen
+    - when: manual
+      allow_failure: false
   script:
     - echo "Deploying updated docker-compose to Portainer..."
     - |
@@ -248,11 +251,6 @@ deploy_stack:
       fi
       echo "Using compose file: $COMPOSE_FILE"
       CONTENT=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g' "$COMPOSE_FILE")
-      # Reachability check, um lange Hänger zu vermeiden
-      if ! curl -sS --connect-timeout 5 -o /dev/null "https://portainer.adesso.claims/api/status"; then
-        echo "Portainer not reachable from runner. Skipping deploy."
-        exit 0
-      fi
       curl -sS --fail-with-body --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
         -X POST "https://portainer.adesso.claims/api/stacks?method=string&type=1&endpointId=$ENDPOINT_ID" \
         -H "Authorization: Bearer $PORTAINER_TOKEN" \
