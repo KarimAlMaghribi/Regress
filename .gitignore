@@ -1,4 +1,8 @@
-target/
+target
 **/*.rs.bk
-node_modules/
-frontend/dist/
+**/node_modules
+frontend/dist
+.git
+.gitlab
+.buildx-cache
+.DS_Store
