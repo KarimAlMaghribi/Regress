@@ -14,7 +14,6 @@ variables:
   IMAGE_TAG: "latest"
   IMAGE_PREFIX: "$CI_REGISTRY_IMAGE"
   CACHE_DIR: ".buildx-cache"
-  ENDPOINT_ID: "21"
   # Zentrales Docker-Hub-Repo
   DOCKERHUB_REPO: "docker.io/krakia/regress"
 
@@ -68,191 +67,109 @@ ci_noop:
   timeout: 90m
   needs: []
 
+# ---- Build-Jobs (unverändert, jeweils IMAGE_NAME/DOCKERFILE setzen) ----
+
 build_api_gateway:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: api-gateway
-    DOCKERFILE: services/api-gateway/Dockerfile
+  variables: { IMAGE_NAME: api-gateway, DOCKERFILE: services/api-gateway/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - shared/**/*
-        - services/api-gateway/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/api-gateway/**/* ]
 
 build_pdf_ingest:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: pdf-ingest
-    DOCKERFILE: services/pdf-ingest/Dockerfile
+  variables: { IMAGE_NAME: pdf-ingest, DOCKERFILE: services/pdf-ingest/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - shared/**/*
-        - services/pdf-ingest/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/pdf-ingest/**/* ]
 
 build_text_extraction:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: text-extraction
-    DOCKERFILE: services/text-extraction/Dockerfile
+  variables: { IMAGE_NAME: text-extraction, DOCKERFILE: services/text-extraction/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - shared/**/*
-        - services/text-extraction/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/text-extraction/**/* ]
 
 build_pipeline_runner:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: pipeline-runner
-    DOCKERFILE: services/pipeline-runner/Dockerfile
+  variables: { IMAGE_NAME: pipeline-runner, DOCKERFILE: services/pipeline-runner/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - shared/**/*
-        - services/pipeline-runner/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/pipeline-runner/**/* ]
 
 build_prompt_manager:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: prompt-manager
-    DOCKERFILE: services/prompt-manager/Dockerfile
+  variables: { IMAGE_NAME: prompt-manager, DOCKERFILE: services/prompt-manager/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - shared/**/*
-        - services/prompt-manager/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/prompt-manager/**/* ]
 
 build_pipeline_api:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: pipeline-api
-    DOCKERFILE: services/pipeline-api/Dockerfile
+  variables: { IMAGE_NAME: pipeline-api, DOCKERFILE: services/pipeline-api/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - shared/**/*
-        - services/pipeline-api/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/pipeline-api/**/* ]
 
 build_metrics:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: metrics
-    DOCKERFILE: services/metrics/Dockerfile
+  variables: { IMAGE_NAME: metrics, DOCKERFILE: services/metrics/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - shared/**/*
-        - services/metrics/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/metrics/**/* ]
 
 build_history_service:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: history-service
-    DOCKERFILE: services/history-service/Dockerfile
+  variables: { IMAGE_NAME: history-service, DOCKERFILE: services/history-service/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - Cargo.toml
-        - Cargo.lock
-        - shared/**/*
-        - services/history-service/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/history-service/**/* ]
 
 build_frontend:
   <<: *docker-build
-  variables:
-    IMAGE_NAME: frontend
-    DOCKERFILE: frontend/Dockerfile
+  variables: { IMAGE_NAME: frontend, DOCKERFILE: frontend/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes:
-        - .gitlab-ci.yml
-        - docker-compose.yml
-    - changes:
-        - frontend/**/*
+    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ frontend/**/* ]
 
-deploy_stack:
+# ---- Manueller Deploy-Info-Job (keine Portainer-API) ----
+deploy_manual_info:
   stage: deploy
-  image: curlimages/curl:latest
-  # falls du einen speziellen Runner im Portainer-Netz hast:
-  # tags: ['portainer-net']
-  needs:
-    - job: build_api_gateway     # bleiben optional, dann läuft Deploy auch ohne Build
-      optional: true
-    - job: build_pdf_ingest
-      optional: true
-    - job: build_text_extraction
-      optional: true
-    - job: build_pipeline_runner
-      optional: true
-    - job: build_prompt_manager
-      optional: true
-    - job: build_pipeline_api
-      optional: true
-    - job: build_metrics
-      optional: true
-    - job: build_history_service
-      optional: true
-    - job: build_frontend
-      optional: true
+  image: alpine:3.19
   rules:
-    # -> immer deployen, sobald main gebaut wird (kein changes-Filter mehr)
-    - if: '$CI_COMMIT_BRANCH == "main" && $PORTAINER_TOKEN'
-      when: on_success
-    # optional: auf anderen Branches manuell verfügbar machen
     - when: manual
       allow_failure: false
   script:
-    - echo "Deploying updated docker-compose to Portainer..."
     - |
-      set -euo pipefail
-      COMPOSE_FILE="docker-compose.yml"
-      if [ ! -f "$COMPOSE_FILE" ]; then
-        echo "No compose file found ($COMPOSE_FILE). Skipping deploy."
-        exit 0
-      fi
-      echo "Using compose file: $COMPOSE_FILE"
-      CONTENT=$(sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e ':a;N;$!ba;s/\n/\\n/g' "$COMPOSE_FILE")
-      curl -sS --fail-with-body --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
-        -X POST "https://portainer.adesso.claims/api/stacks?method=string&type=1&endpointId=$ENDPOINT_ID" \
-        -H "Authorization: Bearer $PORTAINER_TOKEN" \
-        -H "Content-Type: application/json" \
-        -d "{\"Name\":\"regress\",\"StackFileContent\":\"$CONTENT\"}"
+      set -e
+      SERVICES="api-gateway pdf-ingest text-extraction pipeline-runner prompt-manager pipeline-api metrics history-service frontend"
+      {
+        echo "Docker Hub repo: $DOCKERHUB_REPO"
+        echo
+        echo "Pull diese Tags in Portainer (Images → Pull):"
+        for s in $SERVICES; do
+          echo "  $DOCKERHUB_REPO:${s}-${IMAGE_TAG}"
+          echo "  $DOCKERHUB_REPO:${s}-${CI_COMMIT_SHORT_SHA}"
+        done
+        echo
+        echo "Beispiel docker-compose.yml (Release-Tags):"
+        echo "services:"
+        for s in $SERVICES; do
+          echo "  $s:"
+          echo "    image: $DOCKERHUB_REPO:${s}-${IMAGE_TAG}"
+        done
+      } | tee deploy-instructions.txt
+  artifacts:
+    when: always
+    expire_in: 3 days
+    paths:
+      - deploy-instructions.txt
