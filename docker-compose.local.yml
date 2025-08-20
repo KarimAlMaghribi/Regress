@@ -1,0 +1,148 @@
+version: "3.9"
+
+networks:
+  localnet: {}
+
+volumes:
+  db_data:
+  kafka_data:
+
+services:
+  # === Infrastruktur lokal ===
+  regressdb:
+    image: postgres:17
+    networks: [localnet]
+    environment:
+      POSTGRES_USER: regress
+      POSTGRES_PASSWORD: 'nITj"+0(f89F'
+      POSTGRES_DB: regress
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"           # lokal erreichbar
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U regress -d regress || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  kafka:
+    image: bitnami/kafka:latest
+    networks: [localnet]
+    volumes:
+      - kafka_data:/bitnami/kafka
+    environment:
+      KAFKA_CFG_PROCESS_ROLES: "controller,broker"
+      KAFKA_CFG_NODE_ID: "1"
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_CFG_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_CFG_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_KRAFT_CLUSTER_ID: "11111111111111111111"
+    ports:
+      - "9092:9092"           # optional extern
+    healthcheck:
+      test: ["CMD-SHELL","kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 15s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    networks: [localnet]
+    depends_on: [kafka]
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    ports:
+      - "18086:8080"
+
+  # === Deine Microservices (ziehen Images aus docker.adesso.claims) ===
+  api-gateway:
+    image: docker.adesso.claims/regress:api-gateway-release
+    networks: [localnet]
+    ports: ["8080:8080"]
+    depends_on: [regressdb, kafka]
+
+  pdf-ingest:
+    image: docker.adesso.claims/regress:pdf-ingest-release
+    networks: [localnet]
+    environment:
+      DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
+      MESSAGE_BROKER_URL: kafka:9092
+    ports: ["8081:8081"]
+    depends_on: [regressdb, kafka]
+
+  text-extraction:
+    image: docker.adesso.claims/regress:text-extraction-release
+    networks: [localnet]
+    environment:
+      DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
+      MESSAGE_BROKER_URL: kafka:9092
+    ports: ["8083:8083"]
+    depends_on: [regressdb, kafka]
+
+  pipeline-runner:
+    image: docker.adesso.claims/regress:pipeline-runner-release
+    networks: [localnet]
+    environment:
+      DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
+      MESSAGE_BROKER_URL: kafka:9092
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      RUST_LOG: info,pipeline_runner=debug,openai_client=debug
+      PROMPT_MANAGER_URL: http://prompt-manager:8082
+    ports: ["8087:8087"]
+    depends_on: [regressdb, kafka]
+
+  prompt-manager:
+    image: docker.adesso.claims/regress:prompt-manager-release
+    networks: [localnet]
+    environment:
+      DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
+      RUST_LOG: info,prompt_manager=debug,tower_http=info
+    ports: ["8082:8082"]
+    depends_on: [regressdb]
+
+  pipeline-api:
+    image: docker.adesso.claims/regress:pipeline-api-release
+    networks: [localnet]
+    environment:
+      DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+    ports: ["8084:8084"]
+    depends_on: [regressdb]
+
+  metrics:
+    image: docker.adesso.claims/regress:metrics-release
+    networks: [localnet]
+    environment:
+      DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
+    ports: ["8085:8085"]
+    depends_on: [regressdb]
+
+  history-service:
+    image: docker.adesso.claims/regress:history-service-release
+    networks: [localnet]
+    environment:
+      DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
+      MESSAGE_BROKER_URL: kafka:9092
+      SERVER_PORT: "8090"
+      RUST_LOG: info,history_service=debug
+      RUST_BACKTRACE: "1"
+    ports: ["8090:8090"]
+    depends_on: [regressdb, kafka]
+
+  frontend:
+    image: docker.adesso.claims/regress:frontend-release
+    networks: [localnet]
+    environment:
+      VITE_INGEST_URL: http://api-gateway:8080
+      VITE_HISTORY_WS: ws://history-service:8090
+      VITE_API_URL: http://pipeline-api:8084
+      VITE_HISTORY_URL: http://history-service:8090
+      VITE_UPLOAD_API_URL: http://pdf-ingest:8081
+    ports: ["3001:80"]

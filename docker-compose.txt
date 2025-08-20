@@ -1,47 +1,44 @@
 version: "3.9"
 
-# -----------------------------------------------------
-# Gemeinsames Overlay-Netz (in Portainer vorher anlegen)
-# Portainer: Home → Environment → Networks → Add network
-#   Name: backendnet, Driver: overlay, Attachable: ON
-# -----------------------------------------------------
+# Gemeinsames Overlay-Netz MUSS vorher existieren (Networks → Add network: backendnet, driver=overlay, attachable=ON)
 networks:
   backendnet:
     external: true
 
 volumes:
   db_data:
+  kafka_data:
 
 services:
-  # ---------- Datenbank ----------
+  # ---------- Postgres nur intern ----------
   regressdb:
     image: postgres:17
-    networks: [backendnet]
+    networks:
+      backendnet:
+        aliases: [ regressdb ]
     environment:
       POSTGRES_USER: regress
       POSTGRES_PASSWORD: 'nITj"+0(f89F'
       POSTGRES_DB: regress
     volumes:
       - db_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"  # optional extern
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U regress -d regress || exit 1"]
+      test: [ "CMD-SHELL", "pg_isready -U regress -d regress || exit 1" ]
       interval: 5s
       timeout: 3s
       retries: 20
       start_period: 10s
     deploy:
-      restart_policy:
-        condition: any
-        delay: 5s
-        max_attempts: 10
-        window: 120s
+      restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
-  # ---------- Kafka (KRaft Single Node) ----------
+  # ---------- Kafka nur intern ----------
   kafka:
     image: bitnami/kafka:latest
-    networks: [backendnet]
+    networks:
+      backendnet:
+        aliases: [ kafka ]
+    volumes:
+      - kafka_data:/bitnami/kafka
     environment:
       KAFKA_CFG_PROCESS_ROLES: "controller,broker"
       KAFKA_CFG_NODE_ID: "1"
@@ -52,126 +49,120 @@ services:
       KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
       ALLOW_PLAINTEXT_LISTENER: "yes"
       KAFKA_KRAFT_CLUSTER_ID: "11111111111111111111"
-    ports:
-      - "9092:9092"  # optional extern
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      test: [ "CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 20
       start_period: 15s
     deploy:
-      restart_policy:
-        condition: any
-        delay: 5s
-        max_attempts: 10
-        window: 120s
+      restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
-  # ---------- Kafka UI (optional) ----------
+  # ---------- Kafka UI (extern auf 18086) ----------
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
-    networks: [backendnet]
+    networks: [ backendnet ]
+    depends_on: [ kafka ]
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
-    depends_on:
-      - kafka
     ports:
-      - "8086:8080"
+      - "18086:8080"
+    deploy:
+      restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
-  # ---------- Eigene Services (Docker Hub: krakia/regress) ----------
+  # ---------- Eigene Services ----------
   api-gateway:
     image: krakia/regress:api-gateway-release
-    networks: [backendnet]
-    ports: ["8080:8080"]
+    networks: [ backendnet ]
+    ports: [ "8080:8080" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
   pdf-ingest:
     image: krakia/regress:pdf-ingest-release
-    networks: [backendnet]
+    networks: [ backendnet ]
     environment:
-      # Passwort ist in der URL URL-encodet (!)
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
       MESSAGE_BROKER_URL: kafka:9092
-    ports: ["8081:8081"]
+    ports: [ "8081:8081" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
   text-extraction:
     image: krakia/regress:text-extraction-release
-    networks: [backendnet]
+    networks: [ backendnet ]
     environment:
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
       MESSAGE_BROKER_URL: kafka:9092
-    ports: ["8083:8083"]
+    ports: [ "8083:8083" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
   pipeline-runner:
     image: krakia/regress:pipeline-runner-release
-    networks: [backendnet]
+    networks: [ backendnet ]
     environment:
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
       OPENAI_API_KEY: "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"
       PROMPT_MANAGER_URL: http://prompt-manager:8082
       MESSAGE_BROKER_URL: kafka:9092
       RUST_LOG: info,pipeline_runner=debug,openai_client=debug
-    ports: ["8087:8087"]
+    ports: [ "8087:8087" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
   prompt-manager:
     image: krakia/regress:prompt-manager-release
-    networks: [backendnet]
+    networks: [ backendnet ]
     environment:
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
       RUST_LOG: info,prompt_manager=debug,tower_http=info
-    ports: ["8082:8082"]
+    ports: [ "8082:8082" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
   pipeline-api:
     image: krakia/regress:pipeline-api-release
-    networks: [backendnet]
+    networks: [ backendnet ]
     environment:
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
       OPENAI_API_KEY: "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"
-    ports: ["8084:8084"]
+    ports: [ "8084:8084" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
   metrics:
     image: krakia/regress:metrics-release
-    networks: [backendnet]
+    networks: [ backendnet ]
     environment:
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
-    ports: ["8085:8085"]
+    ports: [ "8085:8085" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
   history-service:
     image: krakia/regress:history-service-release
-    networks: [backendnet]
+    networks: [ backendnet ]
     environment:
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
       MESSAGE_BROKER_URL: kafka:9092
       SERVER_PORT: "8090"
       RUST_LOG: info,history_service=debug
       RUST_BACKTRACE: "1"
-    ports: ["8090:8090"]
+    ports: [ "8090:8090" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
 
   frontend:
     image: krakia/regress:frontend-release
-    networks: [backendnet]
+    networks: [ backendnet ]
     environment:
       VITE_INGEST_URL: http://api-gateway:8080
       VITE_HISTORY_WS: ws://history-service:8090
       VITE_API_URL: http://pipeline-api:8084
       VITE_HISTORY_URL: http://history-service:8090
       VITE_UPLOAD_API_URL: http://pdf-ingest:8081
-    ports: ["3001:80"]
+    ports: [ "3001:80" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }

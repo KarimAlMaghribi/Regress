@@ -11,11 +11,12 @@ variables:
   DOCKER_TLS_CERTDIR: ""
   DOCKER_BUILDKIT: 1
   BUILDKIT_PROGRESS: plain
-  IMAGE_TAG: "latest"
-  IMAGE_PREFIX: "$CI_REGISTRY_IMAGE"
+  IMAGE_TAG: "latest"         # z.B. 'release' wenn gewünscht
   CACHE_DIR: ".buildx-cache"
-  # Zentrales Docker-Hub-Repo
-  DOCKERHUB_REPO: "docker.io/krakia/regress"
+
+  # Ziel-Registry & zentrales Repo
+  REGISTRY_URL: "docker.adesso.claims"
+  REGISTRY_REPO: "docker.adesso.claims/regress"
 
 # No-Op, damit immer mindestens 1 Job existiert
 ci_noop:
@@ -32,10 +33,9 @@ ci_noop:
   services:
     - docker:24-dind
   before_script:
-    - echo "Logging in to GitLab Registry..."
-    - docker login -u "$CI_REGISTRY_USER" -p "$CI_REGISTRY_PASSWORD" "$CI_REGISTRY"
-    # Docker Hub Login (Access Token als Passwort)
-    - echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+    # Login in die Ziel-Registry.
+    # Setze REGISTRY_USER und REGISTRY_PASSWORD als Projekt-Variablen.
+    - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
     - docker buildx create --use || docker buildx use default
     - mkdir -p "$CACHE_DIR"
   script:
@@ -44,11 +44,8 @@ ci_noop:
       --build-arg BUILDKIT_INLINE_CACHE=1
       --cache-from=type=local,src="$CACHE_DIR"
       --cache-to=type=local,dest="$CACHE_DIR-new",mode=max
-      --cache-from=type=registry,ref="$CI_REGISTRY_IMAGE/cache:$CI_JOB_NAME"
-      --cache-to=type=registry,ref="$CI_REGISTRY_IMAGE/cache:$CI_JOB_NAME",mode=max
-      -t "$IMAGE_PREFIX/$IMAGE_NAME:$IMAGE_TAG"
-      -t "$DOCKERHUB_REPO:${IMAGE_NAME}-${IMAGE_TAG}"
-      -t "$DOCKERHUB_REPO:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}"
+      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${IMAGE_TAG}"
+      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}"
       -f "$DOCKERFILE" .
     - rm -rf "$CACHE_DIR" && mv "$CACHE_DIR-new" "$CACHE_DIR"
   cache:
@@ -67,14 +64,14 @@ ci_noop:
   timeout: 90m
   needs: []
 
-# ---- Build-Jobs (unverändert, jeweils IMAGE_NAME/DOCKERFILE setzen) ----
+# ---- Build-Jobs (je Service IMAGE_NAME & DOCKERFILE setzen) ----
 
 build_api_gateway:
   <<: *docker-build
   variables: { IMAGE_NAME: api-gateway, DOCKERFILE: services/api-gateway/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/api-gateway/**/* ]
 
 build_pdf_ingest:
@@ -82,7 +79,7 @@ build_pdf_ingest:
   variables: { IMAGE_NAME: pdf-ingest, DOCKERFILE: services/pdf-ingest/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/pdf-ingest/**/* ]
 
 build_text_extraction:
@@ -90,7 +87,7 @@ build_text_extraction:
   variables: { IMAGE_NAME: text-extraction, DOCKERFILE: services/text-extraction/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/text-extraction/**/* ]
 
 build_pipeline_runner:
@@ -98,7 +95,7 @@ build_pipeline_runner:
   variables: { IMAGE_NAME: pipeline-runner, DOCKERFILE: services/pipeline-runner/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/pipeline-runner/**/* ]
 
 build_prompt_manager:
@@ -106,7 +103,7 @@ build_prompt_manager:
   variables: { IMAGE_NAME: prompt-manager, DOCKERFILE: services/prompt-manager/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/prompt-manager/**/* ]
 
 build_pipeline_api:
@@ -114,7 +111,7 @@ build_pipeline_api:
   variables: { IMAGE_NAME: pipeline-api, DOCKERFILE: services/pipeline-api/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/pipeline-api/**/* ]
 
 build_metrics:
@@ -122,7 +119,7 @@ build_metrics:
   variables: { IMAGE_NAME: metrics, DOCKERFILE: services/metrics/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/metrics/**/* ]
 
 build_history_service:
@@ -130,7 +127,7 @@ build_history_service:
   variables: { IMAGE_NAME: history-service, DOCKERFILE: services/history-service/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/history-service/**/* ]
 
 build_frontend:
@@ -138,10 +135,10 @@ build_frontend:
   variables: { IMAGE_NAME: frontend, DOCKERFILE: frontend/Dockerfile }
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.yml ]
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ frontend/**/* ]
 
-# ---- Manueller Deploy-Info-Job (keine Portainer-API) ----
+# ---- Manueller Info-Job (keine Portainer-API) ----
 deploy_manual_info:
   stage: deploy
   image: alpine:3.19
@@ -153,19 +150,19 @@ deploy_manual_info:
       set -e
       SERVICES="api-gateway pdf-ingest text-extraction pipeline-runner prompt-manager pipeline-api metrics history-service frontend"
       {
-        echo "Docker Hub repo: $DOCKERHUB_REPO"
+        echo "Registry repo: $REGISTRY_REPO"
         echo
         echo "Pull diese Tags in Portainer (Images → Pull):"
         for s in $SERVICES; do
-          echo "  $DOCKERHUB_REPO:${s}-${IMAGE_TAG}"
-          echo "  $DOCKERHUB_REPO:${s}-${CI_COMMIT_SHORT_SHA}"
+          echo "  $REGISTRY_REPO:${s}-${IMAGE_TAG}"
+          echo "  $REGISTRY_REPO:${s}-${CI_COMMIT_SHORT_SHA}"
         done
         echo
         echo "Beispiel docker-compose.yml (Release-Tags):"
         echo "services:"
         for s in $SERVICES; do
           echo "  $s:"
-          echo "    image: $DOCKERHUB_REPO:${s}-${IMAGE_TAG}"
+          echo "    image: $REGISTRY_REPO:${s}-${IMAGE_TAG}"
         done
       } | tee deploy-instructions.txt
   artifacts:
