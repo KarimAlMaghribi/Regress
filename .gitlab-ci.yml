@@ -16,7 +16,7 @@ variables:
 
   # Ziel-Registry & zentrales Repo
   REGISTRY_URL: "docker.adesso.claims"
-  REGISTRY_REPO: "docker.adesso.claims/regress"
+  REGISTRY_REPO: "docker.adesso.claims/afm"
 
 # No-Op, damit immer mindestens 1 Job existiert
 ci_noop:
