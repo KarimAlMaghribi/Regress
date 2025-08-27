@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio_postgres::{self, types::ToSql, NoTls};
 use tokio_stream::wrappers::errors::BroadcastStreamRecvError;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use uuid::Uuid;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -118,6 +118,21 @@ async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) -> i32
             error!(%e, pdf_id=%entry.pdf_id, "failed to lookup running row");
             0
         }
+    }
+}
+
+fn row_to_entry(r: tokio_postgres::Row) -> HistoryEntry {
+    HistoryEntry {
+        id: r.get(0),
+        pdf_id: r.get(1),
+        pipeline_id: r.get(2),
+        prompt: None,
+        result: r.get(3),
+        pdf_url: r.get(4),
+        timestamp: r.get(5),
+        status: r.get(6),
+        score: r.get(7),
+        result_label: r.get(8),
     }
 }
 
@@ -229,21 +244,6 @@ async fn latest_by_status(db: &tokio_postgres::Client, status: Option<String>) -
     rows.into_iter().map(row_to_entry).collect()
 }
 
-fn row_to_entry(r: tokio_postgres::Row) -> HistoryEntry {
-    HistoryEntry {
-        id: r.get(0),
-        pdf_id: r.get(1),
-        pipeline_id: r.get(2),
-        prompt: None,
-        result: r.get(3),
-        pdf_url: r.get(4),
-        timestamp: r.get(5),
-        status: r.get(6),
-        score: r.get(7),
-        result_label: r.get(8),
-    }
-}
-
 async fn classifications(
     state: web::Data<AppState>,
     query: web::Query<HashMap<String, String>>,
@@ -295,7 +295,9 @@ impl actix::Actor for WsConn {
         async move { all_entries(&db).await }
             .into_actor(self)
             .map(|entries, _act, ctx| {
-                if let Ok(text) = serde_json::to_string(&serde_json::json!({"type":"history","data":entries})) {
+                if let Ok(text) = serde_json::to_string(
+                    &serde_json::json!({"type":"history","data":entries})
+                ) {
                     ctx.text(text);
                 }
             })
@@ -307,13 +309,12 @@ impl actix::Actor for WsConn {
 
 impl actix::StreamHandler<Result<HistoryEntry, BroadcastStreamRecvError>> for WsConn {
     fn handle(&mut self, item: Result<HistoryEntry, BroadcastStreamRecvError>, ctx: &mut Self::Context) {
-        match item {
-            Ok(entry) => {
-                if let Ok(text) = serde_json::to_string(&serde_json::json!({"type":"update","data":entry})) {
-                    ctx.text(text);
-                }
+        if let Ok(entry) = item {
+            if let Ok(text) = serde_json::to_string(
+                &serde_json::json!({"type":"update","data":entry})
+            ) {
+                ctx.text(text);
             }
-            Err(BroadcastStreamRecvError::Lagged(_)) => {}
         }
     }
 }
@@ -336,12 +337,12 @@ async fn ws_index(req: HttpRequest, stream: Payload, state: web::Data<AppState>)
 async fn start_kafka(
     db: Arc<tokio_postgres::Client>,
     tx: tokio::sync::broadcast::Sender<HistoryEntry>,
-    settings: Settings,
+    message_broker_url: String,
     pdf_base: String,
 ) {
     let consumer: StreamConsumer = match ClientConfig::new()
         .set("group.id", "history-service")
-        .set("bootstrap.servers", &settings.message_broker_url)
+        .set("bootstrap.servers", &message_broker_url)
         .create() {
         Ok(c) => c,
         Err(e) => {
@@ -457,13 +458,12 @@ async fn main() -> std::io::Result<()> {
     let pdf_base = std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
     let state = web::Data::new(AppState { db: db.clone(), tx: tx.clone(), pdf_base: pdf_base.clone() });
 
-    // Kafka consumer in Hintergrund
+    let broker_url = settings.message_broker_url.clone();
     {
         let db_for_kafka = db.clone();
         let tx_for_kafka = tx.clone();
-        let settings_for_kafka = settings.clone();
         let pdf_base_for_kafka = pdf_base.clone();
-        actix_web::rt::spawn(start_kafka(db_for_kafka, tx_for_kafka, settings_for_kafka, pdf_base_for_kafka));
+        actix_web::rt::spawn(start_kafka(db_for_kafka, tx_for_kafka, broker_url, pdf_base_for_kafka));
     }
 
     HttpServer::new(move || {
