@@ -5,27 +5,24 @@ use axum::{
     Json, Router,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
+    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait,
     QueryFilter, Set,
 };
 use serde::{Deserialize, Serialize};
-use shared::dto::PromptType;
 use shared::config::Settings;
+use shared::dto::PromptType;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tracing::{error, info};
+use tracing_subscriber::{fmt, EnvFilter};
 
 mod model;
 use model::{
-    group::{Entity as GroupEntity, Model as GroupModel},
-    group_prompt::{
-        ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity,
-        Model as GroupPromptModel,
-    },
-    prompt::{Entity as Prompt, ActiveModel as PromptActiveModel, Model as PromptModel},
-    pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel, Model as PipelineModel},
+    group::{Entity as GroupEntity, ActiveModel as GroupActiveModel},
+    group_prompt::{Entity as GroupPromptEntity, ActiveModel as GroupPromptActiveModel},
+    pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel},
+    prompt::{Entity as Prompt, ActiveModel as PromptActiveModel},
 };
-use tracing::{error, info, warn};
-use tracing_subscriber::{fmt, EnvFilter};
 
 fn ensure_sslmode_disable(url: &str) -> String {
     let lower = url.to_lowercase();
@@ -93,9 +90,7 @@ struct PipelineInput {
 }
 
 #[derive(Serialize, Debug)]
-struct ErrorResponse {
-    error: String,
-}
+struct ErrorResponse { error: String }
 
 fn default_weight() -> f64 { 1.0 }
 fn default_prompt_type() -> PromptType { PromptType::ExtractionPrompt }
@@ -106,6 +101,8 @@ struct ListParams {
     r#type: Option<PromptType>,
 }
 
+/* ---------------- Prompts ---------------- */
+
 async fn list_prompts(
     State(db): State<Arc<DatabaseConnection>>,
     Query(params): Query<ListParams>,
@@ -114,10 +111,7 @@ async fn list_prompts(
     if let Some(t) = params.r#type {
         query = query.filter(model::prompt::Column::PromptType.eq(t.to_string()));
     }
-    let items = query.all(&*db).await.map_err(|e| {
-        error!("failed to list prompts: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    let items = query.all(&*db).await.map_err(int_err)?;
     let texts: Vec<PromptData> = items.into_iter().map(|p| PromptData {
         id: p.id,
         text: p.text,
@@ -133,11 +127,8 @@ async fn get_prompt(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
-    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("db error {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })? else {
-        return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })));
+    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
     };
     Ok(model.text)
 }
@@ -146,35 +137,37 @@ async fn create_prompt(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
 ) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
+    // Validierung
     if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "json_key required".into() })));
+        return Err(bad_request("json_key required"));
     }
     if input.prompt_type == PromptType::ScoringPrompt && input.weight <= 0.0 {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "weight must be >0".into() })));
+        return Err(bad_request("weight must be > 0"));
     }
+
     let mut model: PromptActiveModel = Default::default();
     model.text = Set(input.text);
     model.prompt_type = Set(input.prompt_type.to_string());
     model.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt { 1.0 } else { input.weight });
     model.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt { input.json_key.clone() } else { None });
     model.favorite = Set(input.favorite);
-    let res = model.insert(&*db).await.map_err(|e| {
-        error!("failed to create prompt: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    let res = model.insert(&*db).await.map_err(int_err)?;
+
+    // Gruppen-Beziehungen anlegen
     for gid in input.group_ids {
         let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(gid);
         gp.prompt_id = Set(res.id);
-        gp.insert(&*db).await.map_err(|e| {
-            error!("failed to add prompt to group: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-        })?;
+        gp.insert(&*db).await.map_err(int_err)?;
     }
+
     Ok(Json(PromptData {
-        id: res.id, text: res.text,
+        id: res.id,
+        text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-        weight: res.weight, json_key: res.json_key, favorite: res.favorite,
+        weight: res.weight,
+        json_key: res.json_key,
+        favorite: res.favorite,
     }))
 }
 
@@ -183,47 +176,43 @@ async fn update_prompt(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
 ) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("failed to find prompt {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })? else {
-        return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })));
+    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
     };
+
     if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "json_key required".into() })));
+        return Err(bad_request("json_key required"));
     }
     if input.prompt_type == PromptType::ScoringPrompt && input.weight <= 0.0 {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "weight must be >0".into() })));
+        return Err(bad_request("weight must be > 0"));
     }
+
     let mut active: PromptActiveModel = model.into();
     active.text = Set(input.text);
     active.prompt_type = Set(input.prompt_type.to_string());
     active.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt { 1.0 } else { input.weight });
     active.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt { input.json_key.clone() } else { None });
     active.favorite = Set(input.favorite);
-    let res = active.update(&*db).await.map_err(|e| {
-        error!("failed to update prompt {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    let res = active.update(&*db).await.map_err(int_err)?;
+
+    // Gruppenbeziehungen ersetzen
     GroupPromptEntity::delete_many()
         .filter(model::group_prompt::Column::PromptId.eq(id))
-        .exec(&*db).await.map_err(|e| {
-        error!("failed to clear prompt groups {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+        .exec(&*db).await.map_err(int_err)?;
     for gid in input.group_ids {
         let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(gid);
-        gp.prompt_id = Set(res.id);
-        gp.insert(&*db).await.map_err(|e| {
-            error!("failed to add prompt to group: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-        })?;
+        gp.prompt_id = Set(id);
+        gp.insert(&*db).await.map_err(int_err)?;
     }
+
     Ok(Json(PromptData {
-        id: res.id, text: res.text,
+        id: res.id,
+        text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-        weight: res.weight, json_key: res.json_key, favorite: res.favorite,
+        weight: res.weight,
+        json_key: res.json_key,
+        favorite: res.favorite,
     }))
 }
 
@@ -231,17 +220,11 @@ async fn delete_prompt(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("failed to find prompt {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })? else {
-        return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })));
+    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
     };
     let active: PromptActiveModel = model.into();
-    active.delete(&*db).await.map_err(|e| {
-        error!("failed to delete prompt {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    active.delete(&*db).await.map_err(int_err)?;
     Ok(())
 }
 
@@ -253,42 +236,37 @@ async fn set_favorite(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<FavoriteInput>,
 ) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("failed to find prompt {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })? else {
-        return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })));
+    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
     };
     let mut active: PromptActiveModel = model.into();
     active.favorite = Set(input.favorite);
-    let res = active.update(&*db).await.map_err(|e| {
-        error!("failed to update favorite {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    let res = active.update(&*db).await.map_err(int_err)?;
     Ok(Json(PromptData {
-        id: res.id, text: res.text,
+        id: res.id,
+        text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-        weight: res.weight, json_key: res.json_key, favorite: res.favorite,
+        weight: res.weight,
+        json_key: res.json_key,
+        favorite: res.favorite,
     }))
 }
+
+/* ---------------- Groups ---------------- */
 
 async fn list_groups(
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<Json<Vec<GroupData>>, (StatusCode, Json<ErrorResponse>)> {
-    let groups = GroupEntity::find().all(&*db).await.map_err(|e| {
-        error!("failed to list groups: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    let groups = GroupEntity::find().all(&*db).await.map_err(int_err)?;
     let mut result = Vec::new();
     for g in groups {
         let members = GroupPromptEntity::find()
             .filter(model::group_prompt::Column::GroupId.eq(g.id))
-            .all(&*db).await.map_err(|e| {
-            error!("failed to list group prompts: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-        })?;
+            .all(&*db).await.map_err(int_err)?;
         result.push(GroupData {
-            id: g.id, name: g.name, favorite: g.favorite,
+            id: g.id,
+            name: g.name,
+            favorite: g.favorite,
             prompt_ids: members.into_iter().map(|m| m.prompt_id).collect(),
         });
     }
@@ -299,23 +277,22 @@ async fn create_group(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<GroupInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
-    let mut group: model::GroupActiveModel = Default::default();
+    let mut group: GroupActiveModel = Default::default();
     group.name = Set(input.name);
     group.favorite = Set(input.favorite);
-    let g = group.insert(&*db).await.map_err(|e| {
-        error!("failed to create group: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    let g = group.insert(&*db).await.map_err(int_err)?;
     for pid in &input.prompt_ids {
         let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(g.id);
         gp.prompt_id = Set(*pid);
-        gp.insert(&*db).await.map_err(|e| {
-            error!("failed to add prompt to group: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-        })?;
+        gp.insert(&*db).await.map_err(int_err)?;
     }
-    Ok(Json(GroupData { id: g.id, name: g.name, favorite: g.favorite, prompt_ids: input.prompt_ids }))
+    Ok(Json(GroupData {
+        id: g.id,
+        name: g.name,
+        favorite: g.favorite,
+        prompt_ids: input.prompt_ids,
+    }))
 }
 
 async fn update_group(
@@ -323,88 +300,137 @@ async fn update_group(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<GroupInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("failed to find group {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })? else {
-        return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })));
+    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
     };
     group.name = input.name;
     group.favorite = input.favorite;
-    let active: model::GroupActiveModel = group.into();
-    let g = active.update(&*db).await.map_err(|e| {
-        error!("failed to update group {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    let active: GroupActiveModel = group.into();
+    let g = active.update(&*db).await.map_err(int_err)?;
 
     GroupPromptEntity::delete_many()
         .filter(model::group_prompt::Column::GroupId.eq(id))
-        .exec(&*db).await.map_err(|e| {
-        error!("failed to clear group prompts {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+        .exec(&*db).await.map_err(int_err)?;
 
     let ids = input.prompt_ids.clone();
     for pid in &ids {
         let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(id);
         gp.prompt_id = Set(*pid);
-        gp.insert(&*db).await.map_err(|e| {
-            error!("failed to add prompt to group: {}", e);
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-        })?;
+        gp.insert(&*db).await.map_err(int_err)?;
     }
 
-    Ok(Json(GroupData { id: g.id, name: g.name, favorite: g.favorite, prompt_ids: ids }))
+    Ok(Json(GroupData {
+        id: g.id,
+        name: g.name,
+        favorite: g.favorite,
+        prompt_ids: ids,
+    }))
 }
-
-#[derive(Deserialize)]
-struct FavoriteGroupInput { favorite: bool }
 
 async fn set_group_favorite(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
-    Json(input): Json<FavoriteGroupInput>,
+    Json(input): Json<FavoriteInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("failed to find group {}: {}", id, e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })? else {
-        return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() })));
+    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
     };
     group.favorite = input.favorite;
-    let active: model::GroupActiveModel = group.into();
-    let g = active.update(&*db).await.map_err(|e| {
-        error!("failed to update group favorite: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+    let active: GroupActiveModel = group.into();
+    let g = active.update(&*db).await.map_err(int_err)?;
     let members = GroupPromptEntity::find()
         .filter(model::group_prompt::Column::GroupId.eq(g.id))
-        .all(&*db).await.map_err(|e| {
-        error!("failed to list group prompts: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
-    })?;
+        .all(&*db).await.map_err(int_err)?;
     Ok(Json(GroupData {
-        id: g.id, name: g.name, favorite: g.favorite,
+        id: g.id,
+        name: g.name,
+        favorite: g.favorite,
         prompt_ids: members.into_iter().map(|m| m.prompt_id).collect(),
     }))
 }
 
+/* ---------------- Pipelines ---------------- */
+
+async fn list_pipelines(
+    State(db): State<Arc<DatabaseConnection>>,
+) -> Result<Json<Vec<PipelineData>>, (StatusCode, Json<ErrorResponse>)> {
+    let items = PipelineEntity::find().all(&*db).await.map_err(int_err)?;
+    Ok(Json(items.into_iter().map(|p| PipelineData {
+        id: p.id, name: p.name, data: p.data
+    }).collect()))
+}
+
+async fn create_pipeline(
+    State(db): State<Arc<DatabaseConnection>>,
+    Json(input): Json<PipelineInput>,
+) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
+    let mut model: PipelineActiveModel = Default::default();
+    model.name = Set(input.name);
+    model.data = Set(input.data);
+    let res = model.insert(&*db).await.map_err(int_err)?;
+    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.data }))
+}
+
+async fn update_pipeline(
+    Path(id): Path<i32>,
+    State(db): State<Arc<DatabaseConnection>>,
+    Json(input): Json<PipelineInput>,
+) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
+    let Some(mut model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
+    };
+    model.name = input.name;
+    model.data = input.data;
+    let active: PipelineActiveModel = model.into();
+    let res = active.update(&*db).await.map_err(int_err)?;
+    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.data }))
+}
+
+async fn delete_pipeline(
+    Path(id): Path<i32>,
+    State(db): State<Arc<DatabaseConnection>>,
+) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
+    let Some(model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
+    };
+    let active: PipelineActiveModel = model.into();
+    active.delete(&*db).await.map_err(int_err)?;
+    Ok(())
+}
+
+/* ---------------- Fehler-Helfer ---------------- */
+
+fn int_err<E: std::fmt::Display>(e: E) -> (StatusCode, Json<ErrorResponse>) {
+    error!("db error: {}", e);
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+}
+fn bad_request(msg: &str) -> (StatusCode, Json<ErrorResponse>) {
+    (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: msg.into() }))
+}
+fn not_found() -> (StatusCode, Json<ErrorResponse>) {
+    (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() }))
+}
+
+/* ---------------- main ---------------- */
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Logging via RUST_LOG
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
-    let settings = Settings::new().unwrap_or_else(|_| Settings {
-        database_url: "postgresql://regress_app:nITj%22%2B0%28f89F@haproxy:5432/regress?sslmode=disable".into(),
+    // DB-URL ohne TLS
+    let mut settings = Settings::new().unwrap_or_else(|_| Settings {
+        database_url: "postgres://regress:password@localhost:5432/regress".into(),
         message_broker_url: String::new(),
         openai_api_key: String::new(),
         class_prompt_id: 0,
     });
+    settings.database_url = ensure_sslmode_disable(&settings.database_url);
 
-    let db_url = ensure_sslmode_disable(&settings.database_url);
-    let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&db_url).await?);
+    let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
 
-    // Minimal idempotente "Migration"
+    // einfache Schema-Sicherung (idempotent)
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, prompt_type TEXT NOT NULL DEFAULT 'ExtractionPrompt', weight DOUBLE PRECISION NOT NULL DEFAULT 1, json_key TEXT, favorite BOOLEAN NOT NULL DEFAULT FALSE)",
@@ -435,7 +461,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(db.clone())
         .layer(CorsLayer::permissive());
 
-    info!("starting prompt-manager on :8082");
+    info!("starting prompt-manager on 0.0.0.0:8082");
     axum::Server::bind(&"0.0.0.0:8082".parse::<std::net::SocketAddr>()?)
         .serve(app.into_make_service())
         .await?;
