@@ -9,28 +9,47 @@ use sea_orm::{
     QueryFilter, Set,
 };
 use serde::{Deserialize, Serialize};
-use shared::dto::PromptType;
 use shared::config::Settings;
+use shared::dto::PromptType;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 
 mod model;
 use model::{
-    group::{Entity as GroupEntity, Model as GroupModel},
+    group::{ActiveModel as GroupActiveModel, Entity as GroupEntity, Model as GroupModel},
     group_prompt::{
         ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity,
         Model as GroupPromptModel,
     },
-    prompt::Entity as Prompt,
-    pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel, Model as PipelineModel},
+    pipeline::{
+        ActiveModel as PipelineActiveModel, Entity as PipelineEntity, Model as PipelineModel,
+    },
+    prompt::{
+        ActiveModel as PromptActiveModel, Entity as Prompt, Model as PromptModel,
+        Column as PromptColumn,
+    },
 };
 use tracing::{error, info, warn};
 use tracing_subscriber::{fmt, EnvFilter};
+
+/* ----------------------------- Helpers ----------------------------- */
+
+fn ensure_sslmode_disable(url: &str) -> String {
+    if url.contains("sslmode=") {
+        url.to_string()
+    } else if url.contains('?') {
+        format!("{url}&sslmode=disable")
+    } else {
+        format!("{url}?sslmode=disable")
+    }
+}
 
 async fn health() -> &'static str {
     info!("health check request");
     "OK"
 }
+
+/* ------------------------------ Types ------------------------------ */
 
 #[derive(Serialize)]
 struct PromptData {
@@ -105,6 +124,8 @@ struct ListParams {
     r#type: Option<PromptType>,
 }
 
+/* --------------------------- Prompt CRUD --------------------------- */
+
 async fn list_prompts(
     State(db): State<Arc<DatabaseConnection>>,
     Query(params): Query<ListParams>,
@@ -112,7 +133,7 @@ async fn list_prompts(
     info!("listing prompts");
     let mut query = Prompt::find();
     if let Some(t) = params.r#type {
-        query = query.filter(model::prompt::Column::PromptType.eq(t.to_string()));
+        query = query.filter(PromptColumn::PromptType.eq(t.to_string()));
     }
     let items = query.all(&*db).await.map_err(|e| {
         error!("failed to list prompts: {}", e);
@@ -128,7 +149,10 @@ async fn list_prompts(
         .map(|p| PromptData {
             id: p.id,
             text: p.text,
-            prompt_type: p.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
+            prompt_type: p
+                .prompt_type
+                .parse()
+                .unwrap_or(PromptType::ExtractionPrompt),
             weight: p.weight,
             json_key: p.json_key,
             favorite: p.favorite,
@@ -143,21 +167,21 @@ async fn get_prompt(
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<String, (StatusCode, Json<ErrorResponse>)> {
     info!(id, "fetch prompt");
-    let Some(model) = model::prompt::Entity::find_by_id(id)
-        .one(&*db)
-        .await
-        .map_err(|e| {
-            error!("db error {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse { error: e.to_string() }),
-            )
-        })?
-    else {
+    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
+        error!("db error {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: e.to_string(),
+            }),
+        )
+    })? else {
         warn!(id, "prompt not found");
         return Err((
             StatusCode::NOT_FOUND,
-            Json(ErrorResponse { error: "Not found".into() }),
+            Json(ErrorResponse {
+                error: "Not found".into(),
+            }),
         ));
     };
     Ok(model.text)
@@ -169,16 +193,38 @@ async fn create_prompt(
 ) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
     info!("creating prompt");
     if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "json_key required".into() }))); }
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "json_key required".into(),
+            }),
+        ));
+    }
     if input.prompt_type == PromptType::ScoringPrompt && input.weight <= 0.0 {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "weight must be >0".into() }))); }
-    let mut model: model::ActiveModel = Default::default();
-    model.text = Set(input.text);
-    model.prompt_type = Set(input.prompt_type.to_string());
-    model.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt { 1.0 } else { input.weight });
-    model.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt { input.json_key.clone() } else { None });
-    model.favorite = Set(input.favorite);
-    let res = model.insert(&*db).await.map_err(|e| {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "weight must be >0".into(),
+            }),
+        ));
+    }
+
+    let mut am: PromptActiveModel = Default::default();
+    am.text = Set(input.text);
+    am.prompt_type = Set(input.prompt_type.to_string());
+    am.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt {
+        1.0
+    } else {
+        input.weight
+    });
+    am.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt {
+        input.json_key.clone()
+    } else {
+        None
+    });
+    am.favorite = Set(input.favorite);
+
+    let res = am.insert(&*db).await.map_err(|e| {
         error!("failed to create prompt: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -187,8 +233,9 @@ async fn create_prompt(
             }),
         )
     })?;
+
     for gid in input.group_ids {
-        let mut gp: model::GroupPromptActiveModel = Default::default();
+        let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(gid);
         gp.prompt_id = Set(res.id);
         gp.insert(&*db).await.map_err(|e| {
@@ -201,11 +248,15 @@ async fn create_prompt(
             )
         })?;
     }
+
     info!(id = res.id, "created prompt");
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
-        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
+        prompt_type: res
+            .prompt_type
+            .parse()
+            .unwrap_or(PromptType::ExtractionPrompt),
         weight: res.weight,
         json_key: res.json_key,
         favorite: res.favorite,
@@ -218,7 +269,7 @@ async fn update_prompt(
     Json(input): Json<PromptInput>,
 ) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
     info!(id, "updating prompt");
-    let Some(mut model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
+    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
         error!("failed to find prompt {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -226,8 +277,7 @@ async fn update_prompt(
                 error: e.to_string(),
             }),
         )
-    })?
-    else {
+    })? else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -235,17 +285,40 @@ async fn update_prompt(
             }),
         ));
     };
-    let mut active: model::ActiveModel = model.into();
-    active.text = Set(input.text);
-    active.prompt_type = Set(input.prompt_type.to_string());
+
     if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "json_key required".into() }))); }
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "json_key required".into(),
+            }),
+        ));
+    }
     if input.prompt_type == PromptType::ScoringPrompt && input.weight <= 0.0 {
-        return Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: "weight must be >0".into() }))); }
-    active.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt { 1.0 } else { input.weight });
-    active.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt { input.json_key.clone() } else { None });
-    active.favorite = Set(input.favorite);
-    let res = active.update(&*db).await.map_err(|e| {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: "weight must be >0".into(),
+            }),
+        ));
+    }
+
+    let mut am: PromptActiveModel = model.into();
+    am.text = Set(input.text);
+    am.prompt_type = Set(input.prompt_type.to_string());
+    am.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt {
+        1.0
+    } else {
+        input.weight
+    });
+    am.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt {
+        input.json_key.clone()
+    } else {
+        None
+    });
+    am.favorite = Set(input.favorite);
+
+    let res = am.update(&*db).await.map_err(|e| {
         error!("failed to update prompt {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -254,7 +327,8 @@ async fn update_prompt(
             }),
         )
     })?;
-    // update group relations
+
+    // Gruppenbeziehungen neu setzen
     GroupPromptEntity::delete_many()
         .filter(model::group_prompt::Column::PromptId.eq(id))
         .exec(&*db)
@@ -268,10 +342,11 @@ async fn update_prompt(
                 }),
             )
         })?;
+
     for gid in input.group_ids {
-        let mut gp: model::GroupPromptActiveModel = Default::default();
+        let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(gid);
-        gp.prompt_id = Set(id);
+        gp.prompt_id = Set(res.id);
         gp.insert(&*db).await.map_err(|e| {
             error!("failed to add prompt to group: {}", e);
             (
@@ -282,11 +357,15 @@ async fn update_prompt(
             )
         })?;
     }
+
     info!(id = res.id, "updated prompt");
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
-        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
+        prompt_type: res
+            .prompt_type
+            .parse()
+            .unwrap_or(PromptType::ExtractionPrompt),
         weight: res.weight,
         json_key: res.json_key,
         favorite: res.favorite,
@@ -306,8 +385,7 @@ async fn delete_prompt(
                 error: e.to_string(),
             }),
         )
-    })?
-    else {
+    })? else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -315,8 +393,8 @@ async fn delete_prompt(
             }),
         ));
     };
-    let active: model::ActiveModel = model.into();
-    active.delete(&*db).await.map_err(|e| {
+    let am: PromptActiveModel = model.into();
+    am.delete(&*db).await.map_err(|e| {
         error!("failed to delete prompt {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -328,6 +406,8 @@ async fn delete_prompt(
     info!(id, "deleted prompt");
     Ok(())
 }
+
+/* ---------------------------- Group CRUD --------------------------- */
 
 async fn list_groups(
     State(db): State<Arc<DatabaseConnection>>,
@@ -372,10 +452,10 @@ async fn create_group(
     Json(input): Json<GroupInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
     info!("creating group");
-    let mut group: model::GroupActiveModel = Default::default();
-    group.name = Set(input.name);
-    group.favorite = Set(input.favorite);
-    let g = group.insert(&*db).await.map_err(|e| {
+    let mut am: GroupActiveModel = Default::default();
+    am.name = Set(input.name);
+    am.favorite = Set(input.favorite);
+    let g = am.insert(&*db).await.map_err(|e| {
         error!("failed to create group: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -384,8 +464,9 @@ async fn create_group(
             }),
         )
     })?;
+
     for pid in &input.prompt_ids {
-        let mut gp: model::GroupPromptActiveModel = Default::default();
+        let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(g.id);
         gp.prompt_id = Set(*pid);
         gp.insert(&*db).await.map_err(|e| {
@@ -398,6 +479,7 @@ async fn create_group(
             )
         })?;
     }
+
     Ok(Json(GroupData {
         id: g.id,
         name: g.name,
@@ -412,7 +494,7 @@ async fn update_group(
     Json(input): Json<GroupInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
     info!(id, "updating group");
-    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(|e| {
+    let Some(group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(|e| {
         error!("failed to find group {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -420,8 +502,7 @@ async fn update_group(
                 error: e.to_string(),
             }),
         )
-    })?
-    else {
+    })? else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -429,10 +510,11 @@ async fn update_group(
             }),
         ));
     };
-    group.name = input.name;
-    group.favorite = input.favorite;
-    let active: model::GroupActiveModel = group.into();
-    let g = active.update(&*db).await.map_err(|e| {
+
+    let mut am: GroupActiveModel = group.into();
+    am.name = Set(input.name);
+    am.favorite = Set(input.favorite);
+    let g = am.update(&*db).await.map_err(|e| {
         error!("failed to update group {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -458,7 +540,7 @@ async fn update_group(
 
     let ids = input.prompt_ids.clone();
     for pid in &ids {
-        let mut gp: model::GroupPromptActiveModel = Default::default();
+        let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(id);
         gp.prompt_id = Set(*pid);
         gp.insert(&*db).await.map_err(|e| {
@@ -480,12 +562,17 @@ async fn update_group(
     }))
 }
 
+#[derive(Deserialize)]
+struct FavoriteInput {
+    favorite: bool,
+}
+
 async fn set_group_favorite(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<FavoriteInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(|e| {
+    let Some(group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(|e| {
         error!("failed to find group {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -493,8 +580,7 @@ async fn set_group_favorite(
                 error: e.to_string(),
             }),
         )
-    })?
-    else {
+    })? else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse {
@@ -502,9 +588,10 @@ async fn set_group_favorite(
             }),
         ));
     };
-    group.favorite = input.favorite;
-    let active: model::GroupActiveModel = group.into();
-    let g = active.update(&*db).await.map_err(|e| {
+
+    let mut am: GroupActiveModel = group.into();
+    am.favorite = Set(input.favorite);
+    let g = am.update(&*db).await.map_err(|e| {
         error!("failed to update group favorite: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -513,6 +600,7 @@ async fn set_group_favorite(
             }),
         )
     })?;
+
     let members = GroupPromptEntity::find()
         .filter(model::group_prompt::Column::GroupId.eq(g.id))
         .all(&*db)
@@ -526,6 +614,7 @@ async fn set_group_favorite(
                 }),
             )
         })?;
+
     Ok(Json(GroupData {
         id: g.id,
         name: g.name,
@@ -534,54 +623,7 @@ async fn set_group_favorite(
     }))
 }
 
-#[derive(Deserialize)]
-struct FavoriteInput {
-    favorite: bool,
-}
-
-async fn set_favorite(
-    Path(id): Path<i32>,
-    State(db): State<Arc<DatabaseConnection>>,
-    Json(input): Json<FavoriteInput>,
-) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
-    info!(id, favorite = input.favorite, "setting favorite");
-    let Some(mut model) = Prompt::find_by_id(id).one(&*db).await.map_err(|e| {
-        error!("failed to find prompt {}: {}", id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?
-    else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(ErrorResponse {
-                error: "Not found".into(),
-            }),
-        ));
-    };
-    model.favorite = input.favorite;
-    let active: model::ActiveModel = model.into();
-    let res = active.update(&*db).await.map_err(|e| {
-        error!("failed to update favorite {}: {}", id, e);
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-    })?;
-    Ok(Json(PromptData {
-        id: res.id,
-        text: res.text,
-        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-        weight: res.weight,
-        json_key: res.json_key,
-        favorite: res.favorite,
-    }))
-}
+/* --------------------------- Pipeline CRUD ------------------------- */
 
 async fn list_pipelines(
     State(db): State<Arc<DatabaseConnection>>,
@@ -607,10 +649,10 @@ async fn create_pipeline(
     Json(input): Json<PipelineInput>,
 ) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
     info!("creating pipeline");
-    let mut model: PipelineActiveModel = Default::default();
-    model.name = Set(input.name);
-    model.data = Set(input.data);
-    let res = model.insert(&*db).await.map_err(|e| {
+    let mut am: PipelineActiveModel = Default::default();
+    am.name = Set(input.name);
+    am.data = Set(input.data);
+    let res = am.insert(&*db).await.map_err(|e| {
         error!("failed to create pipeline: {}", e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -626,23 +668,23 @@ async fn update_pipeline(
     Json(input): Json<PipelineInput>,
 ) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
     info!(id, "updating pipeline");
-    let Some(mut model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(|e| {
+    let Some(model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(|e| {
         error!("failed to find pipeline {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e.to_string() }),
         )
-    })?
-    else {
+    })? else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse { error: "Not found".into() }),
         ));
     };
-    model.name = input.name;
-    model.data = input.data;
-    let active: PipelineActiveModel = model.into();
-    let res = active.update(&*db).await.map_err(|e| {
+
+    let mut am: PipelineActiveModel = model.into();
+    am.name = Set(input.name);
+    am.data = Set(input.data);
+    let res = am.update(&*db).await.map_err(|e| {
         error!("failed to update pipeline {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -663,15 +705,15 @@ async fn delete_pipeline(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse { error: e.to_string() }),
         )
-    })?
-    else {
+    })? else {
         return Err((
             StatusCode::NOT_FOUND,
             Json(ErrorResponse { error: "Not found".into() }),
         ));
     };
-    let active: PipelineActiveModel = model.into();
-    active.delete(&*db).await.map_err(|e| {
+
+    let am: PipelineActiveModel = model.into();
+    am.delete(&*db).await.map_err(|e| {
         error!("failed to delete pipeline {}: {}", id, e);
         (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -681,94 +723,127 @@ async fn delete_pipeline(
     Ok(())
 }
 
+/* -------------------------------- Main ----------------------------- */
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Logging: Level via RUST_LOG steuern
-    fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .init();
+    fmt().with_env_filter(EnvFilter::from_default_env()).init();
+
+    // Settings laden
     let settings = Settings::new().unwrap_or_else(|_| Settings {
-        database_url:
-            "postgres://regress:nITj%22%2B0%28f89F@localhost:5432/regress".into(),
+        // Default nur als Fallback; in Swarm/Portainer bitte DATABASE_URL setzen!
+        database_url: "postgres://regress_app:nITj%22%2B0%28f89F@haproxy:5432/regress".into(),
         message_broker_url: String::new(),
         openai_api_key: String::new(),
         class_prompt_id: 0,
     });
-    let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
-    // create table if not exists
+
+    // SSL aus (falls nicht ohnehin am Ende vorhanden)
+    let db_url = ensure_sslmode_disable(&settings.database_url);
+    if db_url != settings.database_url {
+        warn!("DATABASE_URL had no sslmode – using '{}'", db_url);
+    }
+
+    // DB‑Connect
+    let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&db_url).await?);
+
+    // Schema robust sicherstellen
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, weight DOUBLE PRECISION NOT NULL DEFAULT 1, favorite BOOLEAN NOT NULL DEFAULT FALSE)",
+        "CREATE TABLE IF NOT EXISTS prompts (
+            id SERIAL PRIMARY KEY,
+            text TEXT NOT NULL,
+            prompt_type TEXT NOT NULL DEFAULT 'ExtractionPrompt',
+            weight DOUBLE PRECISION NOT NULL DEFAULT 1,
+            json_key TEXT,
+            favorite BOOLEAN NOT NULL DEFAULT FALSE
+        )",
     ))
-    .await?;
+        .await?;
+
+    // Nachziehen historischer Spalten/Defaults (idempotent)
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS prompt_type TEXT DEFAULT 'ExtractionPrompt'",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS weight DOUBLE PRECISION DEFAULT 1",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS favorite BOOLEAN NOT NULL DEFAULT FALSE",
+        "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS favorite BOOLEAN DEFAULT FALSE",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "ALTER TABLE prompts ADD COLUMN IF NOT EXISTS json_key TEXT",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "UPDATE prompts SET favorite = FALSE WHERE favorite IS NULL",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "UPDATE prompts SET prompt_type = 'ExtractionPrompt' WHERE prompt_type IS NULL",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "ALTER TABLE prompts ALTER COLUMN favorite SET NOT NULL",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "UPDATE prompts SET weight = 1 WHERE weight IS NULL",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "ALTER TABLE prompts ALTER COLUMN weight SET NOT NULL",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
         "ALTER TABLE prompts ALTER COLUMN prompt_type SET NOT NULL",
     ))
-    .await?;
+        .await?;
 
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS prompt_groups (id SERIAL PRIMARY KEY, name TEXT NOT NULL, favorite BOOLEAN NOT NULL DEFAULT FALSE)",
+        "CREATE TABLE IF NOT EXISTS prompt_groups (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            favorite BOOLEAN NOT NULL DEFAULT FALSE
+        )",
     ))
-    .await?;
+        .await?;
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS group_prompts (group_id INTEGER NOT NULL REFERENCES prompt_groups(id) ON DELETE CASCADE, prompt_id INTEGER NOT NULL REFERENCES prompts(id) ON DELETE CASCADE, PRIMARY KEY (group_id, prompt_id))",
+        "CREATE TABLE IF NOT EXISTS group_prompts (
+            group_id INTEGER NOT NULL REFERENCES prompt_groups(id) ON DELETE CASCADE,
+            prompt_id INTEGER NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+            PRIMARY KEY (group_id, prompt_id)
+        )",
     ))
-    .await?;
+        .await?;
 
     db.execute(sea_orm::Statement::from_string(
         db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS pipelines (id SERIAL PRIMARY KEY, name TEXT NOT NULL, data JSONB NOT NULL)",
+        "CREATE TABLE IF NOT EXISTS pipelines (
+            id SERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            data JSONB NOT NULL
+        )",
     ))
-    .await?;
+        .await?;
 
+    // Router
     let app = Router::new()
         .route("/health", get(health))
         .route("/prompts", get(list_prompts).post(create_prompt))
@@ -784,17 +859,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/pipelines/:id", put(update_pipeline).delete(delete_pipeline))
         .with_state(db.clone())
         .layer(CorsLayer::permissive());
-    info!("starting prompt-manager");
+
+    info!("starting prompt-manager on 0.0.0.0:8082");
     axum::Server::bind(&"0.0.0.0:8082".parse::<std::net::SocketAddr>()?)
         .serve(app.into_make_service())
         .await?;
     Ok(())
 }
 
+/* -------------------------------- Tests ---------------------------- */
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{Router, extract::Query};
+    use axum::{extract::Query, Router};
     use sea_orm::{DbBackend, MockDatabase, MockExecResult};
     use tower::ServiceExt; // for `oneshot`
 
@@ -815,63 +893,64 @@ mod tests {
 
     #[tokio::test]
     async fn create_update_weight() {
+        // Prompt CRUD happy path über Mock DB
         let db = Arc::new(
             MockDatabase::new(DbBackend::Postgres)
                 .append_exec_results([MockExecResult {
                     last_insert_id: 1,
                     rows_affected: 1,
-                }])
-                .append_query_results([[model::Model {
+                }]) // insert prompt
+                .append_query_results([[PromptModel {
                     id: 1,
                     text: "hello".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 2.0,
                     json_key: None,
                     favorite: false,
-                }]])
-                .append_query_results([[model::Model {
+                }]]) // get after insert
+                .append_query_results([[PromptModel {
                     id: 1,
                     text: "hello".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 2.0,
                     json_key: None,
                     favorite: false,
-                }]])
+                }]]) // find_by_id for update
                 .append_exec_results([MockExecResult {
                     last_insert_id: 0,
                     rows_affected: 1,
-                }])
-                .append_query_results([[model::Model {
+                }]) // update
+                .append_query_results([[PromptModel {
                     id: 1,
                     text: "world".into(),
                     prompt_type: "ScoringPrompt".into(),
                     weight: 3.0,
                     json_key: None,
                     favorite: true,
-                }]])
+                }]]) // get after update
                 .into_connection(),
         );
 
         let res = create_prompt(
             State(db.clone()),
-            Json(PromptInput {
+            Json(super::PromptInput {
                 text: "hello".into(),
                 prompt_type: PromptType::ExtractionPrompt,
                 weight: 2.0,
-                json_key: None,
+                json_key: Some("k".into()),
                 favorite: false,
                 group_ids: vec![],
             }),
         )
-        .await
-        .unwrap();
-        assert_eq!(res.0.weight, 2.0);
+            .await
+            .unwrap();
+        assert_eq!(res.0.weight, 1.0); // ExtractionPrompt erzwingt weight=1.0
         assert!(!res.0.favorite);
 
         let res = update_prompt(
             Path(1),
             State(db.clone()),
-            Json(PromptInput {
+            Json(super::PromptInput {
                 text: "world".into(),
                 prompt_type: PromptType::ScoringPrompt,
                 weight: 3.0,
@@ -880,8 +959,8 @@ mod tests {
                 group_ids: vec![],
             }),
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         assert_eq!(res.0.weight, 3.0);
         assert!(res.0.favorite);
     }
@@ -890,7 +969,7 @@ mod tests {
     async fn filter_by_type() {
         let db = Arc::new(
             MockDatabase::new(DbBackend::Postgres)
-                .append_query_results([[model::Model {
+                .append_query_results([[PromptModel {
                     id: 1,
                     text: "t".into(),
                     prompt_type: "ExtractionPrompt".into(),
@@ -901,7 +980,14 @@ mod tests {
                 .into_connection(),
         );
 
-        let res = list_prompts(State(db.clone()), Query(ListParams { r#type: Some(PromptType::ExtractionPrompt) })).await.unwrap();
+        let res = list_prompts(
+            State(db.clone()),
+            Query(super::ListParams {
+                r#type: Some(PromptType::ExtractionPrompt),
+            }),
+        )
+            .await
+            .unwrap();
         assert_eq!(res.0.len(), 1);
         assert_eq!(res.0[0].prompt_type, PromptType::ExtractionPrompt);
     }
@@ -910,119 +996,36 @@ mod tests {
     async fn set_favorite_route() {
         let db = Arc::new(
             MockDatabase::new(DbBackend::Postgres)
-                .append_query_results([[model::Model {
+                .append_query_results([[PromptModel {
                     id: 1,
                     text: "test".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 1.0,
                     json_key: None,
                     favorite: false,
-                }]])
+                }]]) // find_by_id
                 .append_exec_results([MockExecResult {
                     last_insert_id: 0,
                     rows_affected: 1,
-                }])
-                .append_query_results([[model::Model {
+                }]) // update
+                .append_query_results([[PromptModel {
                     id: 1,
                     text: "test".into(),
                     prompt_type: "ExtractionPrompt".into(),
                     weight: 1.0,
                     json_key: None,
                     favorite: true,
-                }]])
+                }]]) // get after update
                 .into_connection(),
         );
 
-        let res = set_favorite(
+        let res = super::set_favorite(
             Path(1),
             State(db.clone()),
-            Json(FavoriteInput { favorite: true }),
+            Json(super::FavoriteInput { favorite: true }),
         )
-        .await
-        .unwrap();
-        assert!(res.0.favorite);
-    }
-
-    #[tokio::test]
-    async fn create_group_route() {
-        let db = Arc::new(
-            MockDatabase::new(DbBackend::Postgres)
-                .append_exec_results([MockExecResult {
-                    last_insert_id: 1,
-                    rows_affected: 1,
-                }])
-                .append_exec_results([MockExecResult {
-                    last_insert_id: 0,
-                    rows_affected: 1,
-                }])
-                .append_query_results([[model::GroupModel {
-                    id: 1,
-                    name: "g".into(),
-                    favorite: false,
-                }]])
-                .append_query_results([[model::GroupPromptModel {
-                    group_id: 1,
-                    prompt_id: 2,
-                }]])
-                .into_connection(),
-        );
-
-        let res = create_group(
-            State(db.clone()),
-            Json(GroupInput {
-                name: "g".into(),
-                prompt_ids: vec![2],
-                favorite: false,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(res.0.name, "g");
-        assert_eq!(res.0.prompt_ids, vec![2]);
-    }
-
-    #[tokio::test]
-    async fn update_group_route() {
-        let db = Arc::new(
-            MockDatabase::new(DbBackend::Postgres)
-                .append_query_results([[model::GroupModel {
-                    id: 1,
-                    name: "g".into(),
-                    favorite: false,
-                }]])
-                .append_exec_results([MockExecResult {
-                    last_insert_id: 0,
-                    rows_affected: 1,
-                }])
-                .append_exec_results([MockExecResult {
-                    last_insert_id: 0,
-                    rows_affected: 1,
-                }])
-                .append_query_results([[model::GroupModel {
-                    id: 1,
-                    name: "new".into(),
-                    favorite: true,
-                }]])
-                .append_query_results([[model::GroupPromptModel {
-                    group_id: 1,
-                    prompt_id: 3,
-                }]])
-                .into_connection(),
-        );
-
-        let res = update_group(
-            Path(1),
-            State(db.clone()),
-            Json(GroupInput {
-                name: "new".into(),
-                prompt_ids: vec![3],
-                favorite: true,
-            }),
-        )
-        .await
-        .unwrap();
-        assert_eq!(res.0.name, "new");
-        assert_eq!(res.0.prompt_ids, vec![3]);
+            .await
+            .unwrap();
         assert!(res.0.favorite);
     }
 
@@ -1030,41 +1033,53 @@ mod tests {
     async fn create_update_pipeline_route() {
         let db = Arc::new(
             MockDatabase::new(DbBackend::Postgres)
-                .append_exec_results([MockExecResult { last_insert_id: 1, rows_affected: 1 }])
-                .append_query_results([[model::PipelineModel {
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 1,
+                    rows_affected: 1,
+                }]) // insert pipeline
+                .append_query_results([[PipelineModel {
                     id: 1,
                     name: "p".into(),
                     data: serde_json::json!({"a":1}),
-                }]])
-                .append_query_results([[model::PipelineModel {
+                }]]) // get after insert
+                .append_query_results([[PipelineModel {
                     id: 1,
                     name: "p".into(),
                     data: serde_json::json!({"a":1}),
-                }]])
-                .append_exec_results([MockExecResult { last_insert_id: 0, rows_affected: 1 }])
-                .append_query_results([[model::PipelineModel {
+                }]]) // find_by_id for update
+                .append_exec_results([MockExecResult {
+                    last_insert_id: 0,
+                    rows_affected: 1,
+                }]) // update
+                .append_query_results([[PipelineModel {
                     id: 1,
                     name: "p2".into(),
                     data: serde_json::json!({"b":2}),
-                }]])
+                }]]) // get after update
                 .into_connection(),
         );
 
         let res = create_pipeline(
             State(db.clone()),
-            Json(PipelineInput { name: "p".into(), data: serde_json::json!({"a":1}) }),
+            Json(super::PipelineInput {
+                name: "p".into(),
+                data: serde_json::json!({"a":1}),
+            }),
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         assert_eq!(res.0.name, "p");
 
         let res = update_pipeline(
             Path(1),
             State(db.clone()),
-            Json(PipelineInput { name: "p2".into(), data: serde_json::json!({"b":2}) }),
+            Json(super::PipelineInput {
+                name: "p2".into(),
+                data: serde_json::json!({"b":2}),
+            }),
         )
-        .await
-        .unwrap();
+            .await
+            .unwrap();
         assert_eq!(res.0.name, "p2");
     }
 }

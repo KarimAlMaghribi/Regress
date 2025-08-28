@@ -9,10 +9,10 @@ use shared::dto::{
     PdfUploaded, PipelineConfig, PipelineRunResult, PipelineStep, PromptType, RunStep,
 };
 use shared::kafka;
-use sqlx::{PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::collections::HashMap;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -29,25 +29,53 @@ struct PipelineInfo {
     steps: Vec<PipelineStep>,
 }
 
+/* ------------------------------ Helpers ------------------------------ */
+
+/// Erzwingt `sslmode=disable`, falls in der URL nicht vorhanden.
+/// (Damit passt es zu deiner DB mit `ssl=off` hinter HAProxy.)
+fn ensure_sslmode_disable(url: &str) -> String {
+    if url.contains("sslmode=") {
+        url.to_string()
+    } else if url.contains('?') {
+        format!("{url}&sslmode=disable")
+    } else {
+        format!("{url}?sslmode=disable")
+    }
+}
+
+/* ------------------------------ DB Init ------------------------------ */
+
 async fn init_db(pool: &PgPool) {
-    sqlx::query(
-        "CREATE TABLE IF NOT EXISTS pipelines (\
-            id UUID PRIMARY KEY,\
-            name TEXT NOT NULL,\
-            config_json JSONB NOT NULL,\
-            created_at TIMESTAMPTZ DEFAULT now(),\
-            updated_at TIMESTAMPTZ DEFAULT now()\
+    if let Err(e) = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS pipelines (
+            id UUID PRIMARY KEY,
+            name TEXT NOT NULL,
+            config_json JSONB NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            updated_at TIMESTAMPTZ DEFAULT now()
         )",
     )
-    .execute(pool)
-    .await
-    .unwrap();
-    sqlx::query("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS config_json JSONB")
         .execute(pool)
         .await
-        .unwrap();
+    {
+        error!(%e, "failed to create table pipelines");
+    }
+
+    // Falls alte Deployments ohne Spalte liefen – harmless, IF NOT EXISTS.
+    if let Err(e) = sqlx::query("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS config_json JSONB")
+        .execute(pool)
+        .await
+    {
+        error!(%e, "failed to ensure column config_json");
+    }
+
+    // Pipeline-Run-Tabellen werden hier nicht angelegt; wir gehen davon aus,
+    // dass sie vom Runner angelegt/migriert sind.
+
     info!("ensured pipelines table exists");
 }
+
+/* ------------------------------ Config R/W ------------------------------ */
 
 async fn fetch_config(pool: &PgPool, id: Uuid) -> Result<PipelineConfig, HttpResponse> {
     let row = sqlx::query("SELECT config_json FROM pipelines WHERE id=$1")
@@ -55,12 +83,16 @@ async fn fetch_config(pool: &PgPool, id: Uuid) -> Result<PipelineConfig, HttpRes
         .fetch_one(pool)
         .await
         .map_err(|_| HttpResponse::NotFound().finish())?;
-    let value: serde_json::Value = row.try_get("config_json").unwrap();
+
+    let value: serde_json::Value = row
+        .try_get("config_json")
+        .map_err(|_| HttpResponse::InternalServerError().finish())?;
+
     serde_json::from_value(value).map_err(|_| HttpResponse::InternalServerError().finish())
 }
 
 async fn store_config(pool: &PgPool, id: Uuid, cfg: &PipelineConfig) -> Result<(), HttpResponse> {
-    let json = serde_json::to_value(cfg).unwrap();
+    let json = serde_json::to_value(cfg).map_err(|_| HttpResponse::InternalServerError().finish())?;
     let res =
         sqlx::query("UPDATE pipelines SET name=$2, config_json=$3, updated_at=now() WHERE id=$1")
             .bind(id)
@@ -76,6 +108,8 @@ async fn store_config(pool: &PgPool, id: Uuid, cfg: &PipelineConfig) -> Result<(
     }
 }
 
+/* ------------------------------ Handlers ------------------------------ */
+
 async fn list_pipelines(data: web::Data<AppState>) -> impl Responder {
     match sqlx::query("SELECT id, name, config_json FROM pipelines")
         .fetch_all(&data.pool)
@@ -85,10 +119,8 @@ async fn list_pipelines(data: web::Data<AppState>) -> impl Responder {
             let res: Vec<PipelineInfo> = rows
                 .into_iter()
                 .filter_map(|r| {
-                    let cfg: PipelineConfig = serde_json::from_value(
-                        r.try_get::<serde_json::Value, _>("config_json").ok()?,
-                    )
-                    .ok()?;
+                    let cfg: PipelineConfig =
+                        serde_json::from_value(r.try_get::<serde_json::Value, _>("config_json").ok()?).ok()?;
                     let id: Uuid = r.try_get("id").ok()?;
                     Some(PipelineInfo {
                         id,
@@ -119,13 +151,14 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
     let meta = match sqlx::query_as::<_, RunMeta>(
         "SELECT pipeline_id, pdf_id, overall_score, extracted FROM pipeline_runs WHERE id=$1",
     )
-    .bind(id)
-    .fetch_one(&data.pool)
-    .await
+        .bind(id)
+        .fetch_one(&data.pool)
+        .await
     {
         Ok(m) => m,
         Err(_) => return HttpResponse::NotFound().finish(),
     };
+
     let step_rows = sqlx::query(
         r#"SELECT seq_no,
                   step_id,
@@ -136,10 +169,11 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
                   result
            FROM pipeline_run_steps WHERE run_id=$1 ORDER BY seq_no"#,
     )
-    .bind(id)
-    .fetch_all(&data.pool)
-    .await
-    .unwrap_or_default();
+        .bind(id)
+        .fetch_all(&data.pool)
+        .await
+        .unwrap_or_default();
+
     let steps: Vec<RunStep> = step_rows
         .into_iter()
         .map(|row| {
@@ -148,6 +182,7 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(PromptType::ExtractionPrompt);
+
             RunStep {
                 seq_no: row.try_get::<i32, _>("seq_no").unwrap_or_default() as u32,
                 step_id: row.try_get::<String, _>("step_id").unwrap_or_default(),
@@ -159,12 +194,14 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
             }
         })
         .collect();
+
     let extracted_map = meta
         .extracted
         .and_then(|v| v.as_object().cloned())
         .unwrap_or_default()
         .into_iter()
         .collect();
+
     let res = PipelineRunResult {
         pdf_id: meta.pdf_id,
         pipeline_id: meta.pipeline_id,
@@ -183,9 +220,14 @@ async fn create_pipeline(
     Json(cfg): web::Json<PipelineConfig>,
 ) -> impl Responder {
     let id = Uuid::new_v4();
-    let json = serde_json::to_value(&cfg).unwrap();
     let name = cfg.name.clone();
     let steps = cfg.steps.clone();
+
+    let json = match serde_json::to_value(&cfg) {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
     match sqlx::query("INSERT INTO pipelines (id, name, config_json) VALUES ($1,$2,$3)")
         .bind(id)
         .bind(&name)
@@ -207,15 +249,13 @@ async fn get_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl 
         .fetch_one(&data.pool)
         .await
     {
-        Ok(row) => {
-            if let Ok(cfg) =
-                serde_json::from_value::<PipelineConfig>(row.try_get("config_json").unwrap())
-            {
-                HttpResponse::Ok().json(cfg)
-            } else {
-                HttpResponse::InternalServerError().finish()
-            }
-        }
+        Ok(row) => match row.try_get("config_json") {
+            Ok(val) => match serde_json::from_value::<PipelineConfig>(val) {
+                Ok(cfg) => HttpResponse::Ok().json(cfg),
+                Err(_) => HttpResponse::InternalServerError().finish(),
+            },
+            Err(_) => HttpResponse::InternalServerError().finish(),
+        },
         Err(_) => HttpResponse::NotFound().finish(),
     }
 }
@@ -238,13 +278,22 @@ async fn update_pipeline(
         Ok(r) => r,
         Err(_) => return HttpResponse::NotFound().finish(),
     };
-    let mut cfg: PipelineConfig = match serde_json::from_value(row.try_get("config_json").unwrap())
-    {
-        Ok(c) => c,
+
+    let mut cfg: PipelineConfig = match row.try_get("config_json") {
+        Ok(val) => match serde_json::from_value(val) {
+            Ok(c) => c,
+            Err(_) => return HttpResponse::InternalServerError().finish(),
+        },
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
+
     cfg.name = input.name.clone();
-    let json = serde_json::to_value(&cfg).unwrap();
+
+    let json = match serde_json::to_value(&cfg) {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
     match sqlx::query("UPDATE pipelines SET name=$2, config_json=$3, updated_at=now() WHERE id=$1")
         .bind(*path)
         .bind(&cfg.name)
@@ -418,16 +467,21 @@ async fn run_pipeline(
         Ok(v) => v,
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
+
     let _ = sqlx::query("UPDATE uploads SET pipeline_id=$1 WHERE id=$2")
         .bind(*path)
         .bind(input.file_id)
         .execute(&data.pool)
         .await;
-    let payload = serde_json::to_string(&PdfUploaded {
+
+    let payload = match serde_json::to_string(&PdfUploaded {
         pdf_id,
         pipeline_id: *path,
-    })
-    .unwrap();
+    }) {
+        Ok(p) => p,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
     let _ = data
         .producer
         .send(
@@ -436,21 +490,22 @@ async fn run_pipeline(
         )
         .await;
 
+    // Auf "pipeline-result" für diesen PDF/Pipeline kurz warten (best-effort).
     let group = format!("pipeline-api-{}", Uuid::new_v4());
     if let Ok(consumer) = ClientConfig::new()
         .set("group.id", &group)
         .set("bootstrap.servers", &data.broker)
         .create::<StreamConsumer>()
     {
-        if consumer.subscribe(&["pipeline-result"]).is_ok() {
-            if let Ok(Ok(msg)) =
-                tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await
-            {
-                if let Some(Ok(payload)) = msg.payload_view::<str>() {
-                    if let Ok(res) = serde_json::from_str::<PipelineRunResult>(payload) {
-                        if res.pdf_id == pdf_id && res.pipeline_id == *path {
-                            return HttpResponse::Ok().json(res);
-                        }
+        if let Err(e) = consumer.subscribe(&["pipeline-result"]) {
+            warn!(%e, "failed to subscribe to pipeline-result");
+        } else if let Ok(Ok(msg)) =
+            tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await
+        {
+            if let Some(Ok(p)) = msg.payload_view::<str>() {
+                if let Ok(res) = serde_json::from_str::<PipelineRunResult>(p) {
+                    if res.pdf_id == pdf_id && res.pipeline_id == *path {
+                        return HttpResponse::Ok().json(res);
                     }
                 }
             }
@@ -460,28 +515,67 @@ async fn run_pipeline(
     HttpResponse::Accepted().finish()
 }
 
+/* ------------------------------ main ------------------------------ */
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
-    let settings = shared::config::Settings::new().unwrap();
+
+    let settings = match shared::config::Settings::new() {
+        Ok(s) => s,
+        Err(e) => {
+            error!(%e, "failed to load settings");
+            std::process::exit(1);
+        }
+    };
+
+    // Kafka Topics absichern (best-effort).
     let topics = ["pipeline-run", "pipeline-result"];
     if let Err(e) = kafka::ensure_topics(&settings.message_broker_url, &topics).await {
-        error!(%e, "failed to ensure topics");
+        warn!(%e, "failed to ensure kafka topics (continuing)");
     }
-    let pool = PgPool::connect(&settings.database_url)
+
+    // DB-URL auf NoTLS zwingen, falls kein sslmode gesetzt wurde.
+    let db_url = ensure_sslmode_disable(&settings.database_url);
+    if db_url != settings.database_url {
+        warn!("DATABASE_URL had no sslmode – using '{}'", db_url);
+    }
+
+    // Robuster Pool-Aufbau ohne Panic.
+    let pool = match PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect(&db_url)
         .await
-        .expect("db connect");
+    {
+        Ok(p) => p,
+        Err(e) => {
+            error!(%e, "failed to connect to Postgres");
+            std::process::exit(1);
+        }
+    };
+
     init_db(&pool).await;
-    let producer: FutureProducer = ClientConfig::new()
+
+    let producer: FutureProducer = match ClientConfig::new()
         .set("bootstrap.servers", &settings.message_broker_url)
         .create()
-        .expect("producer");
+    {
+        Ok(p) => p,
+        Err(e) => {
+            error!(%e, "failed to create kafka producer");
+            std::process::exit(1);
+        }
+    };
+
     let state = AppState {
         pool,
         producer,
         broker: settings.message_broker_url.clone(),
     };
-    info!("starting pipeline-api");
+
+    info!("starting pipeline-api on 0.0.0.0:8084");
+
     HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(state.clone()))
@@ -504,7 +598,7 @@ async fn main() -> std::io::Result<()> {
             )
             .route("/runs/{id}", web::get().to(get_run))
     })
-    .bind(("0.0.0.0", 8084))?
-    .run()
-    .await
+        .bind(("0.0.0.0", 8084))?
+        .run()
+        .await
 }
