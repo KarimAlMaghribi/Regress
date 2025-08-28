@@ -42,6 +42,7 @@ async fn list_texts(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<
     Ok(HttpResponse::Ok().json(items))
 }
 
+/// Re-emit stored texts as `text-extracted` events (kein erneutes OCR).
 async fn start_analysis(
     db: web::Data<tokio_postgres::Client>,
     prod: web::Data<FutureProducer>,
@@ -139,10 +140,10 @@ async fn main() -> std::io::Result<()> {
                                             continue;
                                         }
 
-                                        // Erst Layout-OCR, bei Fehler einfacher Fallback
+                                        // 1st try: Layout-OCR (async), fallback: einfacher Extraktor (synchron, ohne await!)
                                         let text_result = match extract_text_layout(&path).await {
                                             Ok(t) => Ok(t),
-                                            Err(_) => extract_text(&path).await,
+                                            Err(_) => extract_text(&path), // <-- FIX: kein `.await`
                                         };
 
                                         match text_result {
@@ -165,6 +166,7 @@ async fn main() -> std::io::Result<()> {
                                                 }
                                                 info!(id = event.pdf_id, "stored ocr text");
                                                 let _ = db.execute("UPDATE uploads SET status='ready' WHERE pdf_id=$1", &[&event.pdf_id]).await;
+
                                                 let evt = TextExtracted { pdf_id: event.pdf_id, pipeline_id: event.pipeline_id, text };
                                                 let payload = serde_json::to_string(&evt).unwrap();
                                                 let _ = prod.send(
