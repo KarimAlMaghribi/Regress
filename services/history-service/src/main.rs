@@ -46,16 +46,18 @@ async fn ensure_schema(db: &tokio_postgres::Client) {
             status TEXT NOT NULL DEFAULT 'running', \
             score DOUBLE PRECISION, \
             label TEXT \
-        )", &[]).await
-    {
-        error!(error=%e, "failed to create table analysis_history");
+        )",
+        &[]
+    ).await {
+        error!(%e, "failed to create table analysis_history");
     }
 
     if let Err(e) = db.execute(
         "ALTER TABLE analysis_history \
-         ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'running'", &[]).await
-    {
-        error!(error=%e, "failed to ensure column status");
+         ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'running'",
+        &[]
+    ).await {
+        error!(%e, "failed to ensure column status");
     }
 
     info!("database schema ensured");
@@ -75,7 +77,7 @@ async fn mark_pending(
     ).await {
         Ok(row) => row.get(0),
         Err(e) => {
-            error!(error=%e, pdf_id=pdf_id, "failed to insert running row");
+            error!(%e, pdf_id, "failed to insert running row");
             0
         }
     }
@@ -95,7 +97,7 @@ async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) -> i32
                  WHERE id=$1",
                 &[&id, &entry.result, &entry.pdf_url, &entry.timestamp, &entry.score, &entry.result_label],
             ).await {
-                error!(error=%e, id=id, "failed to update running row to completed");
+                error!(%e, id, "failed to update running row to completed");
             }
             id
         }
@@ -108,13 +110,13 @@ async fn insert_result(db: &tokio_postgres::Client, entry: &HistoryEntry) -> i32
             ).await {
                 Ok(row) => row.get(0),
                 Err(e) => {
-                    error!(error=%e, pdf_id=entry.pdf_id, "failed to insert completed row");
+                    error!(%e, pdf_id = entry.pdf_id, "failed to insert completed row");
                     0
                 }
             }
         }
         Err(e) => {
-            error!(error=%e, pdf_id=entry.pdf_id, "failed to lookup running row");
+            error!(%e, pdf_id = entry.pdf_id, "failed to lookup running row");
             0
         }
     }
@@ -141,14 +143,14 @@ async fn latest(db: &tokio_postgres::Client, limit: i64) -> Vec<HistoryEntry> {
     let stmt = match db.prepare(sql).await {
         Ok(s) => s,
         Err(e) => {
-            error!(error=%e, "prepare failed (latest)");
+            error!(%e, "prepare failed (latest)");
             return vec![];
         }
     };
     let rows = match db.query(&stmt, &[&limit]).await {
         Ok(r) => r,
         Err(e) => {
-            error!(error=%e, "query failed (latest)");
+            error!(%e, "query failed (latest)");
             return vec![];
         }
     };
@@ -161,46 +163,18 @@ async fn all_entries(db: &tokio_postgres::Client) -> Vec<HistoryEntry> {
     let stmt = match db.prepare(sql).await {
         Ok(s) => s,
         Err(e) => {
-            error!(error=%e, "prepare failed (all_entries)");
+            error!(%e, "prepare failed (all_entries)");
             return vec![];
         }
     };
     let rows = match db.query(&stmt, &[]).await {
         Ok(r) => r,
         Err(e) => {
-            error!(error=%e, "query failed (all_entries)");
+            error!(%e, "query failed (all_entries)");
             return vec![];
         }
     };
     rows.into_iter().map(row_to_entry).collect()
-}
-
-async fn list_by_status(db: &tokio_postgres::Client, status: Option<String>) -> Vec<HistoryEntry> {
-    if let Some(s) = &status {
-        let stmt = match db.prepare(
-            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
-             FROM analysis_history WHERE status = $1 ORDER BY timestamp DESC"
-        ).await {
-            Ok(s) => s,
-            Err(e) => { error!(error=%e, "prepare failed (list_by_status)"); return vec![]; }
-        };
-        match db.query(&stmt, &[s]).await {
-            Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
-            Err(e) => { error!(error=%e, "query failed (list_by_status)"); vec![] }
-        }
-    } else {
-        let stmt = match db.prepare(
-            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
-             FROM analysis_history ORDER BY timestamp DESC"
-        ).await {
-            Ok(s) => s,
-            Err(e) => { error!(error=%e, "prepare failed (list_by_status ALL)"); return vec![]; }
-        };
-        match db.query(&stmt, &[]).await {
-            Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
-            Err(e) => { error!(error=%e, "query failed (list_by_status ALL)"); vec![] }
-        }
-    }
 }
 
 async fn latest_by_status(db: &tokio_postgres::Client, status: Option<String>) -> Vec<HistoryEntry> {
@@ -212,11 +186,11 @@ async fn latest_by_status(db: &tokio_postgres::Client, status: Option<String>) -
              ) AS t ORDER BY timestamp DESC"
         ).await {
             Ok(s) => s,
-            Err(e) => { error!(error=%e, "prepare failed (latest_by_status)"); return vec![]; }
+            Err(e) => { error!(%e, "prepare failed (latest_by_status)"); return vec![]; }
         };
         match db.query(&stmt, &[s]).await {
             Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
-            Err(e) => { error!(error=%e, "query failed (latest_by_status)"); vec![] }
+            Err(e) => { error!(%e, "query failed (latest_by_status)"); vec![] }
         }
     } else {
         let stmt = match db.prepare(
@@ -226,11 +200,11 @@ async fn latest_by_status(db: &tokio_postgres::Client, status: Option<String>) -
              ) AS t ORDER BY timestamp DESC"
         ).await {
             Ok(s) => s,
-            Err(e) => { error!(error=%e, "prepare failed (latest_by_status ALL)"); return vec![]; }
+            Err(e) => { error!(%e, "prepare failed (latest_by_status ALL)"); return vec![]; }
         };
         match db.query(&stmt, &[]).await {
             Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
-            Err(e) => { error!(error=%e, "query failed (latest_by_status ALL)"); vec![] }
+            Err(e) => { error!(%e, "query failed (latest_by_status ALL)"); vec![] }
         }
     }
 }
@@ -265,7 +239,7 @@ async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Respon
         }
         Ok(None) => HttpResponse::NotFound().finish(),
         Err(e) => {
-            error!(error=%e, "failed to fetch result");
+            error!(%e, "failed to fetch result");
             HttpResponse::InternalServerError().finish()
         }
     }
@@ -331,26 +305,31 @@ async fn start_kafka(
     message_broker_url: String,
     pdf_base: String,
 ) {
+    if message_broker_url.trim().is_empty() {
+        warn!("MESSAGE_BROKER_URL empty; Kafka consumer disabled");
+        return;
+    }
+
     let consumer: StreamConsumer = match ClientConfig::new()
         .set("group.id", "history-service")
         .set("bootstrap.servers", &message_broker_url)
         .create() {
         Ok(c) => c,
         Err(e) => {
-            error!(error=%e, "failed to create kafka consumer");
+            error!(%e, "failed to create kafka consumer");
             return;
         }
     };
 
     if let Err(e) = consumer.subscribe(&["pdf-merged", "pipeline-result"]) {
-        error!(error=%e, "failed to subscribe to topics");
+        error!(%e, "failed to subscribe to topics");
         return;
     }
 
     info!("kafka consumer running");
     loop {
         match consumer.recv().await {
-            Err(e) => error!(error=%e, "kafka error"),
+            Err(e) => error!(%e, "kafka error"),
             Ok(m) => {
                 if let Some(Ok(payload)) = m.payload_view::<str>() {
                     match m.topic() {
@@ -374,7 +353,7 @@ async fn start_kafka(
                                     };
                                     let _ = tx.send(entry);
                                 }
-                                Err(e) => error!(error=%e, "failed to parse pdf-merged payload"),
+                                Err(e) => error!(%e, "failed to parse pdf-merged payload"),
                             }
                         }
                         "pipeline-result" => {
@@ -398,11 +377,11 @@ async fn start_kafka(
                                          VALUES ($1,$2,$3,$4,$5,'completed',$6,$7)",
                                         &[&data.pdf_id, &data.pipeline_id, &value, &entry.pdf_url, &entry.timestamp, &entry.score, &entry.result_label],
                                     ).await {
-                                        error!(error=%e, "failed to insert pipeline result");
+                                        error!(%e, "failed to insert pipeline result");
                                     }
                                     let _ = tx.send(entry);
                                 }
-                                Err(e) => error!(error=%e, "failed to parse pipeline-result payload"),
+                                Err(e) => error!(%e, "failed to parse pipeline-result payload"),
                             }
                         }
                         _ => {}
@@ -413,20 +392,30 @@ async fn start_kafka(
     }
 }
 
-mod db_connect {
-    use tokio_postgres::{Client, NoTls};
-    use tokio::time::{sleep, Duration};
-    use tracing::{info, warn, error};
+/* ------------------------------ DB-Connect Helper (DNS Preflight + TLS/NoTLS auto) ------------------------------ */
 
-    // Minimal-Parser: prüft im Query-Teil auf sslmode=disable (case-insensitive)
+mod db_connect {
+    use tokio::time::{sleep, Duration};
+    use tokio_postgres::{Client, NoTls};
+    use tracing::{error, info, warn};
+
+    fn parse_host_port(url: &str) -> (Option<String>, Option<u16>) {
+        if let Some(after_scheme) = url.splitn(2, "://").nth(1) {
+            let after_at = after_scheme.splitn(2, '@').last().unwrap_or(after_scheme);
+            let host_port = after_at.splitn(2, '/').next().unwrap_or(after_at);
+            let mut it = host_port.splitn(2, ':');
+            let host = it.next().map(|s| s.to_string());
+            let port = it.next().and_then(|p| p.parse::<u16>().ok());
+            (host, port)
+        } else {
+            (None, None)
+        }
+    }
+
+    // Prüft Query-String der URL auf sslmode=disable; ohne sslmode -> TLS versuchen
     fn want_tls(database_url: &str) -> bool {
-        // nur den Query-Teil betrachten
-        let q = match database_url.splitn(2, '?').nth(1) {
-            Some(q) => q,
-            None => return true, // kein sslmode angegeben -> Standard: TLS versuchen
-        };
-        // nach "sslmode=" suchen
-        for pair in q.split('&') {
+        let Some(qs) = database_url.splitn(2, '?').nth(1) else { return true };
+        for pair in qs.split('&') {
             let mut it = pair.splitn(2, '=');
             let k = it.next().unwrap_or("");
             let v = it.next().unwrap_or("");
@@ -438,6 +427,22 @@ mod db_connect {
     }
 
     pub async fn connect_with_retry(database_url: &str) -> Client {
+        // DNS-Preflight (nur Logging)
+        let (host_opt, port_opt) = parse_host_port(database_url);
+        if let Some(h) = host_opt.as_deref() {
+            let p = port_opt.unwrap_or(5432);
+            match tokio::net::lookup_host((h, p)).await {
+                Ok(mut addrs) => {
+                    if let Some(a) = addrs.next() {
+                        info!("DB DNS ok: {} -> {}", h, a);
+                    } else {
+                        warn!("DB DNS: {} hat keine Adressen geliefert", h);
+                    }
+                }
+                Err(e) => warn!("DB DNS-Auflösung fehlgeschlagen ({}:{}): {}", h, p, e),
+            }
+        }
+
         let mut backoff = 1u64;
         loop {
             if want_tls(database_url) {
@@ -449,32 +454,32 @@ mod db_connect {
                             Ok((client, connection)) => {
                                 tokio::spawn(async move {
                                     if let Err(e) = connection.await {
-                                        error!(error=%e, "postgres connection task ended with error (TLS)");
+                                        error!(%e, "postgres connection task ended with error (TLS)");
                                     }
                                 });
                                 info!("Connected to PostgreSQL (TLS).");
                                 return client;
                             }
-                            Err(e) => error!(error=%e, "DB connect (TLS) failed"),
+                            Err(e) => error!(%e, "DB connect (TLS) failed; will try NoTLS"),
                         }
                     }
-                    Err(e) => warn!(error=%e, "building TLS connector failed; falling back to NoTls"),
+                    Err(e) => warn!(%e, "building TLS connector failed; falling back to NoTLS"),
                 }
             }
 
-            // Dann NoTLS (aktuelles Setup: sslmode=disable)
+            // NoTLS (aktuelles Setup: sslmode=disable)
             match tokio_postgres::connect(database_url, NoTls).await {
                 Ok((client, connection)) => {
                     tokio::spawn(async move {
                         if let Err(e) = connection.await {
-                            error!(error=%e, "postgres connection task ended with error (NoTLS)");
+                            error!(%e, "postgres connection task ended with error (NoTLS)");
                         }
                     });
                     info!("Connected to PostgreSQL (NoTLS).");
                     return client;
                 }
                 Err(e) => {
-                    error!(error=%e, "DB connect (NoTLS) failed");
+                    error!(%e, "DB connect (NoTLS) failed");
                     let wait = backoff.min(10);
                     sleep(Duration::from_secs(wait)).await;
                     backoff = (backoff + 1).min(10);
@@ -492,14 +497,13 @@ async fn main() -> std::io::Result<()> {
     let settings = match Settings::new() {
         Ok(s) => s,
         Err(e) => {
-            error!(error=%e, "failed to load settings");
+            error!(%e, "failed to load settings");
             std::process::exit(1);
         }
     };
 
-    // *** Kein unwrap + TLS/NoTLS-Autowahl via Helper ***
+    // Robuster DB‑Connect (kein unwrap, DNS‑Preflight + TLS/NoTLS)
     let db_client = db_connect::connect_with_retry(&settings.database_url).await;
-
     ensure_schema(&db_client).await;
 
     let (tx, _) = tokio::sync::broadcast::channel(100);
@@ -508,6 +512,7 @@ async fn main() -> std::io::Result<()> {
     let pdf_base = std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
     let state = web::Data::new(AppState { db: db.clone(), tx: tx.clone(), pdf_base: pdf_base.clone() });
 
+    // Kafka in separater Task, Fehler nur loggen
     let broker_url = settings.message_broker_url.clone();
     {
         let db_for_kafka = db.clone();
