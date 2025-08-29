@@ -10,7 +10,7 @@ use shared::config::Settings;
 use shared::dto::{PdfUploaded, UploadResponse};
 use std::collections::BTreeMap;
 use std::time::Duration;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use lopdf::{Bookmark, Document, Object, ObjectId};
@@ -23,8 +23,6 @@ struct UploadEntry {
     pdf_id: Option<i32>,
     status: String,
 }
-
-/* ------------------------------ PDF Merge ------------------------------ */
 
 fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
     let mut max_id = 1;
@@ -149,8 +147,6 @@ fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
-/* ------------------------------ HTTP Handlers ------------------------------ */
-
 async fn upload(
     mut payload: Multipart,
     db: web::Data<tokio_postgres::Client>,
@@ -205,15 +201,16 @@ async fn upload(
             "pipeline_id" => {
                 while let Some(chunk) = field.next().await {
                     let bytes: Bytes = chunk?;
-                    pipeline_id =
-                        Some(std::str::from_utf8(&bytes).unwrap_or_default().to_string());
+                    pipeline_id = Some(
+                        std::str::from_utf8(&bytes)
+                            .unwrap_or_default()
+                            .to_string(),
+                    );
                 }
             }
-            // "prompts" o.ä. ignorieren – wird hier nicht genutzt
+            // Unbekannte Felder drainen
             _ => {
-                while let Some(_chunk) = field.next().await {
-                    // Drain
-                }
+                while let Some(_chunk) = field.next().await {}
             }
         }
     }
@@ -226,10 +223,18 @@ async fn upload(
     let data = if files.len() == 1 {
         files[0].0.clone()
     } else {
-        let docs = files
-            .iter()
-            .map(|(d, _)| Document::load_mem(d).unwrap())
-            .collect();
+        let mut docs = Vec::with_capacity(files.len());
+        for (bytes, name) in &files {
+            match Document::load_mem(bytes) {
+                Ok(doc) => docs.push(doc),
+                Err(e) => {
+                    return Err(actix_web::error::ErrorBadRequest(format!(
+                        "invalid PDF '{}': {e}",
+                        name
+                    )));
+                }
+            }
+        }
         merge_documents(docs).map_err(actix_web::error::ErrorInternalServerError)?
     };
 
@@ -369,15 +374,24 @@ async fn health() -> impl Responder {
     "OK"
 }
 
-/* ------------------------------ DB-Connect Helper (TLS/NoTLS auto) ------------------------------ */
-
 mod db_connect {
-    use tokio_postgres::{Client, NoTls};
     use tokio::time::{sleep, Duration};
+    use tokio_postgres::{Client, NoTls};
     use tracing::{error, info, warn};
 
-    /// Prüft Query-String der URL auf `sslmode=disable` (case-insensitive).
-    /// Ist kein sslmode angegeben, versuchen wir zuerst TLS.
+    fn parse_host_port(url: &str) -> (Option<String>, Option<u16>) {
+        if let Some(after_scheme) = url.splitn(2, "://").nth(1) {
+            let after_at = after_scheme.splitn(2, '@').last().unwrap_or(after_scheme);
+            let host_port = after_at.splitn(2, '/').next().unwrap_or(after_at);
+            let mut it = host_port.splitn(2, ':');
+            let host = it.next().map(|s| s.to_string());
+            let port = it.next().and_then(|p| p.parse::<u16>().ok());
+            (host, port)
+        } else {
+            (None, None)
+        }
+    }
+
     fn want_tls(database_url: &str) -> bool {
         let Some(qs) = database_url.splitn(2, '?').nth(1) else { return true };
         for pair in qs.split('&') {
@@ -392,6 +406,21 @@ mod db_connect {
     }
 
     pub async fn connect_with_retry(database_url: &str) -> Client {
+        let (host_opt, port_opt) = parse_host_port(database_url);
+        if let Some(h) = host_opt.as_deref() {
+            let p = port_opt.unwrap_or(5432);
+            match tokio::net::lookup_host((h, p)).await {
+                Ok(mut addrs) => {
+                    if let Some(a) = addrs.next() {
+                        info!("DB DNS ok: {} -> {}", h, a);
+                    } else {
+                        warn!("DB DNS: {} hat keine Adressen geliefert", h);
+                    }
+                }
+                Err(e) => warn!("DB DNS-Auflösung fehlgeschlagen ({}:{}): {}", h, p, e),
+            }
+        }
+
         let mut backoff = 1u64;
 
         loop {
@@ -439,8 +468,6 @@ mod db_connect {
     }
 }
 
-/* ------------------------------------- main ------------------------------------- */
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
@@ -454,11 +481,9 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    // Verbindet robust (TLS falls nötig, sonst NoTLS); kein unwrap -> kein Panic
     let db_client = db_connect::connect_with_retry(&settings.database_url).await;
     info!("connected to database");
 
-    // Minimal-Schema sicherstellen (ohne Panic)
     if let Err(e) = db_client
         .execute(
             "CREATE TABLE IF NOT EXISTS pdfs (id SERIAL PRIMARY KEY, data BYTEA NOT NULL)",
@@ -531,8 +556,6 @@ async fn main() -> std::io::Result<()> {
         .await
 }
 
-/* ------------------------------------ Tests ------------------------------------ */
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,7 +564,7 @@ mod tests {
 
     #[actix_web::test]
     async fn health_ok() {
-        let app = test::init_service(App::new().route("/health", web::get().to(health))).await;
+        let app = test::init_service(App::new().route("/health", web::get().to(super::health))).await;
         let req = test::TestRequest::get().uri("/health").to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
@@ -584,8 +607,8 @@ mod tests {
             let app = test::init_service(
                 App::new()
                     .app_data(web::Data::new(client))
-                    .route("/pdf/{id}", web::get().to(get_pdf))
-                    .route("/pdf/{id}", web::delete().to(delete_pdf)),
+                    .route("/pdf/{id}", web::get().to(super::get_pdf))
+                    .route("/pdf/{id}", web::delete().to(super::delete_pdf)),
             )
                 .await;
 
@@ -626,7 +649,7 @@ mod tests {
             let app = test::init_service(
                 App::new()
                     .app_data(web::Data::new(client))
-                    .route("/uploads/{id}/extract", web::get().to(get_extract)),
+                    .route("/uploads/{id}/extract", web::get().to(super::get_extract)),
             )
                 .await;
 

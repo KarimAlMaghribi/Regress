@@ -3,7 +3,7 @@ use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[derive(Serialize)]
 struct Metric {
@@ -31,9 +31,8 @@ async fn metrics(
 
     info!("loading metrics");
 
-    let mut sql = String::from(
-        "SELECT run_time, metrics->>'accuracy', metrics->>'cost' FROM classifications",
-    );
+    let mut sql =
+        String::from("SELECT run_time, metrics->>'accuracy', metrics->>'cost' FROM classifications");
 
     let mut values: Vec<Box<dyn ToSql + Sync>> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
@@ -82,14 +81,31 @@ async fn metrics(
 }
 
 mod db_connect {
-    use tokio_postgres::{Client, NoTls};
     use tokio::time::{sleep, Duration};
+    use tokio_postgres::{Client, NoTls};
     use tracing::{error, info, warn};
+
+    // sehr einfache Parser für Host/Port aus der URL (ohne zusätzliche Crates)
+    fn parse_host_port(url: &str) -> (Option<String>, Option<u16>) {
+        // Format: scheme://[user[:pwd]@]host[:port]/...
+        if let Some(after_scheme) = url.splitn(2, "://").nth(1) {
+            let after_at = after_scheme.splitn(2, '@').last().unwrap_or(after_scheme);
+            let host_port = after_at.splitn(2, '/').next().unwrap_or(after_at);
+            let mut it = host_port.splitn(2, ':');
+            let host = it.next().map(|s| s.to_string());
+            let port = it
+                .next()
+                .and_then(|p| p.parse::<u16>().ok());
+            (host, port)
+        } else {
+            (None, None)
+        }
+    }
 
     fn want_tls(database_url: &str) -> bool {
         let q = match database_url.splitn(2, '?').nth(1) {
             Some(q) => q,
-            None => return true, // kein sslmode angegeben -> TLS versuchen
+            None => true, // kein sslmode angegeben -> TLS versuchen (failsafes Verhalten)
         };
         for pair in q.split('&') {
             let mut it = pair.splitn(2, '=');
@@ -103,8 +119,23 @@ mod db_connect {
     }
 
     pub async fn connect_with_retry(database_url: &str) -> Client {
-        let mut backoff = 1u64;
+        // Preflight-DNS (nur Logging, kein Abort)
+        let (host_opt, port_opt) = parse_host_port(database_url);
+        if let Some(h) = host_opt.as_deref() {
+            let p = port_opt.unwrap_or(5432);
+            match tokio::net::lookup_host((h, p)).await {
+                Ok(mut addrs) => {
+                    if let Some(a) = addrs.next() {
+                        info!("DB DNS ok: {} -> {}", h, a);
+                    } else {
+                        warn!("DB DNS: {} hat keine Adressen geliefert", h);
+                    }
+                }
+                Err(e) => warn!("DB DNS-Auflösung fehlgeschlagen ({}:{}): {}", h, p, e),
+            }
+        }
 
+        let mut backoff = 1u64;
         loop {
             if want_tls(database_url) {
                 // Erst TLS versuchen
@@ -122,7 +153,7 @@ mod db_connect {
                                 return client;
                             }
                             Err(e) => {
-                                error!(%e, "DB connect (TLS) failed; will try NoTLS");
+                                error!(%e, "DB connect (TLS) failed; fallback to NoTLS");
                             }
                         }
                     }
@@ -165,7 +196,7 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    // **Kein unwrap + TLS/NoTLS-Autowahl via Helper**
+    // Robust verbinden (kein unwrap, TLS/NoTLS-Autowahl)
     let db_client = db_connect::connect_with_retry(&settings.database_url).await;
 
     // Schema sicherstellen; Fehler loggen statt panic
@@ -205,7 +236,6 @@ async fn main() -> std::io::Result<()> {
         )
         .await
     {
-        // Falls die Spalte nicht existiert oder bereits NULL-able ist, ist das ok.
         error!(%e, "failed to relax NOT NULL on regress (can be benign)");
     }
 
