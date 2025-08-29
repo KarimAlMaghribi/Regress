@@ -3,7 +3,7 @@ use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 #[derive(Serialize)]
 struct Metric {
@@ -85,7 +85,7 @@ mod db_connect {
     use tokio_postgres::{Client, NoTls};
     use tracing::{error, info, warn};
 
-    // sehr einfache Parser für Host/Port aus der URL (ohne zusätzliche Crates)
+    // sehr einfacher Parser für Host/Port aus der URL (ohne zusätzliche Crates)
     fn parse_host_port(url: &str) -> (Option<String>, Option<u16>) {
         // Format: scheme://[user[:pwd]@]host[:port]/...
         if let Some(after_scheme) = url.splitn(2, "://").nth(1) {
@@ -93,29 +93,30 @@ mod db_connect {
             let host_port = after_at.splitn(2, '/').next().unwrap_or(after_at);
             let mut it = host_port.splitn(2, ':');
             let host = it.next().map(|s| s.to_string());
-            let port = it
-                .next()
-                .and_then(|p| p.parse::<u16>().ok());
+            let port = it.next().and_then(|p| p.parse::<u16>().ok());
             (host, port)
         } else {
             (None, None)
         }
     }
 
+    // true => TLS versuchen; false => NoTLS
     fn want_tls(database_url: &str) -> bool {
-        let q = match database_url.splitn(2, '?').nth(1) {
-            Some(q) => q,
-            None => true, // kein sslmode angegeben -> TLS versuchen (failsafes Verhalten)
-        };
-        for pair in q.split('&') {
-            let mut it = pair.splitn(2, '=');
-            let k = it.next().unwrap_or("");
-            let v = it.next().unwrap_or("");
-            if k.eq_ignore_ascii_case("sslmode") {
-                return !v.eq_ignore_ascii_case("disable");
+        if let Some(q) = database_url.splitn(2, '?').nth(1) {
+            for pair in q.split('&') {
+                let mut it = pair.splitn(2, '=');
+                let k = it.next().unwrap_or("");
+                let v = it.next().unwrap_or("");
+                if k.eq_ignore_ascii_case("sslmode") {
+                    return !v.eq_ignore_ascii_case("disable");
+                }
             }
+            // kein sslmode-Param im Query -> TLS versuchen
+            true
+        } else {
+            // kein Query-Teil -> TLS versuchen (failsafe)
+            true
         }
-        true
     }
 
     pub async fn connect_with_retry(database_url: &str) -> Client {
