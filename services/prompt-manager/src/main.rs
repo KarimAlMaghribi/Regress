@@ -6,7 +6,7 @@ use axum::{
 };
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait,
-    QueryFilter, Set,
+    QueryFilter, Set, ConnectionTrait, // <- wichtig: ConnectionTrait importiert
 };
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
