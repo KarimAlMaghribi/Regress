@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1.7-labs
 FROM --platform=$BUILDPLATFORM rust:1.80-slim AS builder
 
-# Für tesseract-sys: Dev-Header benötigt
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential pkg-config clang lld libtesseract-dev libleptonica-dev libssl-dev ca-certificates sccache \
@@ -20,8 +19,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends tesseract-ocr libssl3 ca-certificates \
+ && apt-get install -y --no-install-recommends \
+      tesseract-ocr tesseract-ocr-eng tesseract-ocr-deu \
+      poppler-utils libssl3 ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/5/tessdata
 WORKDIR /usr/local/bin
 COPY --from=builder /app/target/release/text-extraction .
 CMD ["./text-extraction"]
+
