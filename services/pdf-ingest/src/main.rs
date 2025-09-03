@@ -14,6 +14,10 @@ use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
 
+use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use std::str::FromStr;
+use tokio_postgres::NoTls;
+
 use lopdf::{Bookmark, Document, Object, ObjectId};
 use serde::Serialize;
 use zip::ZipArchive;
@@ -23,6 +27,17 @@ struct UploadEntry {
     id: i32,
     pdf_id: Option<i32>,
     status: String,
+}
+
+fn ensure_sslmode_disable(url: &str) -> String {
+    let lower = url.to_lowercase();
+    if lower.contains("sslmode=") {
+        url.to_string()
+    } else if url.contains('?') {
+        format!("{url}&sslmode=disable")
+    } else {
+        format!("{url}?sslmode=disable")
+    }
 }
 
 fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
@@ -156,13 +171,17 @@ fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
 
 async fn upload(
     mut payload: Multipart,
-    db: web::Data<tokio_postgres::Client>,
+    db: web::Data<Pool>,
     producer: web::Data<FutureProducer>,
 ) -> Result<HttpResponse, Error> {
     info!("handling upload request");
+    let client = db
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     // Upload-Row anlegen
-    let upload_id: i32 = db
+    let upload_id: i32 = client
         .query_one(
             "INSERT INTO uploads (status) VALUES ('merging') RETURNING id",
             &[],
@@ -246,7 +265,7 @@ async fn upload(
     info!(step = "pdf.prepare", bytes = data.len(), "ready to insert");
     let sha256 = format!("{:x}", Sha256::digest(&data));
     let size_bytes = data.len() as i32;
-    let id: i32 = db
+    let id: i32 = client
         .query_one(
             "INSERT INTO merged_pdfs (data, sha256, size_bytes) VALUES ($1,$2,$3) RETURNING id",
             &[&data, &sha256, &size_bytes],
@@ -263,7 +282,7 @@ async fn upload(
         .and_then(|s| Uuid::parse_str(s).ok())
         .unwrap_or_else(Uuid::nil);
 
-    let _ = db
+    let _ = client
         .execute(
             "UPDATE uploads SET pdf_id=$1, pipeline_id=$2, status='ocr' WHERE id=$3",
             &[&id, &pid, &upload_id],
@@ -274,7 +293,7 @@ async fn upload(
 
     // Quellen speichern (Dateinamen)
     let names: Vec<String> = files.iter().map(|f| f.1.clone()).collect();
-    let _ = db
+    let _ = client
         .execute(
             "INSERT INTO pdf_sources (pdf_id, names, count) VALUES ($1,$2,$3)
              ON CONFLICT (pdf_id) DO UPDATE SET names=EXCLUDED.names, count=EXCLUDED.count",
@@ -318,8 +337,12 @@ async fn upload(
     Ok(HttpResponse::Ok().json(UploadResponse { id: id.to_string() }))
 }
 
-async fn list_uploads(db: web::Data<tokio_postgres::Client>) -> Result<HttpResponse, Error> {
-    let rows = db
+async fn list_uploads(db: web::Data<Pool>) -> Result<HttpResponse, Error> {
+    let client = db
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let rows = client
         .query(
             "SELECT id, pdf_id, status FROM uploads ORDER BY id DESC",
             &[],
@@ -341,13 +364,17 @@ async fn list_uploads(db: web::Data<tokio_postgres::Client>) -> Result<HttpRespo
 
 async fn get_pdf(
     id: web::Path<i32>,
-    db: web::Data<tokio_postgres::Client>,
+    db: web::Data<Pool>,
 ) -> Result<HttpResponse, Error> {
-    let stmt = db
+    let client = db
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let stmt = client
         .prepare("SELECT data FROM merged_pdfs WHERE id=$1")
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
-    match db.query_opt(&stmt, &[&id.into_inner()]).await {
+    match client.query_opt(&stmt, &[&id.into_inner()]).await {
         Ok(Some(row)) => {
             let data: Vec<u8> = row.get(0);
             Ok(HttpResponse::Ok()
@@ -361,9 +388,13 @@ async fn get_pdf(
 
 async fn get_extract(
     id: web::Path<i32>,
-    db: web::Data<tokio_postgres::Client>,
+    db: web::Data<Pool>,
 ) -> Result<HttpResponse, Error> {
-    let stmt = db
+    let client = db
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let stmt = client
         .prepare(
             // Alle Seiten in stabiler Reihenfolge zusammenführen
             "SELECT COALESCE(
@@ -373,7 +404,7 @@ async fn get_extract(
         )
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
-    match db.query_opt(&stmt, &[&id.into_inner()]).await {
+    match client.query_opt(&stmt, &[&id.into_inner()]).await {
         Ok(Some(row)) => {
             let text: String = row.get(0);
             Ok(HttpResponse::Ok()
@@ -387,19 +418,23 @@ async fn get_extract(
 
 async fn delete_pdf(
     id: web::Path<i32>,
-    db: web::Data<tokio_postgres::Client>,
+    db: web::Data<Pool>,
 ) -> Result<HttpResponse, Error> {
     let id = id.into_inner();
+    let client = db
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
 
     // Abhängigkeiten aufräumen (dürfen fehlen)
-    let _ = db
+    let _ = client
         .execute("DELETE FROM pdf_sources WHERE pdf_id=$1", &[&id])
         .await;
-    let _ = db
+    let _ = client
         .execute("DELETE FROM pdf_texts  WHERE merged_pdf_id=$1", &[&id])
         .await;
 
-    let rows = db
+    let rows = client
         .execute("DELETE FROM merged_pdfs WHERE id=$1", &[&id])
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
@@ -415,101 +450,6 @@ async fn health() -> impl Responder {
     "OK"
 }
 
-mod db_connect {
-    use tokio::time::{sleep, Duration};
-    use tokio_postgres::{Client, NoTls};
-    use tracing::{error, info, warn};
-
-    fn parse_host_port(url: &str) -> (Option<String>, Option<u16>) {
-        if let Some(after_scheme) = url.splitn(2, "://").nth(1) {
-            let after_at = after_scheme.splitn(2, '@').last().unwrap_or(after_scheme);
-            let host_port = after_at.splitn(2, '/').next().unwrap_or(after_at);
-            let mut it = host_port.splitn(2, ':');
-            let host = it.next().map(|s| s.to_string());
-            let port = it.next().and_then(|p| p.parse::<u16>().ok());
-            (host, port)
-        } else {
-            (None, None)
-        }
-    }
-
-    fn want_tls(database_url: &str) -> bool {
-        let Some(qs) = database_url.splitn(2, '?').nth(1) else {
-            return true;
-        };
-        for pair in qs.split('&') {
-            let mut it = pair.splitn(2, '=');
-            let k = it.next().unwrap_or("");
-            let v = it.next().unwrap_or("");
-            if k.eq_ignore_ascii_case("sslmode") {
-                return !v.eq_ignore_ascii_case("disable");
-            }
-        }
-        true
-    }
-
-    pub async fn connect_with_retry(database_url: &str) -> Client {
-        let (host_opt, port_opt) = parse_host_port(database_url);
-        if let Some(h) = host_opt.as_deref() {
-            let p = port_opt.unwrap_or(5432);
-            match tokio::net::lookup_host((h, p)).await {
-                Ok(mut addrs) => {
-                    if let Some(a) = addrs.next() {
-                        info!("DB DNS ok: {} -> {}", h, a);
-                    } else {
-                        warn!("DB DNS: {} hat keine Adressen geliefert", h);
-                    }
-                }
-                Err(e) => warn!("DB DNS-Auflösung fehlgeschlagen ({}:{}): {}", h, p, e),
-            }
-        }
-
-        let mut backoff = 1u64;
-
-        loop {
-            if want_tls(database_url) {
-                // Zuerst TLS probieren
-                match native_tls::TlsConnector::builder().build() {
-                    Ok(tls) => {
-                        let tls = postgres_native_tls::MakeTlsConnector::new(tls);
-                        match tokio_postgres::connect(database_url, tls).await {
-                            Ok((client, connection)) => {
-                                tokio::spawn(async move {
-                                    if let Err(e) = connection.await {
-                                        error!(%e, "postgres connection task ended with error (TLS)");
-                                    }
-                                });
-                                info!("Connected to PostgreSQL (TLS).");
-                                return client;
-                            }
-                            Err(e) => error!(%e, "DB connect (TLS) failed; will try NoTLS"),
-                        }
-                    }
-                    Err(e) => warn!(%e, "building TLS connector failed; falling back to NoTLS"),
-                }
-            }
-
-            // NoTLS (aktuelles Setup: sslmode=disable)
-            match tokio_postgres::connect(database_url, NoTls).await {
-                Ok((client, connection)) => {
-                    tokio::spawn(async move {
-                        if let Err(e) = connection.await {
-                            error!(%e, "postgres connection task ended with error (NoTLS)");
-                        }
-                    });
-                    info!("Connected to PostgreSQL (NoTLS).");
-                    return client;
-                }
-                Err(e) => {
-                    error!(%e, "DB connect (NoTLS) failed");
-                    let wait = backoff.min(10);
-                    sleep(Duration::from_secs(wait)).await;
-                    backoff = (backoff + 1).min(10);
-                }
-            }
-        }
-    }
-}
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
@@ -524,51 +464,54 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    let db_client = db_connect::connect_with_retry(&settings.database_url).await;
-    info!("connected to database");
+    let db_url = ensure_sslmode_disable(&settings.database_url);
+    let cfg = tokio_postgres::Config::from_str(&db_url).map_err(|e| {
+        error!(%e, "db parse failed");
+        std::io::Error::new(std::io::ErrorKind::Other, "db-parse")
+    })?;
+    let mgr = Manager::from_config(
+        cfg,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool: Pool = Pool::builder(mgr).max_size(16).build().map_err(|e| {
+        error!(%e, "db pool build failed");
+        std::io::Error::new(std::io::ErrorKind::Other, "db-pool")
+    })?;
+    info!("created postgres pool");
 
-    if let Err(e) = db_client
-        .execute(
-            "CREATE TABLE IF NOT EXISTS merged_pdfs (
-                id SERIAL PRIMARY KEY,
-                sha256 TEXT NOT NULL,
-                size_bytes INTEGER NOT NULL,
-                data BYTEA NOT NULL
-            )",
-            &[],
-        )
-        .await
+    // Schema sicherstellen (mit Pool-Client)
     {
-        error!(%e, "failed to create merged_pdfs table");
-    }
-
-    if let Err(e) = db_client
-        .execute(
-            "CREATE TABLE IF NOT EXISTS pdf_sources (
-                pdf_id INTEGER PRIMARY KEY REFERENCES merged_pdfs(id),
-                names TEXT,
-                count INTEGER
-            )",
-            &[],
-        )
-        .await
-    {
-        error!(%e, "failed to create pdf_sources table");
-    }
-
-    if let Err(e) = db_client
-        .execute(
-            "CREATE TABLE IF NOT EXISTS uploads ( \
-                id SERIAL PRIMARY KEY, \
-                pdf_id INTEGER, \
-                pipeline_id UUID, \
-                status TEXT NOT NULL \
-            )",
-            &[],
-        )
-        .await
-    {
-        error!(%e, "failed to create uploads table");
+        let client = pool.get().await.map_err(|e| {
+            error!(%e, "db get from pool failed");
+            std::io::Error::new(std::io::ErrorKind::Other, "db-pool-get")
+        })?;
+        let _ = client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS merged_pdfs (
+               id SERIAL PRIMARY KEY, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, data BYTEA NOT NULL
+             )",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS pdf_sources (
+               pdf_id INTEGER PRIMARY KEY REFERENCES merged_pdfs(id), names TEXT, count INTEGER
+             )",
+                &[],
+            )
+            .await;
+        let _ = client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS uploads (
+               id SERIAL PRIMARY KEY, pdf_id INTEGER, pipeline_id UUID, status TEXT NOT NULL
+             )",
+                &[],
+            )
+            .await;
     }
 
     // Kafka Producer
@@ -584,13 +527,13 @@ async fn main() -> std::io::Result<()> {
     };
     info!("kafka producer created");
 
-    let db = web::Data::new(db_client);
+    let db_pool = web::Data::new(pool);
     let producer_data = web::Data::new(producer);
 
     HttpServer::new(move || {
         App::new()
             .wrap(Cors::permissive())
-            .app_data(db.clone())
+            .app_data(db_pool.clone())
             .app_data(producer_data.clone())
             .route("/upload", web::post().to(upload))
             .route("/uploads", web::get().to(list_uploads))
@@ -608,6 +551,8 @@ async fn main() -> std::io::Result<()> {
 mod tests {
     use actix_web::http::StatusCode;
     use actix_web::{test, web, App};
+    use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+    use std::str::FromStr;
     use tokio_postgres::NoTls;
 
     #[actix_web::test]
@@ -625,57 +570,63 @@ mod tests {
             "postgres://postgres:postgres@localhost/postgres?sslmode=disable".into()
         });
 
-        if let Ok((client, connection)) = tokio_postgres::connect(&url, NoTls).await {
-            tokio::spawn(async move {
-                let _ = connection.await;
-            });
-
-            let _ = client
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS merged_pdfs (id SERIAL PRIMARY KEY, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, data BYTEA NOT NULL)",
-                    &[],
-                )
-                .await;
-            let _ = client
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS pdf_sources (pdf_id INTEGER PRIMARY KEY REFERENCES merged_pdfs(id), names TEXT, count INTEGER)",
-                    &[],
-                )
-                .await;
-
-            let _ = client
-                .execute(
-                    "INSERT INTO merged_pdfs (data, sha256, size_bytes) VALUES ($1,$2,$3)",
-                    &[&b"test".as_slice(), &"hash", &4],
-                )
-                .await;
-            let _ = client
-                .execute(
-                    "INSERT INTO pdf_sources (pdf_id, names, count) VALUES ($1,$2,$3)
+        if let Ok(cfg) = tokio_postgres::Config::from_str(&url) {
+            let mgr = Manager::from_config(
+                cfg,
+                NoTls,
+                ManagerConfig {
+                    recycling_method: RecyclingMethod::Fast,
+                },
+            );
+            if let Ok(pool) = Pool::builder(mgr).max_size(16).build() {
+                if let Ok(client) = pool.get().await {
+                    let _ = client
+                        .execute(
+                            "CREATE TABLE IF NOT EXISTS merged_pdfs (id SERIAL PRIMARY KEY, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, data BYTEA NOT NULL)",
+                            &[],
+                        )
+                        .await;
+                    let _ = client
+                        .execute(
+                            "CREATE TABLE IF NOT EXISTS pdf_sources (pdf_id INTEGER PRIMARY KEY REFERENCES merged_pdfs(id), names TEXT, count INTEGER)",
+                            &[],
+                        )
+                        .await;
+                    let _ = client
+                        .execute(
+                            "INSERT INTO merged_pdfs (data, sha256, size_bytes) VALUES ($1,$2,$3)",
+                            &[&b"test".as_slice(), &"hash", &4],
+                        )
+                        .await;
+                    let _ = client
+                        .execute(
+                            "INSERT INTO pdf_sources (pdf_id, names, count) VALUES ($1,$2,$3)
                      ON CONFLICT (pdf_id) DO NOTHING",
-                    &[&1, &"[]", &0],
-                )
-                .await;
+                            &[&1, &"[]", &0],
+                        )
+                        .await;
 
-            let app = test::init_service(
-                App::new()
-                    .app_data(web::Data::new(client))
-                    .route("/pdf/{id}", web::get().to(super::get_pdf))
-                    .route("/pdf/{id}", web::delete().to(super::delete_pdf)),
-            )
-            .await;
+                    let app = test::init_service(
+                        App::new()
+                            .app_data(web::Data::new(pool.clone()))
+                            .route("/pdf/{id}", web::get().to(super::get_pdf))
+                            .route("/pdf/{id}", web::delete().to(super::delete_pdf)),
+                    )
+                    .await;
 
-            let req = test::TestRequest::get().uri("/pdf/1").to_request();
-            let resp = test::call_and_read_body(&app, req).await;
-            assert_eq!(&resp[..], b"test");
+                    let req = test::TestRequest::get().uri("/pdf/1").to_request();
+                    let resp = test::call_and_read_body(&app, req).await;
+                    assert_eq!(&resp[..], b"test");
 
-            let req = test::TestRequest::delete().uri("/pdf/1").to_request();
-            let resp = test::call_service(&app, req).await;
-            assert!(resp.status().is_success());
+                    let req = test::TestRequest::delete().uri("/pdf/1").to_request();
+                    let resp = test::call_service(&app, req).await;
+                    assert!(resp.status().is_success());
 
-            let req = test::TestRequest::get().uri("/pdf/1").to_request();
-            let resp = test::call_service(&app, req).await;
-            assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+                    let req = test::TestRequest::get().uri("/pdf/1").to_request();
+                    let resp = test::call_service(&app, req).await;
+                    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+                }
+            }
         }
     }
 
@@ -685,41 +636,48 @@ mod tests {
             "postgres://postgres:postgres@localhost/postgres?sslmode=disable".into()
         });
 
-        if let Ok((client, connection)) = tokio_postgres::connect(&url, NoTls).await {
-            tokio::spawn(async move {
-                let _ = connection.await;
-            });
-
-            let _ = client
-                .execute(
-                    "CREATE TABLE IF NOT EXISTS pdf_texts ( 
-                        merged_pdf_id INTEGER NOT NULL, 
-                        page_no INTEGER NOT NULL, 
-                        text TEXT NOT NULL, 
-                        UNIQUE (merged_pdf_id, page_no) 
+        if let Ok(cfg) = tokio_postgres::Config::from_str(&url) {
+            let mgr = Manager::from_config(
+                cfg,
+                NoTls,
+                ManagerConfig {
+                    recycling_method: RecyclingMethod::Fast,
+                },
+            );
+            if let Ok(pool) = Pool::builder(mgr).max_size(16).build() {
+                if let Ok(client) = pool.get().await {
+                    let _ = client
+                        .execute(
+                            "CREATE TABLE IF NOT EXISTS pdf_texts (
+                        merged_pdf_id INTEGER NOT NULL,
+                        page_no INTEGER NOT NULL,
+                        text TEXT NOT NULL,
+                        UNIQUE (merged_pdf_id, page_no)
                     )",
-                    &[],
-                )
-                .await;
-            let _ = client
-                .execute(
-                    "INSERT INTO pdf_texts (merged_pdf_id, page_no, text) VALUES ($1,$2,$3)",
-                    &[&1, &0, &"hello"],
-                )
-                .await;
+                            &[],
+                        )
+                        .await;
+                    let _ = client
+                        .execute(
+                            "INSERT INTO pdf_texts (merged_pdf_id, page_no, text) VALUES ($1,$2,$3)",
+                            &[&1, &0, &"hello"],
+                        )
+                        .await;
 
-            let app = test::init_service(
-                App::new()
-                    .app_data(web::Data::new(client))
-                    .route("/uploads/{id}/extract", web::get().to(super::get_extract)),
-            )
-            .await;
+                    let app = test::init_service(
+                        App::new()
+                            .app_data(web::Data::new(pool.clone()))
+                            .route("/uploads/{id}/extract", web::get().to(super::get_extract)),
+                    )
+                    .await;
 
-            let req = test::TestRequest::get()
-                .uri("/uploads/1/extract")
-                .to_request();
-            let resp = test::call_and_read_body(&app, req).await;
-            assert_eq!(&resp[..], b"hello");
+                    let req = test::TestRequest::get()
+                        .uri("/uploads/1/extract")
+                        .to_request();
+                    let resp = test::call_and_read_body(&app, req).await;
+                    assert_eq!(&resp[..], b"hello");
+                }
+            }
         }
     }
 }
