@@ -1,9 +1,3 @@
-[package.metadata.vcpkg]
-git          = "https://github.com/microsoft/vcpkg"
-branch       = "master"
-dependencies = ["leptonica", "tesseract"]
-triplet      = "x64-windows-static-md"
-
 [package]
 name             = "text-extraction"
 version.workspace = true
@@ -14,8 +8,6 @@ name = "text_extraction"
 path = "src/lib.rs"
 
 [dependencies]
-tesseract        = "0.15.2"
-pdf-extract      = "0.9"
 actix-web        = "4"
 actix-cors       = "0.6"
 serde.workspace  = true

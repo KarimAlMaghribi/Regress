@@ -40,7 +40,3 @@ rhai        = "1"
 strum = "0.26"
 strum_macros = "0.26"
 
-[workspace.metadata.vcpkg]
-git          = "https://github.com/microsoft/vcpkg"
-dependencies = ["leptonica", "tesseract"]
-triplet      = "x64-windows-static-md"
