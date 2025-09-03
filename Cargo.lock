@@ -2686,6 +2686,7 @@ dependencies = [
  "actix-cors",
  "actix-multipart",
  "actix-web",
+ "deadpool-postgres",
  "futures-util",
  "lopdf",
  "native-tls",
