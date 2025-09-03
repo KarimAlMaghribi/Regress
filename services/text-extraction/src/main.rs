@@ -7,14 +7,16 @@ use rdkafka::{
 };
 use shared::{
     config::Settings,
-    db,
     dto::{PdfUploaded, TextExtracted},
     kafka,
 };
 use std::time::Duration;
 use text_extraction::extract_text;
-use tokio_postgres::NoTls;
 use tracing::{error, info, warn};
+
+use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use std::str::FromStr;
+use tokio_postgres::NoTls;
 
 fn ensure_sslmode_disable(url: &str) -> String {
     let lower = url.to_lowercase();
@@ -41,12 +43,16 @@ struct AnalysisReq {
     ids: Vec<i32>,
 }
 
-async fn list_texts(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<HttpResponse> {
-    let stmt = db
+async fn list_texts(db: web::Data<Pool>) -> actix_web::Result<HttpResponse> {
+    let client = db
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let stmt = client
         .prepare("SELECT DISTINCT merged_pdf_id FROM pdf_texts ORDER BY merged_pdf_id DESC")
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
-    let rows = db
+    let rows = client
         .query(&stmt, &[])
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
@@ -59,16 +65,20 @@ async fn list_texts(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<
 
 /// Re-emit stored texts as `text-extracted` events (kein erneutes OCR).
 async fn start_analysis(
-    db: web::Data<tokio_postgres::Client>,
+    db: web::Data<Pool>,
     prod: web::Data<FutureProducer>,
     web::Json(req): web::Json<AnalysisReq>,
 ) -> actix_web::Result<HttpResponse> {
     for id in req.ids {
-        let stmt = db
+        let client = db
+            .get()
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?;
+        let stmt = client
             .prepare("SELECT COALESCE(string_agg(text, E'\n' ORDER BY page_no), '') FROM pdf_texts WHERE merged_pdf_id = $1")
             .await
             .map_err(actix_web::error::ErrorInternalServerError)?;
-        if let Ok(row) = db.query_one(&stmt, &[&id]).await {
+        if let Ok(row) = client.query_one(&stmt, &[&id]).await {
             let text: String = row.get(0);
             let evt = TextExtracted {
                 pdf_id: id,
@@ -103,45 +113,58 @@ async fn main() -> std::io::Result<()> {
         warn!(%e, "failed to ensure kafka topics");
     }
 
+    // ---- Deadpool Pool (robust gegen "connection closed") ----
     let db_url = ensure_sslmode_disable(&settings.database_url);
-    let (db_client, connection) = tokio_postgres::connect(&db_url, NoTls).await.map_err(|e| {
-        error!(%e, "db connect failed");
-        std::io::Error::new(std::io::ErrorKind::Other, "db")
+    let pg_cfg = tokio_postgres::Config::from_str(&db_url).map_err(|e| {
+        error!(%e, "db parse failed");
+        std::io::Error::new(std::io::ErrorKind::Other, "db-parse")
     })?;
-    info!("connected to database (NoTLS)");
+    let mgr = Manager::from_config(
+        pg_cfg,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(mgr).max_size(16).build().map_err(|e| {
+        error!(%e, "db pool build failed");
+        std::io::Error::new(std::io::ErrorKind::Other, "db-pool")
+    })?;
+    info!("created postgres pool");
 
-    tokio::spawn(async move {
-        if let Err(e) = connection.await {
-            error!(%e, "db connection task error");
-        }
-    });
-
-    db_client
-        .execute(
-            "CREATE TABLE IF NOT EXISTS pdf_texts (
-                merged_pdf_id INTEGER NOT NULL,
-                page_no INTEGER NOT NULL,
-                text TEXT NOT NULL,
-                UNIQUE (merged_pdf_id, page_no)
-            )",
-            &[],
-        )
-        .await
-        .ok();
-    db_client
-        .execute(
-            "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, status TEXT NOT NULL)",
-            &[],
-        )
-        .await
-        .ok();
-    db_client
-        .execute(
-            "ALTER TABLE uploads ADD COLUMN IF NOT EXISTS pipeline_id UUID",
-            &[],
-        )
-        .await
-        .ok();
+    // Schema sicherstellen (mit Pool-Client)
+    {
+        let client = pool.get().await.map_err(|e| {
+            error!(%e, "db get from pool failed");
+            std::io::Error::new(std::io::ErrorKind::Other, "db-pool-get")
+        })?;
+        client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS pdf_texts (
+                    merged_pdf_id INTEGER NOT NULL,
+                    page_no INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    UNIQUE (merged_pdf_id, page_no)
+                )",
+                &[],
+            )
+            .await
+            .ok();
+        client
+            .execute(
+                "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, status TEXT NOT NULL)",
+                &[],
+            )
+            .await
+            .ok();
+        client
+            .execute(
+                "ALTER TABLE uploads ADD COLUMN IF NOT EXISTS pipeline_id UUID",
+                &[],
+            )
+            .await
+            .ok();
+    }
 
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "text-extraction")
@@ -166,12 +189,12 @@ async fn main() -> std::io::Result<()> {
             std::io::Error::new(std::io::ErrorKind::Other, "kafka")
         })?;
 
-    let db = web::Data::new(db_client);
-    let db_consumer = db.clone();
+    let db_pool = web::Data::new(pool.clone());
+    let db_consumer = pool.clone();
     let producer_consumer = producer.clone();
 
     tokio::spawn(async move {
-        let db = db_consumer;
+        let pool = db_consumer;
         let cons = consumer;
         let prod = producer_consumer;
         info!("starting kafka consume loop");
@@ -187,10 +210,28 @@ async fn main() -> std::io::Result<()> {
                                     id = event.pdf_id,
                                     "received pdf-merged event"
                                 );
-                                let data = match db::fetch_pdf(&db, event.pdf_id).await {
-                                    Ok(d) => d,
+                                // DB-Client aus Pool holen (öffnet bei Bedarf neu)
+                                let client = match pool.get().await {
+                                    Ok(c) => c,
                                     Err(e) => {
-                                        error!(%e, id = event.pdf_id, "no pdf data");
+                                        error!(%e, "db pool get failed");
+                                        continue;
+                                    }
+                                };
+                                let data: Vec<u8> = match client
+                                    .query_opt(
+                                        "SELECT data FROM merged_pdfs WHERE id=$1",
+                                        &[&event.pdf_id],
+                                    )
+                                    .await
+                                {
+                                    Ok(Some(row)) => row.get(0),
+                                    Ok(None) => {
+                                        error!(id = event.pdf_id, "no pdf row");
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        error!(%e, "query pdf row failed");
                                         continue;
                                     }
                                 };
@@ -216,7 +257,7 @@ async fn main() -> std::io::Result<()> {
                                     }
                                 };
                                 let text = text_raw.to_lowercase();
-                                let stmt_up = match db
+                                let stmt_up = match client
                                     .prepare(
                                         "INSERT INTO pdf_texts (merged_pdf_id, page_no, text) VALUES ($1,$2,$3) ON CONFLICT (merged_pdf_id, page_no) DO UPDATE SET text = EXCLUDED.text",
                                     )
@@ -229,7 +270,7 @@ async fn main() -> std::io::Result<()> {
                                     }
                                 };
                                 if let Err(e) =
-                                    db.execute(&stmt_up, &[&event.pdf_id, &0, &text]).await
+                                    client.execute(&stmt_up, &[&event.pdf_id, &0, &text]).await
                                 {
                                     error!(%e, id = event.pdf_id, "store text failed");
                                     continue;
@@ -241,7 +282,7 @@ async fn main() -> std::io::Result<()> {
                                     table = "pdf_texts",
                                     "text upserted"
                                 );
-                                let _ = db
+                                let _ = client
                                     .execute(
                                         "UPDATE uploads SET status='ready' WHERE pdf_id=$1",
                                         &[&event.pdf_id],
@@ -289,7 +330,7 @@ async fn main() -> std::io::Result<()> {
 
     info!("starting http server on port 8083");
     let producer_data = web::Data::new(producer.clone());
-    let db_data = db.clone();
+    let db_data = db_pool.clone();
     HttpServer::new(move || {
         App::new()
             .wrap(Cors::permissive())
