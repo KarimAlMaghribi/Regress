@@ -8,6 +8,10 @@ name = "text_extraction"
 path = "src/lib.rs"
 
 [dependencies]
+deadpool-postgres = "0.10"
+# tokio-postgres wird bereits im Workspace genutzt; falls nicht, einkommentieren:
+# tokio-postgres = "0.7"
+
 actix-web        = "4"
 actix-cors       = "0.6"
 serde.workspace  = true
