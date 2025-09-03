@@ -39,7 +39,6 @@ struct TextEntry {
 #[derive(serde::Deserialize)]
 struct AnalysisReq {
     ids: Vec<i32>,
-    prompt: String,
 }
 
 async fn list_texts(db: web::Data<tokio_postgres::Client>) -> actix_web::Result<HttpResponse> {

@@ -1,6 +1,6 @@
 use actix_cors::Cors;
 use actix_multipart::Multipart;
-use actix_web::http::{header, StatusCode};
+use actix_web::http::header;
 use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use futures_util::StreamExt as _;
@@ -11,7 +11,7 @@ use shared::config::Settings;
 use shared::dto::{PdfUploaded, UploadResponse};
 use std::collections::BTreeMap;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use lopdf::{Bookmark, Document, Object, ObjectId};
@@ -606,7 +606,6 @@ async fn main() -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use actix_web::http::StatusCode;
     use actix_web::{test, web, App};
     use tokio_postgres::NoTls;
