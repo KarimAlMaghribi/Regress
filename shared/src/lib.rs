@@ -4,3 +4,4 @@ pub mod error;
 pub mod openai_client;
 pub mod utils;
 pub mod kafka;
+pub mod db;

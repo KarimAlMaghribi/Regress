@@ -1,16 +1,17 @@
 use actix_cors::Cors;
 use actix_multipart::Multipart;
-use actix_web::http::{header, StatusCode};
+use actix_web::http::header;
 use actix_web::web::Bytes;
 use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
 use futures_util::StreamExt as _;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
+use sha2::{Digest, Sha256};
 use shared::config::Settings;
 use shared::dto::{PdfUploaded, UploadResponse};
 use std::collections::BTreeMap;
 use std::time::Duration;
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use lopdf::{Bookmark, Document, Object, ObjectId};
@@ -41,8 +42,12 @@ fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
                 .into_values()
                 .map(|object_id| {
                     if !first {
-                        let bookmark =
-                            Bookmark::new(format!("Page_{}", pagenum), [0.0, 0.0, 1.0], 0, object_id);
+                        let bookmark = Bookmark::new(
+                            format!("Page_{}", pagenum),
+                            [0.0, 0.0, 1.0],
+                            0,
+                            object_id,
+                        );
                         document.add_bookmark(bookmark, None);
                         first = true;
                         pagenum += 1;
@@ -61,8 +66,10 @@ fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
     for (object_id, object) in documents_objects.iter() {
         match object.type_name().unwrap_or(b"") {
             b"Catalog" => {
-                catalog_object =
-                    Some((catalog_object.map(|c| c.0).unwrap_or(*object_id), object.clone()));
+                catalog_object = Some((
+                    catalog_object.map(|c| c.0).unwrap_or(*object_id),
+                    object.clone(),
+                ));
             }
             b"Pages" => {
                 if let Ok(dictionary) = object.as_dict() {
@@ -156,7 +163,10 @@ async fn upload(
 
     // Upload-Row anlegen
     let upload_id: i32 = db
-        .query_one("INSERT INTO uploads (status) VALUES ('merging') RETURNING id", &[])
+        .query_one(
+            "INSERT INTO uploads (status) VALUES ('merging') RETURNING id",
+            &[],
+        )
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?
         .get(0);
@@ -201,17 +211,11 @@ async fn upload(
             "pipeline_id" => {
                 while let Some(chunk) = field.next().await {
                     let bytes: Bytes = chunk?;
-                    pipeline_id = Some(
-                        std::str::from_utf8(&bytes)
-                            .unwrap_or_default()
-                            .to_string(),
-                    );
+                    pipeline_id = Some(std::str::from_utf8(&bytes).unwrap_or_default().to_string());
                 }
             }
             // Unbekannte Felder drainen
-            _ => {
-                while let Some(_chunk) = field.next().await {}
-            }
+            _ => while let Some(_chunk) = field.next().await {},
         }
     }
 
@@ -239,15 +243,19 @@ async fn upload(
     };
 
     info!(bytes = data.len(), "storing pdf");
-
-    // PDF speichern
+    info!(step = "pdf.prepare", bytes = data.len(), "ready to insert");
+    let sha256 = format!("{:x}", Sha256::digest(&data));
+    let size_bytes = data.len() as i32;
     let id: i32 = db
-        .query_one("INSERT INTO pdfs (data) VALUES ($1) RETURNING id", &[&data])
+        .query_one(
+            "INSERT INTO merged_pdfs (data, sha256, size_bytes) VALUES ($1,$2,$3) RETURNING id",
+            &[&data, &sha256, &size_bytes],
+        )
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?
         .get(0);
-
     info!(id, "pdf stored in database");
+    info!(step = "db.insert.ok", table = "merged_pdfs", id, sha256 = %sha256, size_bytes, "inserted merged pdf");
 
     // Upload-Row updaten
     let pid = pipeline_id
@@ -262,22 +270,35 @@ async fn upload(
         )
         .await;
 
+    info!(step = "uploads.updated", upload_id, pdf_id = id, status = "ocr", pipeline_id = %pid, "upload updated");
+
     // Quellen speichern (Dateinamen)
     let names: Vec<String> = files.iter().map(|f| f.1.clone()).collect();
     let _ = db
         .execute(
             "INSERT INTO pdf_sources (pdf_id, names, count) VALUES ($1,$2,$3)
              ON CONFLICT (pdf_id) DO UPDATE SET names=EXCLUDED.names, count=EXCLUDED.count",
-            &[&id, &serde_json::to_string(&names).unwrap(), &(names.len() as i32)],
+            &[
+                &id,
+                &serde_json::to_string(&names).unwrap(),
+                &(names.len() as i32),
+            ],
         )
         .await;
+
+    info!(
+        step = "pdf_sources.upserted",
+        pdf_id = id,
+        count = names.len(),
+        "source names upserted"
+    );
 
     // Kafka-Event
     let payload = serde_json::to_string(&PdfUploaded {
         pdf_id: id,
         pipeline_id: pid,
     })
-        .unwrap();
+    .unwrap();
 
     let _ = producer
         .send(
@@ -286,11 +307,15 @@ async fn upload(
         )
         .await;
 
+    info!(
+        step = "kafka.produce.ok",
+        topic = "pdf-merged",
+        key = upload_id,
+        pdf_id = id
+    );
     info!(id, "published pdf-merged event");
 
-    Ok(HttpResponse::Ok().json(UploadResponse {
-        id: id.to_string(),
-    }))
+    Ok(HttpResponse::Ok().json(UploadResponse { id: id.to_string() }))
 }
 
 async fn list_uploads(db: web::Data<tokio_postgres::Client>) -> Result<HttpResponse, Error> {
@@ -314,9 +339,12 @@ async fn list_uploads(db: web::Data<tokio_postgres::Client>) -> Result<HttpRespo
     Ok(HttpResponse::Ok().json(items))
 }
 
-async fn get_pdf(id: web::Path<i32>, db: web::Data<tokio_postgres::Client>) -> Result<HttpResponse, Error> {
+async fn get_pdf(
+    id: web::Path<i32>,
+    db: web::Data<tokio_postgres::Client>,
+) -> Result<HttpResponse, Error> {
     let stmt = db
-        .prepare("SELECT data FROM pdfs WHERE id=$1")
+        .prepare("SELECT data FROM merged_pdfs WHERE id=$1")
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     match db.query_opt(&stmt, &[&id.into_inner()]).await {
@@ -336,7 +364,13 @@ async fn get_extract(
     db: web::Data<tokio_postgres::Client>,
 ) -> Result<HttpResponse, Error> {
     let stmt = db
-        .prepare("SELECT text FROM pdf_texts WHERE pdf_id=$1")
+        .prepare(
+            // Alle Seiten in stabiler Reihenfolge zusammenführen
+            "SELECT COALESCE(
+                 string_agg(text, E'\n' ORDER BY page_no),
+                 ''
+             ) FROM pdf_texts WHERE merged_pdf_id = $1",
+        )
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
     match db.query_opt(&stmt, &[&id.into_inner()]).await {
@@ -351,15 +385,22 @@ async fn get_extract(
     }
 }
 
-async fn delete_pdf(id: web::Path<i32>, db: web::Data<tokio_postgres::Client>) -> Result<HttpResponse, Error> {
+async fn delete_pdf(
+    id: web::Path<i32>,
+    db: web::Data<tokio_postgres::Client>,
+) -> Result<HttpResponse, Error> {
     let id = id.into_inner();
 
     // Abhängigkeiten aufräumen (dürfen fehlen)
-    let _ = db.execute("DELETE FROM pdf_sources WHERE pdf_id=$1", &[&id]).await;
-    let _ = db.execute("DELETE FROM pdf_texts  WHERE pdf_id=$1", &[&id]).await;
+    let _ = db
+        .execute("DELETE FROM pdf_sources WHERE pdf_id=$1", &[&id])
+        .await;
+    let _ = db
+        .execute("DELETE FROM pdf_texts  WHERE merged_pdf_id=$1", &[&id])
+        .await;
 
     let rows = db
-        .execute("DELETE FROM pdfs WHERE id=$1", &[&id])
+        .execute("DELETE FROM merged_pdfs WHERE id=$1", &[&id])
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
@@ -393,7 +434,9 @@ mod db_connect {
     }
 
     fn want_tls(database_url: &str) -> bool {
-        let Some(qs) = database_url.splitn(2, '?').nth(1) else { return true };
+        let Some(qs) = database_url.splitn(2, '?').nth(1) else {
+            return true;
+        };
         for pair in qs.split('&') {
             let mut it = pair.splitn(2, '=');
             let k = it.next().unwrap_or("");
@@ -486,20 +529,25 @@ async fn main() -> std::io::Result<()> {
 
     if let Err(e) = db_client
         .execute(
-            "CREATE TABLE IF NOT EXISTS pdfs (id SERIAL PRIMARY KEY, data BYTEA NOT NULL)",
+            "CREATE TABLE IF NOT EXISTS merged_pdfs (
+                id SERIAL PRIMARY KEY,
+                sha256 TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                data BYTEA NOT NULL
+            )",
             &[],
         )
         .await
     {
-        error!(%e, "failed to create pdfs table");
+        error!(%e, "failed to create merged_pdfs table");
     }
 
     if let Err(e) = db_client
         .execute(
-            "CREATE TABLE IF NOT EXISTS pdf_sources ( \
-                pdf_id INTEGER PRIMARY KEY REFERENCES pdfs(id), \
-                names TEXT, \
-                count INTEGER \
+            "CREATE TABLE IF NOT EXISTS pdf_sources (
+                pdf_id INTEGER PRIMARY KEY REFERENCES merged_pdfs(id),
+                names TEXT,
+                count INTEGER
             )",
             &[],
         )
@@ -551,20 +599,21 @@ async fn main() -> std::io::Result<()> {
             .route("/pdf/{id}", web::delete().to(delete_pdf))
             .route("/health", web::get().to(health))
     })
-        .bind(("0.0.0.0", 8081))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8081))?
+    .run()
+    .await
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use actix_web::http::StatusCode;
     use actix_web::{test, web, App};
     use tokio_postgres::NoTls;
 
     #[actix_web::test]
     async fn health_ok() {
-        let app = test::init_service(App::new().route("/health", web::get().to(super::health))).await;
+        let app =
+            test::init_service(App::new().route("/health", web::get().to(super::health))).await;
         let req = test::TestRequest::get().uri("/health").to_request();
         let resp = test::call_service(&app, req).await;
         assert!(resp.status().is_success());
@@ -572,8 +621,9 @@ mod tests {
 
     #[actix_web::test]
     async fn get_pdf_ok() {
-        let url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/postgres?sslmode=disable".into());
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:postgres@localhost/postgres?sslmode=disable".into()
+        });
 
         if let Ok((client, connection)) = tokio_postgres::connect(&url, NoTls).await {
             tokio::spawn(async move {
@@ -582,19 +632,22 @@ mod tests {
 
             let _ = client
                 .execute(
-                    "CREATE TABLE IF NOT EXISTS pdfs (id SERIAL PRIMARY KEY, data BYTEA NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS merged_pdfs (id SERIAL PRIMARY KEY, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, data BYTEA NOT NULL)",
                     &[],
                 )
                 .await;
             let _ = client
                 .execute(
-                    "CREATE TABLE IF NOT EXISTS pdf_sources (pdf_id INTEGER PRIMARY KEY REFERENCES pdfs(id), names TEXT, count INTEGER)",
+                    "CREATE TABLE IF NOT EXISTS pdf_sources (pdf_id INTEGER PRIMARY KEY REFERENCES merged_pdfs(id), names TEXT, count INTEGER)",
                     &[],
                 )
                 .await;
 
             let _ = client
-                .execute("INSERT INTO pdfs (data) VALUES ($1)", &[&b"test".as_slice()])
+                .execute(
+                    "INSERT INTO merged_pdfs (data, sha256, size_bytes) VALUES ($1,$2,$3)",
+                    &[&b"test".as_slice(), &"hash", &4],
+                )
                 .await;
             let _ = client
                 .execute(
@@ -610,7 +663,7 @@ mod tests {
                     .route("/pdf/{id}", web::get().to(super::get_pdf))
                     .route("/pdf/{id}", web::delete().to(super::delete_pdf)),
             )
-                .await;
+            .await;
 
             let req = test::TestRequest::get().uri("/pdf/1").to_request();
             let resp = test::call_and_read_body(&app, req).await;
@@ -628,8 +681,9 @@ mod tests {
 
     #[actix_web::test]
     async fn get_extract_ok() {
-        let url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/postgres?sslmode=disable".into());
+        let url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
+            "postgres://postgres:postgres@localhost/postgres?sslmode=disable".into()
+        });
 
         if let Ok((client, connection)) = tokio_postgres::connect(&url, NoTls).await {
             tokio::spawn(async move {
@@ -638,12 +692,20 @@ mod tests {
 
             let _ = client
                 .execute(
-                    "CREATE TABLE IF NOT EXISTS pdf_texts (pdf_id INTEGER PRIMARY KEY, text TEXT NOT NULL)",
+                    "CREATE TABLE IF NOT EXISTS pdf_texts ( 
+                        merged_pdf_id INTEGER NOT NULL, 
+                        page_no INTEGER NOT NULL, 
+                        text TEXT NOT NULL, 
+                        UNIQUE (merged_pdf_id, page_no) 
+                    )",
                     &[],
                 )
                 .await;
             let _ = client
-                .execute("INSERT INTO pdf_texts (pdf_id, text) VALUES ($1,$2)", &[&1, &"hello"])
+                .execute(
+                    "INSERT INTO pdf_texts (merged_pdf_id, page_no, text) VALUES ($1,$2,$3)",
+                    &[&1, &0, &"hello"],
+                )
                 .await;
 
             let app = test::init_service(
@@ -651,9 +713,11 @@ mod tests {
                     .app_data(web::Data::new(client))
                     .route("/uploads/{id}/extract", web::get().to(super::get_extract)),
             )
-                .await;
+            .await;
 
-            let req = test::TestRequest::get().uri("/uploads/1/extract").to_request();
+            let req = test::TestRequest::get()
+                .uri("/uploads/1/extract")
+                .to_request();
             let resp = test::call_and_read_body(&app, req).await;
             assert_eq!(&resp[..], b"hello");
         }

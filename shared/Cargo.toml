@@ -18,5 +18,6 @@ uuid = { version = "1", features=["serde", "v4"] }
 tokio = { workspace = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
+tokio-postgres.workspace = true
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 rdkafka.workspace = true
