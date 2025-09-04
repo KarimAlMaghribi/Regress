@@ -7,6 +7,14 @@ networks:
     name: backendnet
 
 services:
+  db-migrate:
+    image: docker.adesso.claims/regress:db-migrator-latest
+    networks: [ backendnet ]
+    environment:
+      DATABASE_URL: "postgresql://regress_app:nITj%22%2B0%28f89F@haproxy:5432/regress?sslmode=disable&keepalives=1&keepalives_idle=30&keepalives_interval=10"
+    deploy:
+      restart_policy: { condition: none }
+      update_config: { order: start-first, parallelism: 1 }
   api-gateway:
     image: docker.adesso.claims/regress:api-gateway-release
     networks: [backendnet]

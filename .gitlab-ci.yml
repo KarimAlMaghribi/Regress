@@ -145,6 +145,15 @@ build_frontend:
     - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ frontend/**/* ]
 
+build_db_migrator:
+  <<: *docker-build
+  variables:
+    IMAGE_NAME: "db-migrator"
+    DOCKERFILE: "migrations/Dockerfile"
+  rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes: [ .gitlab-ci.yml, migrations/**/* ]
+
 deploy_manual_info:
   stage: deploy
   image: alpine:3.19
@@ -170,3 +179,4 @@ deploy_manual_info:
     when: always
     expire_in: 3 days
     paths: [ deploy-instructions.txt ]
+
