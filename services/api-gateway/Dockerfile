@@ -1,33 +1,18 @@
-# syntax=docker/dockerfile:1.7
 FROM --platform=$BUILDPLATFORM rust:1.80-slim AS builder
-
-RUN apt-get update \
- && apt-get install -y --no-install-recommends \
-      build-essential pkg-config clang lld libssl-dev ca-certificates sccache \
- && rm -rf /var/lib/apt/lists/*
-
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config clang lld libssl-dev ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-ENV RUSTUP_TOOLCHAIN=stable \
-    RUSTC_WRAPPER=sccache \
-    CC=clang \
-    CXX=clang++ \
-    MALLOC_ARENA_MAX=2
-
+ENV RUSTUP_TOOLCHAIN=stable RUSTC_WRAPPER=sccache CC=clang CXX=clang++
 COPY . .
-
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/sccache,sharing=locked \
-    cargo build --release --package api-gateway \
-      --manifest-path services/api-gateway/Cargo.toml --locked
+    cargo build --release --manifest-path services/api-gateway/Cargo.toml --locked
 
 FROM debian:bookworm-slim
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libssl3 ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-
+RUN apt-get update && apt-get install -y --no-install-recommends libssl3 ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/local/bin
 COPY --from=builder /app/target/release/api-gateway .
-
-USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/api-gateway"]

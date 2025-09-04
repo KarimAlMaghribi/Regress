@@ -158,9 +158,9 @@ build_db_migrations:
   script:
     - |
       docker buildx build --pull --push \
-        -t "${REGISTRY_REPO}:${IMAGE_NAME}-latest" \
-        -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}" \
-        -f "$DOCKERFILE" \
+        -f migrations-image/Dockerfile \
+        -t "$REGISTRY_REPO:migrations-latest" \
+        -t "$REGISTRY_REPO:migrations-$CI_COMMIT_SHORT_SHA" \
         migrations-image
 
 deploy_manual_info:
