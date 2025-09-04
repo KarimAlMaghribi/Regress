@@ -22,6 +22,10 @@ use lopdf::{Bookmark, Document, Object, ObjectId};
 use serde::Serialize;
 use zip::ZipArchive;
 
+async fn health() -> impl Responder {
+    "OK"
+}
+
 #[derive(Serialize)]
 struct UploadEntry {
     id: i32,
@@ -317,7 +321,7 @@ async fn upload(
         pdf_id: id,
         pipeline_id: pid,
     })
-        .unwrap();
+    .unwrap();
 
     let _ = producer
         .send(
@@ -362,10 +366,7 @@ async fn list_uploads(db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(items))
 }
 
-async fn get_pdf(
-    id: web::Path<i32>,
-    db: web::Data<Pool>,
-) -> Result<HttpResponse, Error> {
+async fn get_pdf(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     let client = db
         .get()
         .await
@@ -386,10 +387,7 @@ async fn get_pdf(
     }
 }
 
-async fn get_extract(
-    id: web::Path<i32>,
-    db: web::Data<Pool>,
-) -> Result<HttpResponse, Error> {
+async fn get_extract(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     let client = db
         .get()
         .await
@@ -416,10 +414,7 @@ async fn get_extract(
     }
 }
 
-async fn delete_pdf(
-    id: web::Path<i32>,
-    db: web::Data<Pool>,
-) -> Result<HttpResponse, Error> {
+async fn delete_pdf(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     let id = id.into_inner();
     let client = db
         .get()
@@ -537,9 +532,9 @@ async fn main() -> std::io::Result<()> {
             .route("/pdf/{id}", web::delete().to(delete_pdf))
             .route("/health", web::get().to(health))
     })
-        .bind(("0.0.0.0", 8081))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8081))?
+    .run()
+    .await
 }
 
 #[cfg(test)]
@@ -607,7 +602,7 @@ mod tests {
                             .route("/pdf/{id}", web::get().to(super::get_pdf))
                             .route("/pdf/{id}", web::delete().to(super::delete_pdf)),
                     )
-                        .await;
+                    .await;
 
                     let req = test::TestRequest::get().uri("/pdf/1").to_request();
                     let resp = test::call_and_read_body(&app, req).await;
@@ -664,7 +659,7 @@ mod tests {
                             .app_data(web::Data::new(pool.clone()))
                             .route("/uploads/{id}/extract", web::get().to(super::get_extract)),
                     )
-                        .await;
+                    .await;
 
                     let req = test::TestRequest::get()
                         .uri("/uploads/1/extract")
