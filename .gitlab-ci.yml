@@ -28,17 +28,21 @@ ci_noop:
   services: [ docker:24-dind ]
   before_script:
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
+    - apk add --no-cache bash coreutils
     - docker buildx create --use || docker buildx use default
     - mkdir -p "$CACHE_DIR"
   script:
-    - >
-      docker buildx build --pull --push
-      --build-arg BUILDKIT_INLINE_CACHE=1
-      --cache-from=type=local,src="$CACHE_DIR"
-      --cache-to=type=local,dest="$CACHE_DIR-new",mode=max
-      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${IMAGE_TAG}"
-      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}"
-      -f "$DOCKERFILE" .
+    - |
+      bash -lc '
+        set -euo pipefail
+        docker buildx build --pull --push \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from=type=local,src="$CACHE_DIR" \
+          --cache-to=type=local,dest="$CACHE_DIR-new",mode=max \
+          -t "${REGISTRY_REPO}:${IMAGE_NAME}-${IMAGE_TAG}" \
+          -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}" \
+          -f "$DOCKERFILE" .
+      '
     - rm -rf "$CACHE_DIR" && mv "$CACHE_DIR-new" "$CACHE_DIR"
   cache:
     key:
