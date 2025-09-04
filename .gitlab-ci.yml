@@ -156,10 +156,12 @@ build_db_migrations:
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
     - docker buildx create --use || docker buildx use default
   script:
-    - docker buildx build --pull --push \
-      -t "${REGISTRY_REPO}:${IMAGE_NAME}-latest" \
-      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}" \
-      -f "$DOCKERFILE" migrations-image
+    - |
+      docker buildx build --pull --push \
+        -t "${REGISTRY_REPO}:${IMAGE_NAME}-latest" \
+        -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}" \
+        -f "$DOCKERFILE" \
+        migrations-image
 
 deploy_manual_info:
   stage: deploy
