@@ -46,7 +46,7 @@ ci_noop:
       - frontend/node_modules/.cache
       - .buildx-cache
   timeout: 90m
-  needs: []
+  needs: [ ]
 
 
 build_api_gateway:
@@ -145,14 +145,21 @@ build_frontend:
     - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ frontend/**/* ]
 
-build_db_migrator:
-  <<: *docker-build
+build_db_migrations:
+  stage: build
+  image: docker:24
+  services: [ docker:24-dind ]
   variables:
-    IMAGE_NAME: "db-migrator"
-    DOCKERFILE: "migrations/Dockerfile"
-  rules:
-    - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, migrations/**/* ]
+    IMAGE_NAME: "db-migrations"
+    DOCKERFILE: "migrations-image/Dockerfile"
+  before_script:
+    - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
+    - docker buildx create --use || docker buildx use default
+  script:
+    - docker buildx build --pull --push \
+      -t "${REGISTRY_REPO}:${IMAGE_NAME}-latest" \
+      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}" \
+      -f "$DOCKERFILE" migrations-image
 
 deploy_manual_info:
   stage: deploy

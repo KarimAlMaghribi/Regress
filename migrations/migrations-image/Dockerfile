@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM debian:bookworm-slim
 
 RUN apt-get update \
@@ -5,13 +6,10 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /migrations
-COPY ./*.sql /migrations/
+COPY ../migrations/*.sql /migrations/
 COPY ./run.sh /run.sh
-
 RUN chmod +x /run.sh
 
 ENV DATABASE_URL=""
-
 USER 65532:65532
-
 ENTRYPOINT ["/bin/sh", "/run.sh"]
