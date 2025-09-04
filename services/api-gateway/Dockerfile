@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1.7-labs
+# syntax=docker/dockerfile:1.7
 FROM --platform=$BUILDPLATFORM rust:1.80-slim AS builder
 
 RUN apt-get update \
@@ -13,20 +13,21 @@ ENV RUSTUP_TOOLCHAIN=stable \
     CXX=clang++ \
     MALLOC_ARENA_MAX=2
 
-# Ganzen Workspace kopieren (wichtig für Cargo-Workspace)
 COPY . .
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/sccache \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/sccache,sharing=locked \
     cargo build --release --package api-gateway \
       --manifest-path services/api-gateway/Cargo.toml --locked
 
-FROM debian:bookworm-slim AS runtime
+FROM debian:bookworm-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates libssl3 \
+ && apt-get install -y --no-install-recommends libssl3 ca-certificates \
  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /usr/local/bin
 COPY --from=builder /app/target/release/api-gateway .
-EXPOSE 8080
-CMD ["./api-gateway"]
+
+USER 65532:65532
+ENTRYPOINT ["/usr/local/bin/api-gateway"]
