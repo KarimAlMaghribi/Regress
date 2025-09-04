@@ -619,7 +619,7 @@ mod tests {
 
                     let req = test::TestRequest::get().uri("/pdf/1").to_request();
                     let resp = test::call_service(&app, req).await;
-                    assert_eq!resp.status(), StatusCode::NOT_FOUND);
+                    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
                 }
             }
         }
