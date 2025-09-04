@@ -317,7 +317,7 @@ async fn upload(
         pdf_id: id,
         pipeline_id: pid,
     })
-    .unwrap();
+        .unwrap();
 
     let _ = producer
         .send(
@@ -446,11 +446,6 @@ async fn delete_pdf(
     }
 }
 
-async fn health() -> impl Responder {
-    "OK"
-}
-
-
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
@@ -542,9 +537,9 @@ async fn main() -> std::io::Result<()> {
             .route("/pdf/{id}", web::delete().to(delete_pdf))
             .route("/health", web::get().to(health))
     })
-    .bind(("0.0.0.0", 8081))?
-    .run()
-    .await
+        .bind(("0.0.0.0", 8081))?
+        .run()
+        .await
 }
 
 #[cfg(test)]
@@ -612,7 +607,7 @@ mod tests {
                             .route("/pdf/{id}", web::get().to(super::get_pdf))
                             .route("/pdf/{id}", web::delete().to(super::delete_pdf)),
                     )
-                    .await;
+                        .await;
 
                     let req = test::TestRequest::get().uri("/pdf/1").to_request();
                     let resp = test::call_and_read_body(&app, req).await;
@@ -624,7 +619,7 @@ mod tests {
 
                     let req = test::TestRequest::get().uri("/pdf/1").to_request();
                     let resp = test::call_service(&app, req).await;
-                    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+                    assert_eq!resp.status(), StatusCode::NOT_FOUND);
                 }
             }
         }
@@ -669,7 +664,7 @@ mod tests {
                             .app_data(web::Data::new(pool.clone()))
                             .route("/uploads/{id}/extract", web::get().to(super::get_extract)),
                     )
-                    .await;
+                        .await;
 
                     let req = test::TestRequest::get()
                         .uri("/uploads/1/extract")

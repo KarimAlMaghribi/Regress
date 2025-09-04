@@ -196,23 +196,22 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
-                // OCR‑Text laden
-                let row = match sqlx::query("SELECT text FROM pdf_texts WHERE pdf_id = $1")
+                // OCR-Text laden (Fix: merged_pdf_id + seitenweise Aggregation)
+                let text: String = match sqlx::query_scalar::<_, Option<String>>(
+                    r#"
+                    SELECT COALESCE(string_agg(text, E'\n' ORDER BY page_no), '')
+                    FROM pdf_texts
+                    WHERE merged_pdf_id = $1
+                    "#,
+                )
                     .bind(evt.pdf_id)
                     .fetch_one(&pool)
                     .await
                 {
-                    Ok(r) => r,
+                    Ok(Some(s)) => s,
+                    Ok(None) => String::new(),
                     Err(e) => {
                         warn!(%e, pdf_id = evt.pdf_id, "pdf_text not found");
-                        continue;
-                    }
-                };
-
-                let text: String = match row.try_get("text") {
-                    Ok(t) => t,
-                    Err(e) => {
-                        warn!(%e, "invalid text column");
                         continue;
                     }
                 };

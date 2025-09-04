@@ -75,7 +75,10 @@ async fn start_analysis(
             .await
             .map_err(actix_web::error::ErrorInternalServerError)?;
         let stmt = client
-            .prepare("SELECT COALESCE(string_agg(text, E'\n' ORDER BY page_no), '') FROM pdf_texts WHERE merged_pdf_id = $1")
+            .prepare(
+                "SELECT COALESCE(string_agg(text, E'\n' ORDER BY page_no), '')
+                 FROM pdf_texts WHERE merged_pdf_id = $1",
+            )
             .await
             .map_err(actix_web::error::ErrorInternalServerError)?;
         if let Ok(row) = client.query_one(&stmt, &[&id]).await {
@@ -108,7 +111,7 @@ async fn main() -> std::io::Result<()> {
         &settings.message_broker_url,
         &["pdf-merged", "text-extracted"],
     )
-    .await
+        .await
     {
         warn!(%e, "failed to ensure kafka topics");
     }
@@ -152,7 +155,11 @@ async fn main() -> std::io::Result<()> {
             .ok();
         client
             .execute(
-                "CREATE TABLE IF NOT EXISTS uploads (id SERIAL PRIMARY KEY, pdf_id INTEGER, status TEXT NOT NULL)",
+                "CREATE TABLE IF NOT EXISTS uploads (
+                    id SERIAL PRIMARY KEY,
+                    pdf_id INTEGER,
+                    status TEXT NOT NULL
+                )",
                 &[],
             )
             .await
@@ -257,9 +264,14 @@ async fn main() -> std::io::Result<()> {
                                     }
                                 };
                                 let text = text_raw.to_lowercase();
+
+                                // Upsert seitenweise Text (Seitenlogik ist später erweiterbar)
                                 let stmt_up = match client
                                     .prepare(
-                                        "INSERT INTO pdf_texts (merged_pdf_id, page_no, text) VALUES ($1,$2,$3) ON CONFLICT (merged_pdf_id, page_no) DO UPDATE SET text = EXCLUDED.text",
+                                        "INSERT INTO pdf_texts (merged_pdf_id, page_no, text)
+                                         VALUES ($1,$2,$3)
+                                         ON CONFLICT (merged_pdf_id, page_no)
+                                         DO UPDATE SET text = EXCLUDED.text",
                                     )
                                     .await
                                 {
@@ -282,12 +294,18 @@ async fn main() -> std::io::Result<()> {
                                     table = "pdf_texts",
                                     "text upserted"
                                 );
+
+                                // Fix: uploads mit pdf_id matchen + pipeline_id aktualisieren
                                 let _ = client
                                     .execute(
-                                        "UPDATE uploads SET status='ready' WHERE pdf_id=$1",
-                                        &[&event.pdf_id],
+                                        "UPDATE uploads
+                                         SET status='ready', pipeline_id=$2
+                                         WHERE pdf_id=$1",
+                                        &[&event.pdf_id, &event.pipeline_id],
                                     )
                                     .await;
+
+                                // Event publizieren
                                 let evt = TextExtracted {
                                     pdf_id: event.pdf_id,
                                     pipeline_id: event.pipeline_id,
@@ -308,6 +326,7 @@ async fn main() -> std::io::Result<()> {
                                     topic = "text-extracted",
                                     id = evt.pdf_id
                                 );
+
                                 if let Err(e) = cons.commit_message(&m, CommitMode::Async) {
                                     error!(%e, "commit failed");
                                 } else {
@@ -340,7 +359,7 @@ async fn main() -> std::io::Result<()> {
             .route("/texts", web::get().to(list_texts))
             .route("/analyze", web::post().to(start_analysis))
     })
-    .bind(("0.0.0.0", 8083))?
-    .run()
-    .await
+        .bind(("0.0.0.0", 8083))?
+        .run()
+        .await
 }
