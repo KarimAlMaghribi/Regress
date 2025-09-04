@@ -145,23 +145,40 @@ build_frontend:
     - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ frontend/**/* ]
 
-build_db_migrations:
+build_migrations_image:
   stage: build
   image: docker:24
   services: [ docker:24-dind ]
   variables:
-    IMAGE_NAME: "db-migrations"
+    IMAGE_NAME: "migrations"
     DOCKERFILE: "migrations-image/Dockerfile"
   before_script:
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
     - docker buildx create --use || docker buildx use default
+    - mkdir -p "$CACHE_DIR"
   script:
     - |
+      set -euo pipefail
+      test -d migrations-image || { echo "ERROR: migrations-image/ fehlt im Checkout"; ls -la; exit 1; }
       docker buildx build --pull --push \
-        -f migrations-image/Dockerfile \
-        -t "$REGISTRY_REPO:migrations-latest" \
-        -t "$REGISTRY_REPO:migrations-$CI_COMMIT_SHORT_SHA" \
-        migrations-image
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        --cache-from=type=local,src="$CACHE_DIR" \
+        --cache-to=type=local,dest="$CACHE_DIR-new",mode=max \
+        -f "$DOCKERFILE" \
+        -t "${REGISTRY_REPO}:${IMAGE_NAME}-latest" \
+        -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}" \
+        .
+      rm -rf "$CACHE_DIR" && mv "$CACHE_DIR-new" "$CACHE_DIR"
+  cache:
+    key:
+      files: [ Cargo.lock, frontend/package-lock.json ]
+      prefix: "$CI_JOB_NAME"
+    paths:
+      - .buildx-cache
+  rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes: [ .gitlab-ci.yml, migrations-image/** ]
+  timeout: 30m
 
 deploy_manual_info:
   stage: deploy
