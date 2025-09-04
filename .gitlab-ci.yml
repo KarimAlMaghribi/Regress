@@ -120,7 +120,38 @@ build_history_service:
 
 build_frontend:
   <<: *docker-build
-  variables: { IMAGE_NAME: "frontend", DOCKERFILE: "frontend/Dockerfile" }
+  variables:
+    IMAGE_NAME: "frontend"
+    DOCKERFILE: "frontend/Dockerfile"
+    # Optional bei Pipeline-Start überschreiben:
+    PUBLIC_HOST: "${PUBLIC_HOST:-helium.adesso.claims}"
+    SCHEME: "${SCHEME:-http}"     # oder https
+    WS_SCHEME: "${WS_SCHEME:-ws}" # oder wss
+  # Wir überschreiben NUR den script-Block, um Build-Args zu setzen
+  script:
+    - |
+      set -e
+      PUBLIC_HOST="${PUBLIC_HOST:-helium.adesso.claims}"
+      SCHEME="${SCHEME:-http}"
+      WS_SCHEME="${WS_SCHEME:-ws}"
+
+      BUILD_ARGS=()
+      BUILD_ARGS+=(--build-arg "PUBLIC_HOST=${PUBLIC_HOST}")
+      BUILD_ARGS+=(--build-arg "VITE_INGEST_URL=${SCHEME}://${PUBLIC_HOST}:8080")
+      BUILD_ARGS+=(--build-arg "VITE_HISTORY_URL=${SCHEME}://${PUBLIC_HOST}:8090")
+      BUILD_ARGS+=(--build-arg "VITE_HISTORY_WS=${WS_SCHEME}://${PUBLIC_HOST}:8090")
+      BUILD_ARGS+=(--build-arg "VITE_API_URL=${SCHEME}://${PUBLIC_HOST}:8084")
+      BUILD_ARGS+=(--build-arg "VITE_UPLOAD_API_URL=${SCHEME}://${PUBLIC_HOST}:8081")
+
+      docker buildx build --pull --push \
+        --build-arg BUILDKIT_INLINE_CACHE=1 \
+        --cache-from=type=local,src="$CACHE_DIR" \
+        --cache-to=type=local,dest="$CACHE_DIR-new",mode=max \
+        "${BUILD_ARGS[@]}" \
+        -t "${REGISTRY_REPO}:${IMAGE_NAME}-${IMAGE_TAG}" \
+        -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}" \
+        -f "$DOCKERFILE" .
+    - rm -rf "$CACHE_DIR" && mv "$CACHE_DIR-new" "$CACHE_DIR"
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
     - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
