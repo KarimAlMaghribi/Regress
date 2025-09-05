@@ -214,8 +214,7 @@ async fn main() -> std::io::Result<()> {
                                 Ok(evt) => {
                                     info!(id = evt.pdf_id, "received pdf-merged event");
 
-                                    // DB-Client
-                                    let client = match pool_consume.get().await {
+                                    let mut client = match pool_consume.get().await {
                                         Ok(c) => c,
                                         Err(e) => {
                                             error!(%e, "db pool get failed");
@@ -223,7 +222,6 @@ async fn main() -> std::io::Result<()> {
                                         }
                                     };
 
-                                    // PDF laden
                                     let row = match client
                                         .query_opt(
                                             "SELECT data FROM merged_pdfs WHERE id = $1",
