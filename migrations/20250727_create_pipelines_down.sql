@@ -1,7 +1,6 @@
-DO
-$$
+DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name='pipelines') THEN
-DROP TABLE pipelines;
+  IF to_regclass('public.pipelines') IS NOT NULL THEN
+DROP TABLE public.pipelines;
 END IF;
 END $$;
