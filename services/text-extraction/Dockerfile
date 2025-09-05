@@ -1,6 +1,7 @@
-ARG REGISTRY_MIRROR=docker.adesso.claims/library
+ARG BASE_RUST=rust:1.80-slim
+ARG BASE_DEBIAN=debian:bookworm-slim
 
-FROM ${REGISTRY_MIRROR}/rust:1.80-slim AS builder
+FROM ${BASE_RUST} AS builder
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config clang lld libssl-dev ca-certificates git && \
@@ -14,8 +15,8 @@ COPY services/text-extraction/src ./services/text-extraction/src
 RUN cargo build --release --package text-extraction \
     --manifest-path services/text-extraction/Cargo.toml --locked
 
-FROM ${REGISTRY_MIRROR}/debian:bookworm-slim
-# pdftotext aus poppler-utils + Runtime-SSL
+FROM ${BASE_DEBIAN}
+# pdftotext (poppler-utils) + SSL
 RUN apt-get update && apt-get install -y --no-install-recommends \
     poppler-utils libssl3 ca-certificates && \
     rm -rf /var/lib/apt/lists/*
