@@ -156,7 +156,6 @@ build_frontend:
     - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ frontend/**/* ]
 
-# Separater Build für das Migration-Image (Kontext = Repo-Wurzel; Dockerfile liegt in migrations/)
 build_migrations_image:
   stage: build
   image: docker:24
