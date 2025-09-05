@@ -1,18 +1,24 @@
-FROM --platform=$BUILDPLATFORM rust:1.80-slim AS builder
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential pkg-config clang lld libssl-dev ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-WORKDIR /app
-ENV RUSTUP_TOOLCHAIN=stable RUSTC_WRAPPER=sccache CC=clang CXX=clang++
-COPY . .
-RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
-    --mount=type=cache,target=/sccache,sharing=locked \
-    cargo build --release --manifest-path services/metrics/Cargo.toml --locked
+ARG REGISTRY_MIRROR=docker.adesso.claims/library
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends libssl3 ca-certificates && \
+FROM ${REGISTRY_MIRROR}/rust:1.80-slim AS builder
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config clang lld libssl-dev ca-certificates git && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY Cargo.toml Cargo.lock ./
+COPY shared ./shared
+COPY services/metrics/Cargo.toml ./services/metrics/Cargo.toml
+COPY services/metrics/src ./services/metrics/src
+
+RUN cargo build --release --package metrics-service \
+    --manifest-path services/metrics/Cargo.toml --locked
+
+FROM ${REGISTRY_MIRROR}/debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libssl3 ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/local/bin
-COPY --from=builder /app/target/release/metrics-service .
-ENTRYPOINT ["/usr/local/bin/metrics-service"]
+COPY --from=builder /src/target/release/metrics-service .
+ENV RUST_LOG=info
+CMD ["./metrics-service"]
