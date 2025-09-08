@@ -1,24 +1,22 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
 use futures::{stream, StreamExt};
-use serde_json::json;
-use tracing::{info, warn, error};
+use serde_json::{json, Value as JsonValue};
+use tracing::{info, warn};
 
-use shared::dto::{
-    PipelineConfig, PromptType, PromptResult, ScoringResult, RunStep, TextPosition,
-};
+use shared::dto::{PipelineConfig, PromptResult, PromptType, RunStep, ScoringResult, TextPosition};
 use shared::openai_client as ai;
 
 /// Steuerung der Seitensplittung und der OpenAI-Parameter.
-/// Diese Felder werden in `main.rs` aus ENV gebaut – Namen und Sichtbarkeit
-/// sind exakt so gewählt, dass dein aktuelles `main.rs` ohne Änderungen kompiliert.
+/// Diese Felder werden in `main.rs` aus ENV gebaut.
 #[derive(Clone, Debug)]
 pub struct BatchCfg {
-    pub page_batch_size: usize,      // z.B. PIPELINE_PAGE_BATCH_SIZE
-    pub max_parallel: usize,         // z.B. PIPELINE_MAX_PARALLEL
-    pub max_chars: usize,            // z.B. PIPELINE_MAX_CHARS
-    pub openai_timeout_ms: u64,      // z.B. PIPELINE_OPENAI_TIMEOUT_MS
-    pub openai_retries: usize,       // z.B. PIPELINE_OPENAI_RETRIES
+    pub page_batch_size: usize, // z.B. PIPELINE_PAGE_BATCH_SIZE
+    pub max_parallel: usize,    // z.B. PIPELINE_MAX_PARALLEL
+    pub max_chars: usize,       // z.B. PIPELINE_MAX_CHARS
+    pub openai_timeout_ms: u64, // z.B. PIPELINE_OPENAI_TIMEOUT_MS
+    pub openai_retries: usize,  // z.B. PIPELINE_OPENAI_RETRIES
 }
 
 /// Ergebnis eines kompletten Pipeline-Laufs – wird an `main.rs` zurückgegeben.
@@ -47,8 +45,7 @@ pub async fn execute_with_pages(
         batch_cfg.openai_retries
     );
 
-    // Vorab Batchbildung über alle Seiten –
-    // Erzeugt (Vec<PageNo>, CombinedText) mit Grenzen für Seitenanzahl und Zeichenzahl.
+    // Vorab Batchbildung über alle Seiten:
     let batches = make_batches(pages, batch_cfg.page_batch_size, batch_cfg.max_chars);
 
     let mut extraction_all: Vec<PromptResult> = Vec::new();
@@ -56,19 +53,17 @@ pub async fn execute_with_pages(
     let mut decision_all: Vec<PromptResult> = Vec::new();
     let mut run_log: Vec<RunStep> = Vec::new();
 
-    // Routen-Stack: einfache Logik wie in deinem bisherigen Code
-    let mut route_stack: Vec<String> = vec!["ROOT".to_string()];
     let mut current_route = "ROOT".to_string();
+    let mut _route_stack: Vec<String> = vec!["ROOT".to_string()];
+    let mut seq_no: i32 = 0;
 
     for step in &cfg.steps {
         if !step.active {
             continue;
         }
 
-        // einfache Routenlogik: wenn Step eine Route hat, nur ausführen wenn sie zur aktuellen passt
         if let Some(ref r) = step.route {
             if r != &current_route && r != "ROOT" {
-                // Step gehört zu einer anderen Route – überspringen
                 continue;
             }
         }
@@ -76,25 +71,30 @@ pub async fn execute_with_pages(
         match step.step_type {
             PromptType::ExtractionPrompt => {
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
-                // pro Batch ein Call; parallelisiert per buffer_unordered (kein tokio::spawn!)
-                let futs = batches.iter().map(|(pnos, text)| {
+
+                let futs = batches.iter().map(|(_pnos, text)| {
                     let text = text.clone();
                     let prompt_id = step.prompt_id as i32;
                     let cfg_clone = batch_cfg.clone();
-                    let prompt_text_for_log = prompt_text.clone();
+                    let pt = prompt_text.clone();
                     async move {
-                        call_extract_with_retries(prompt_id, &text, &cfg_clone).await
-                            .unwrap_or_else(|e| PromptResult {
-                                prompt_id,
-                                prompt_type: PromptType::ExtractionPrompt,
-                                value: None,
-                                boolean: None,
-                                route: None,
-                                weight: None,
-                                source: None,
-                                openai_raw: None,
-                                json_key: None,
-                                error: Some(format!("extract failed: {e}")),
+                        call_extract_with_retries(prompt_id, &text, &cfg_clone, pt)
+                            .await
+                            .unwrap_or_else(|e| {
+                                warn!("extract failed: {}", e);
+                                PromptResult {
+                                    prompt_id,
+                                    prompt_type: PromptType::ExtractionPrompt,
+                                    prompt_text: String::new(),
+                                    value: None,
+                                    boolean: None,
+                                    route: None,
+                                    weight: None,
+                                    source: None,
+                                    openai_raw: String::new(),
+                                    json_key: None,
+                                    error: Some(format!("extract failed: {e}")),
+                                }
                             })
                     }
                 });
@@ -104,107 +104,120 @@ pub async fn execute_with_pages(
                     .collect()
                     .await;
 
-                // json_key vom Step auf die Ergebnisse mappen (falls vorhanden)
-                let results_mapped = results
-                    .into_iter()
-                    .map(|mut r| {
-                        r.json_key = step.json_key.clone();
-                        r
-                    })
-                    .collect::<Vec<_>>();
-
-                extraction_all.extend(results_mapped.clone());
-
                 // Log pro Step
+                seq_no += 1;
                 run_log.push(RunStep {
+                    seq_no,
                     step_id: step.id.clone(),
-                    prompt_id: step.prompt_id as i32,
+                    prompt_id: step.prompt_id, // i64
                     prompt_type: PromptType::ExtractionPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
                     result: json!({
                         "prompt_text": prompt_text,
-                        "batches": batches.iter().map(|(pnos, _)| json!({ "pages": pnos })).collect::<Vec<_>>(),
-                        "results": results_mapped.iter().map(|r| json!({
+                        "batch_count": batches.len(),
+                        "results": results.iter().map(|r| json!({
                             "value": r.value,
                             "source": r.source,
                             "error": r.error,
                         })).collect::<Vec<_>>()
                     }),
                 });
+
+                extraction_all.extend(results);
             }
 
             PromptType::ScoringPrompt => {
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
+                // nur erfolgreiche Ergebnisse sammeln; bei Fehlern -> None
                 let futs = batches.iter().map(|(_pnos, text)| {
                     let text = text.clone();
                     let prompt_id = step.prompt_id as i32;
                     let cfg_clone = batch_cfg.clone();
                     async move {
-                        call_score_with_retries(prompt_id, &text, &cfg_clone).await
-                            .unwrap_or_else(|e| ScoringResult {
-                                prompt_id,
-                                score: 0.0,
-                                min: 0.0,
-                                max: 1.0,
-                                weight: 1.0,
-                                source: None,
-                                openai_raw: None,
-                                error: Some(format!("score failed: {e}")),
-                            })
+                        match call_score_with_retries(prompt_id, &text, &cfg_clone).await {
+                            Ok(sr) => Some(sr),
+                            Err(e) => {
+                                warn!("score failed: {}", e);
+                                None
+                            }
+                        }
                     }
                 });
 
-                let mut batch_scores: Vec<ScoringResult> = stream::iter(futs)
+                let batch_scores_opt: Vec<Option<ScoringResult>> = stream::iter(futs)
                     .buffer_unordered(batch_cfg.max_parallel)
                     .collect()
                     .await;
 
-                let consolidated = consolidate_scoring(std::mem::take(&mut batch_scores));
+                let batch_scores: Vec<ScoringResult> =
+                    batch_scores_opt.into_iter().flatten().collect();
 
-                scoring_all.push(consolidated.clone());
+                let consolidated = consolidate_scoring(&batch_scores);
 
+                // Log pro Step
+                seq_no += 1;
                 run_log.push(RunStep {
+                    seq_no,
                     step_id: step.id.clone(),
-                    prompt_id: step.prompt_id as i32,
+                    prompt_id: step.prompt_id, // i64
                     prompt_type: PromptType::ScoringPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
                     result: json!({
                         "prompt_text": prompt_text,
-                        "batches": batches.len(),
-                        "scores": batch_scores, // leer, da wir übernommen und geleert haben (nur zur Vollständigkeit)
-                        "consolidated": consolidated
+                        "batch_count": batches.len(),
+                        "scores": batch_scores.iter().map(|s| json!({
+                            "prompt_id": s.prompt_id,
+                            "result": s.result,
+                            "source": s.source,
+                            "explanation": s.explanation
+                        })).collect::<Vec<_>>(),
+                        "consolidated": consolidated.as_ref().map(|s| json!({
+                            "prompt_id": s.prompt_id,
+                            "result": s.result,
+                            "source": s.source,
+                            "explanation": s.explanation
+                        }))
                     }),
                 });
+
+                if let Some(s) = consolidated {
+                    scoring_all.push(s);
+                }
             }
 
             PromptType::DecisionPrompt => {
-                // Für Decision benötigen wir die Zuordnung der Keys (yes/no) aus dem Step:
-                let yes_key = step.yes_key.clone().unwrap_or_else(|| "YES".into());
-                let no_key  = step.no_key.clone().unwrap_or_else(|| "NO".into());
+                let yes_key = step.yes_key.clone().unwrap_or_else(|| String::from("YES"));
+                let no_key = step.no_key.clone().unwrap_or_else(|| String::from("NO"));
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
                 let futs = batches.iter().map(|(_pnos, text)| {
                     let text = text.clone();
                     let prompt_id = step.prompt_id as i32;
                     let cfg_clone = batch_cfg.clone();
-                    let yes_key = yes_key.clone();
-                    let no_key  = no_key.clone();
+                    let yk = yes_key.clone();
+                    let nk = no_key.clone();
+                    let pt = prompt_text.clone();
                     async move {
-                        call_decide_with_retries(prompt_id, &text, &cfg_clone, &yes_key, &no_key).await
-                            .unwrap_or_else(|e| PromptResult {
-                                prompt_id,
-                                prompt_type: PromptType::DecisionPrompt,
-                                value: None,
-                                boolean: None,
-                                route: Some(no_key.clone()),
-                                weight: None,
-                                source: None,
-                                openai_raw: None,
-                                json_key: None,
-                                error: Some(format!("decision failed: {e}")),
+                        call_decide_with_retries(prompt_id, &text, &cfg_clone, &yk, &nk, pt)
+                            .await
+                            .unwrap_or_else(|e| {
+                                warn!("decision failed: {}", e);
+                                PromptResult {
+                                    prompt_id,
+                                    prompt_type: PromptType::DecisionPrompt,
+                                    prompt_text: String::new(),
+                                    value: None,
+                                    boolean: None,
+                                    route: Some(nk.clone()),
+                                    weight: None,
+                                    source: None,
+                                    openai_raw: String::new(),
+                                    json_key: None,
+                                    error: Some(format!("decision failed: {e}")),
+                                }
                             })
                     }
                 });
@@ -214,30 +227,41 @@ pub async fn execute_with_pages(
                     .collect()
                     .await;
 
-                let consolidated = consolidate_decision(std::mem::take(&mut decisions), &yes_key, &no_key);
+                let consolidated =
+                    consolidate_decision(std::mem::take(&mut decisions), &yes_key, &no_key);
 
-                // Routenwechsel nach Decision
                 if let Some(ref r) = consolidated.route {
                     if r != &current_route {
-                        route_stack.push(r.clone());
+                        _route_stack.push(r.clone());
                         current_route = r.clone();
                     }
                 }
 
-                decision_all.push(consolidated.clone());
-
+                seq_no += 1;
                 run_log.push(RunStep {
+                    seq_no,
                     step_id: step.id.clone(),
-                    prompt_id: step.prompt_id as i32,
+                    prompt_id: step.prompt_id, // i64
                     prompt_type: PromptType::DecisionPrompt,
-                    decision_key: step.decision_key.clone(),
+                    decision_key: None, // PipelineStep hat kein decision_key-Feld
                     route: Some(current_route.clone()),
                     result: json!({
                         "prompt_text": prompt_text,
-                        "votes": decisions,
-                        "consolidated": consolidated
+                        "votes": decisions.iter().map(|r| json!({
+                            "boolean": r.boolean,
+                            "route": r.route,
+                            "source": r.source,
+                            "error": r.error
+                        })).collect::<Vec<_>>(),
+                        "consolidated": {
+                            "boolean": consolidated.boolean,
+                            "route": consolidated.route,
+                            "source": consolidated.source,
+                        }
                     }),
                 });
+
+                decision_all.push(consolidated);
             }
         }
     }
@@ -266,9 +290,7 @@ fn make_batches(
         let normalized = normalize_spaces(txt);
 
         let would_len = cur.len() + normalized.len() + 1;
-        if !cur_pages.is_empty()
-            && (cur_pages.len() >= page_batch_size || would_len > max_chars)
-        {
+        if !cur_pages.is_empty() && (cur_pages.len() >= page_batch_size || would_len > max_chars) {
             out.push((std::mem::take(&mut cur_pages), std::mem::take(&mut cur)));
         }
 
@@ -302,11 +324,12 @@ fn normalize_spaces(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// Extraktion mit Timeout + Retries (nicht rekursiv, keine Splits — Splits übernimmt bereits das Batching).
+/// Extraktion mit Timeout + Retries (Splits übernimmt bereits das Batching).
 async fn call_extract_with_retries(
     prompt_id: i32,
     text: &str,
     cfg: &BatchCfg,
+    prompt_text: String,
 ) -> anyhow::Result<PromptResult> {
     let mut last_err: Option<anyhow::Error> = None;
 
@@ -315,13 +338,14 @@ async fn call_extract_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::extract(prompt_id, text),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(ans)) => {
                 return Ok(PromptResult {
                     prompt_id,
                     prompt_type: PromptType::ExtractionPrompt,
+                    prompt_text,
                     value: ans.value.clone(),
                     boolean: None,
                     route: None,
@@ -334,11 +358,19 @@ async fn call_extract_with_retries(
             }
             Ok(Err(e)) => {
                 last_err = Some(anyhow::anyhow!(e));
-                warn!("extract attempt {} failed: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "extract attempt {} failed: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
             Err(e) => {
                 last_err = Some(anyhow::anyhow!("timeout: {e}"));
-                warn!("extract attempt {} timed out: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "extract attempt {} timed out: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
         }
     }
@@ -358,7 +390,7 @@ async fn call_score_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::score(prompt_id, text),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(sr)) => {
@@ -366,11 +398,19 @@ async fn call_score_with_retries(
             }
             Ok(Err(e)) => {
                 last_err = Some(anyhow::anyhow!(e));
-                warn!("score attempt {} failed: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "score attempt {} failed: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
             Err(e) => {
                 last_err = Some(anyhow::anyhow!("timeout: {e}"));
-                warn!("score attempt {} timed out: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "score attempt {} timed out: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
         }
     }
@@ -384,45 +424,68 @@ async fn call_decide_with_retries(
     cfg: &BatchCfg,
     yes_key: &str,
     no_key: &str,
+    prompt_text: String,
 ) -> anyhow::Result<PromptResult> {
     let mut last_err: Option<anyhow::Error> = None;
 
     for attempt in 0..=cfg.openai_retries {
+        // decide() benötigt Context-Map als 3. Parameter:
+        let ctx: HashMap<String, JsonValue> = HashMap::new();
+
         let res = tokio::time::timeout(
             Duration::from_millis(cfg.openai_timeout_ms),
-            ai::decide(prompt_id, text),
+            ai::decide(prompt_id, text, &ctx),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(ans)) => {
-                // robustes Parsing: boolean aus raw/value ableiten; fallback = NO
-                let (boolean, route) = match (
-                    ans.boolean,
-                    ans.value.as_deref(),
-                    ans.raw.as_deref(),
-                ) {
-                    (Some(b), _, _) => (Some(b), if b { yes_key.to_string() } else { no_key.to_string() }),
-                    (None, Some(vs), _) => {
-                        if fuzzy_true(vs) { (Some(true), yes_key.to_string()) }
-                        else if fuzzy_false(vs) { (Some(false), no_key.to_string()) }
-                        else { (None, no_key.to_string()) }
-                    }
-                    (None, None, Some(raw)) => {
-                        if raw.to_ascii_lowercase().contains("\"answer\": true") {
+                // robustes Parsing: boolean/route aus boolean -> value (bool/str) -> raw
+                let (boolean, route) = if let Some(b) = ans.boolean {
+                    (
+                        Some(b),
+                        if b {
+                            yes_key.to_string()
+                        } else {
+                            no_key.to_string()
+                        },
+                    )
+                } else if let Some(v) = ans.value.clone() {
+                    if let Some(b) = v.as_bool() {
+                        (
+                            Some(b),
+                            if b {
+                                yes_key.to_string()
+                            } else {
+                                no_key.to_string()
+                            },
+                        )
+                    } else if let Some(s) = v.as_str() {
+                        if fuzzy_true(s) {
                             (Some(true), yes_key.to_string())
-                        } else if raw.to_ascii_lowercase().contains("\"answer\": false") {
+                        } else if fuzzy_false(s) {
                             (Some(false), no_key.to_string())
                         } else {
                             (None, no_key.to_string())
                         }
+                    } else {
+                        (None, no_key.to_string())
                     }
-                    _ => (None, no_key.to_string()),
+                } else {
+                    let raw_lc = ans.raw.to_ascii_lowercase();
+                    if raw_lc.contains("\"answer\": true") {
+                        (Some(true), yes_key.to_string())
+                    } else if raw_lc.contains("\"answer\": false") {
+                        (Some(false), no_key.to_string())
+                    } else {
+                        (None, no_key.to_string())
+                    }
                 };
 
                 return Ok(PromptResult {
                     prompt_id,
                     prompt_type: PromptType::DecisionPrompt,
+                    prompt_text,
                     value: None,
                     boolean,
                     route: Some(route),
@@ -435,11 +498,19 @@ async fn call_decide_with_retries(
             }
             Ok(Err(e)) => {
                 last_err = Some(anyhow::anyhow!(e));
-                warn!("decision attempt {} failed: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "decision attempt {} failed: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
             Err(e) => {
                 last_err = Some(anyhow::anyhow!("timeout: {e}"));
-                warn!("decision attempt {} timed out: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "decision attempt {} timed out: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
         }
     }
@@ -447,38 +518,22 @@ async fn call_decide_with_retries(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("decision failed")))
 }
 
-/// Einfache Mehrheits-/Heuristik-Konsolidierung für Scoring:
-/// - Ignoriere Einträge mit error
-/// - Mittelwert aus gültigen Scores; Quelle vom Score mit größter Quelle (oder erster)
-fn consolidate_scoring(v: Vec<ScoringResult>) -> ScoringResult {
-    let mut good: Vec<&ScoringResult> = v.iter().filter(|s| s.error.is_none()).collect();
-    if good.is_empty() {
-        return ScoringResult {
-            prompt_id: v.get(0).map(|s| s.prompt_id).unwrap_or_default(),
-            score: 0.0,
-            min: 0.0,
-            max: 1.0,
-            weight: 1.0,
-            source: None,
-            openai_raw: None,
-            error: Some("no valid scores".into()),
-        };
+/// Konsolidierung für Scoring: Durchschnitt der Ergebnisse.
+/// Gibt `None` zurück, wenn keine gültigen Ergebnisse vorhanden sind.
+fn consolidate_scoring(v: &Vec<ScoringResult>) -> Option<ScoringResult> {
+    if v.is_empty() {
+        return None;
     }
+    let sum: f32 = v.iter().map(|s| s.result).sum();
+    let avg = sum / (v.len() as f32);
+    let base = &v[0];
 
-    let sum: f32 = good.iter().map(|s| s.score).sum();
-    let avg = sum / (good.len() as f32);
-    let base = good[0];
-
-    ScoringResult {
+    Some(ScoringResult {
         prompt_id: base.prompt_id,
-        score: avg,
-        min: base.min,
-        max: base.max,
-        weight: base.weight,
+        result: avg,
         source: base.source.clone(),
-        openai_raw: base.openai_raw.clone(),
-        error: None,
-    }
+        explanation: base.explanation.clone(),
+    })
 }
 
 /// Konsolidierung für Decision (Mehrheit der Routen).
@@ -486,50 +541,75 @@ fn consolidate_decision(mut v: Vec<PromptResult>, yes: &str, no: &str) -> Prompt
     let pid = v.get(0).map(|r| r.prompt_id).unwrap_or_default();
 
     let mut yes_cnt = 0usize;
-    let mut no_cnt  = 0usize;
+    let mut no_cnt = 0usize;
 
     let mut any_source: Option<TextPosition> = None;
     let mut any_raw: Option<String> = None;
 
     for r in &v {
-        if any_source.is_none() { any_source = r.source.clone(); }
-        if any_raw.is_none()    { any_raw = r.openai_raw.clone(); }
+        if any_source.is_none() {
+            any_source = r.source.clone();
+        }
+        if any_raw.is_none() {
+            any_raw = Some(r.openai_raw.clone());
+        }
 
         if let Some(ref route) = r.route {
             let rnorm = route.trim().to_ascii_uppercase();
-            if rnorm == yes.to_ascii_uppercase() { yes_cnt += 1; }
-            else if rnorm == no.to_ascii_uppercase() { no_cnt += 1; }
+            if rnorm == yes.to_ascii_uppercase() {
+                yes_cnt += 1;
+            } else if rnorm == no.to_ascii_uppercase() {
+                no_cnt += 1;
+            }
         } else if let Some(b) = r.boolean {
-            if b { yes_cnt += 1; } else { no_cnt += 1; }
+            if b {
+                yes_cnt += 1;
+            } else {
+                no_cnt += 1;
+            }
         }
     }
 
-    let route = if yes_cnt >= no_cnt { yes.to_string() } else { no.to_string() };
-    let boolean = if yes_cnt == no_cnt { None } else { Some(yes_cnt > no_cnt) };
+    let route = if yes_cnt >= no_cnt {
+        yes.to_string()
+    } else {
+        no.to_string()
+    };
+    let boolean = if yes_cnt == no_cnt {
+        None
+    } else {
+        Some(yes_cnt > no_cnt)
+    };
 
     PromptResult {
         prompt_id: pid,
         prompt_type: PromptType::DecisionPrompt,
+        prompt_text: String::new(),
         value: None,
         boolean,
         route: Some(route),
         weight: None,
         source: any_source,
-        openai_raw: any_raw,
+        openai_raw: any_raw.unwrap_or_default(),
         json_key: None,
         error: None,
     }
 }
 
 fn fuzzy_true(s: &str) -> bool {
-    matches!(s.trim().to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "y" | "ja")
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "true" | "yes" | "1" | "y" | "ja"
+    )
 }
 
 fn fuzzy_false(s: &str) -> bool {
-    matches!(s.trim().to_ascii_lowercase().as_str(), "false" | "no" | "0" | "n" | "nein")
+    matches!(
+        s.trim().to_ascii_lowercase().as_str(),
+        "false" | "no" | "0" | "n" | "nein"
+    )
 }
 
-/// Kleiner Helper: Prompt-Text nur fürs Log holen; Fehler sind für die Pipeline nicht kritisch.
 async fn fetch_prompt_text_for_log(prompt_id: i32) -> String {
     match ai::fetch_prompt_text(prompt_id).await {
         Ok(s) => s,
@@ -540,10 +620,11 @@ async fn fetch_prompt_text_for_log(prompt_id: i32) -> String {
     }
 }
 
-/// Optionaler Convenience-Helper, falls `main.rs` eine Gesamtnote berechnen will.
-pub fn compute_overall_score(out: &RunOutcome) -> Option<f32> {
-    if out.scoring.is_empty() { return None; }
-    let sum: f32 = out.scoring.iter().filter_map(|s| if s.error.is_none() { Some(s.score) } else { None }).sum();
-    let n = out.scoring.iter().filter(|s| s.error.is_none()).count();
-    if n == 0 { None } else { Some(sum / (n as f32)) }
+/// Durchschnitt über konsolidierte Scores (so wird es in `main.rs` aufgerufen).
+pub fn compute_overall_score(scoring: &Vec<ScoringResult>) -> Option<f32> {
+    if scoring.is_empty() {
+        return None;
+    }
+    let sum: f32 = scoring.iter().map(|s| s.result).sum();
+    Some(sum / (scoring.len() as f32))
 }
