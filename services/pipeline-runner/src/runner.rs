@@ -42,7 +42,6 @@ pub async fn execute_with_pages(
         batch_cfg.openai_retries
     );
 
-    // Batches aus den Seiten bilden (seitennah & max_chars-begrenzt)
     let batches = make_batches(pages, batch_cfg.page_batch_size, batch_cfg.max_chars);
 
     let mut extraction_all: Vec<PromptResult> = Vec::new();
@@ -102,7 +101,7 @@ pub async fn execute_with_pages(
                 run_log.push(RunStep {
                     seq_no,
                     step_id: step.id.clone(),
-                    prompt_id: step.prompt_id, // i64
+                    prompt_id: step.prompt_id, // i64 in DTO
                     prompt_type: PromptType::ExtractionPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
@@ -127,12 +126,11 @@ pub async fn execute_with_pages(
                     let prompt_id_i32 = step.prompt_id as i32;
                     let cfg_clone = batch_cfg.clone();
                     async move {
-                        // ai::score liefert ScoringResult (mit prompt_id: i64)
                         call_score_with_retries(prompt_id_i32, &text, &cfg_clone)
                             .await
                             .unwrap_or_else(|e| ScoringResult {
-                                prompt_id: prompt_id_i32 as i64,
-                                // Fallback: false mit neutraler Quelle & Erklärung
+                                // FIX: prompt_id ist i32 im DTO
+                                prompt_id: prompt_id_i32,
                                 result: false,
                                 source: TextPosition {
                                     page: 0,
@@ -249,7 +247,6 @@ pub async fn execute_with_pages(
     })
 }
 
-/// Batching über Seiten: bündelt bis `page_batch_size` Seiten und höchstens `max_chars` Zeichen.
 fn make_batches(
     pages: &[(i32, String)],
     page_batch_size: usize,
@@ -385,7 +382,6 @@ async fn call_decide_with_retries(
     prompt_text_for_log: &str,
 ) -> anyhow::Result<PromptResult> {
     let mut last_err: Option<anyhow::Error> = None;
-    // leerer Context für decide()
     let state: HashMap<String, JsonValue> = HashMap::new();
 
     for attempt in 0..=cfg.openai_retries {
@@ -397,7 +393,6 @@ async fn call_decide_with_retries(
 
         match res {
             Ok(Ok(ans)) => {
-                // boolean/route robust ableiten (route bleibt Option<String>)
                 let (boolean, route_opt): (Option<bool>, Option<String>) =
                     match (ans.boolean, ans.route.clone(), ans.value.as_ref()) {
                         (Some(b), Some(r), _) => (Some(b), Some(r)),
@@ -443,7 +438,6 @@ async fn call_decide_with_retries(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("decision failed")))
 }
 
-/// Mehrheitsentscheidung für Scoring (boolean)
 fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
     if v.is_empty() {
         return ScoringResult {
@@ -468,7 +462,6 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
     }
 }
 
-/// Konsolidierung für Decision (Mehrheit der Routen).
 fn consolidate_decision(
     v: &Vec<PromptResult>,
     yes: &str,
