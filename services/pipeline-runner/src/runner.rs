@@ -1,20 +1,12 @@
+use anyhow::Result;
+use futures::{stream::FuturesUnordered, StreamExt};
 use serde_json::Value;
 use shared::{
     dto::{PipelineConfig, PromptResult, PromptType, RunStep, ScoringResult, TextPosition},
-    openai_client, // wir nutzen die vorhandenen shared-Aufrufe
+    openai_client,
 };
-use std::{collections::HashMap, sync::Arc, time::Duration};
-use tokio::{sync::Semaphore, time::timeout};
-use tracing::{error, info, warn};
-
-#[derive(Clone, Debug)]
-pub struct BatchCfg {
-    pub page_batch_size: usize,
-    pub max_parallel: usize,
-    pub max_chars: usize,
-    pub openai_timeout_ms: u64,
-    pub openai_retries: usize,
-}
+use std::{cmp::Ordering, collections::HashMap, sync::Arc, time::Duration};
+use tokio::{sync::Semaphore, time::sleep};
 
 #[derive(Default, Clone)]
 pub struct RunState {
@@ -30,249 +22,407 @@ pub struct RunOutcome {
     pub log: Vec<RunStep>,
 }
 
-pub fn compute_overall_score(results: &[ScoringResult]) -> Option<f32> {
-    if results.is_empty() {
-        return None;
-    }
-    let sum: f32 = results.iter().map(|r| if r.result { 1.0 } else { 0.0 }).sum();
-    Some(sum / results.len() as f32)
-}
-
-fn normalize_spaces(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut prev_ws = false;
-    for ch in s.chars() {
-        if ch.is_whitespace() {
-            if !prev_ws {
-                out.push(' ');
-                prev_ws = true;
-            }
-        } else {
-            out.push(ch);
-            prev_ws = false;
-        }
-    }
-    out.trim().to_lowercase()
-}
-
-fn make_batches(
-    pages: &[(i32, String)],
-    page_batch_size: usize,
+#[derive(Clone, Debug)]
+struct BatchCfg {
     max_chars: usize,
-) -> Vec<(Vec<i32>, String)> {
-    let mut out = Vec::new();
-    let mut cur_pages = Vec::new();
-    let mut cur_text = String::new();
+    max_parallel: usize,
+    retries: usize,
+    timeout: Duration,
+}
 
-    for (pno, ptxt) in pages {
-        let will_len = cur_text.len() + ptxt.len() + 2;
-        if !cur_pages.is_empty()
-            && (cur_pages.len() >= page_batch_size || will_len > max_chars)
-        {
-            out.push((cur_pages, cur_text));
-            cur_pages = Vec::new();
-            cur_text = String::new();
+impl Default for BatchCfg {
+    fn default() -> Self {
+        // Defaults defensiv wählen; können im Stack via ENV gesetzt werden
+        Self {
+            max_chars: read_env_usize("PIPELINE_MAX_CHARS", 20_000),
+            max_parallel: read_env_usize("PIPELINE_MAX_PARALLEL", 3),
+            retries: read_env_usize("PIPELINE_OPENAI_RETRIES", 2),
+            timeout: Duration::from_millis(
+                read_env_usize("PIPELINE_OPENAI_TIMEOUT_MS", 25_000) as u64
+            ),
         }
-        cur_pages.push(*pno);
-        if !cur_text.is_empty() {
-            cur_text.push_str("\n\n");
-        }
-        cur_text.push_str(ptxt);
     }
-    if !cur_pages.is_empty() {
-        out.push((cur_pages, cur_text));
+}
+
+fn read_env_usize(key: &str, default_: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(default_)
+}
+
+fn chunk_text_by_chars(s: &str, max_chars: usize) -> Vec<String> {
+    if s.len() <= max_chars {
+        return vec![s.to_string()];
+    }
+    let mut out = Vec::new();
+    let mut start = 0;
+    while start < s.len() {
+        let end = (start + max_chars).min(s.len());
+        out.push(s[start..end].to_string());
+        start = end;
     }
     out
 }
 
-async fn call_extract_once(
-    prompt_id: i32,
-    batch_text: &str,
-    timeout_ms: u64,
-) -> anyhow::Result<(Option<Value>, Option<TextPosition>, String)> {
-    // shared::openai_client::extract(prompt_id, input: &str)
-    let fut = openai_client::extract(prompt_id, batch_text);
-    match timeout(Duration::from_millis(timeout_ms), fut).await {
-        Err(_) => anyhow::bail!("openai timeout after {}ms", timeout_ms),
-        Ok(res) => match res {
-            Ok(ans) => Ok((ans.value, ans.source, ans.raw)),
-            Err(e) => Err(anyhow::anyhow!(e)),
-        },
-    }
+fn backoff(attempt: usize) -> Duration {
+    Duration::from_millis(300u64.saturating_mul(1u64 << attempt.min(4)))
 }
 
-async fn call_extract_retry_or_split(
+pub fn compute_overall_score(results: &[ScoringResult]) -> Option<f32> {
+    if results.is_empty() {
+        return None;
+    }
+    let sum: f32 = results
+        .iter()
+        .map(|r| if r.result { 1.0 } else { 0.0 })
+        .sum();
+    Some(sum / results.len() as f32)
+}
+
+fn normalize_decision(
+    res_json: &Value,
+    ans_route: Option<&str>,
+    ans_bool: Option<bool>,
+    yes: &str,
+    no: &str,
+) -> String {
+    let map_str = |s: &str| -> Option<String> {
+        if s == yes || s == no {
+            Some(s.to_string())
+        } else if s.eq_ignore_ascii_case("true") {
+            Some(yes.to_string())
+        } else if s.eq_ignore_ascii_case("false") {
+            Some(no.to_string())
+        } else {
+            None
+        }
+    };
+
+    if let Some(r) = res_json
+        .get("route")
+        .and_then(|v| v.as_str())
+        .and_then(|r| map_str(r))
+    {
+        return r;
+    }
+    if let Some(b) = res_json
+        .get("bool")
+        .and_then(|v| v.as_bool())
+        .or_else(|| res_json.get("boolean").and_then(|v| v.as_bool()))
+        .or_else(|| res_json.as_bool())
+    {
+        return if b { yes.to_string() } else { no.to_string() };
+    }
+    if let Some(r) = ans_route.and_then(|r| map_str(r)) {
+        return r;
+    }
+    if let Some(b) = ans_bool {
+        return if b { yes.to_string() } else { no.to_string() };
+    }
+    yes.to_string()
+}
+
+async fn run_extract_batched(
     prompt_id: i32,
-    pages: &[i32],
-    text: &str,
+    full_text: &str,
     cfg: &BatchCfg,
-    depth: usize,
-    acc: &mut Vec<PromptResult>,
     prompt_text_for_log: &str,
-) {
-    // Basis: mehrfach retryen
-    let mut attempt = 0usize;
-    loop {
-        match call_extract_once(prompt_id, text, cfg.openai_timeout_ms).await {
-            Ok((value, source, raw)) => {
-                // Erfolg
-                let pr = PromptResult {
-                    prompt_id,
-                    prompt_type: PromptType::ExtractionPrompt,
-                    prompt_text: prompt_text_for_log.to_string(),
-                    boolean: None,
-                    value,
-                    weight: None,
-                    route: None,
-                    json_key: None,
-                    source,
-                    error: None,
-                    openai_raw: raw,
-                };
-                acc.push(pr);
-                return;
-            }
-            Err(e) => {
-                // Fehlversuch
-                if attempt < cfg.openai_retries {
-                    let backoff = 600 * (attempt + 1);
-                    warn!(%e, attempt, backoff_ms=backoff, "extract failed; retrying");
-                    tokio::time::sleep(Duration::from_millis(backoff as u64)).await;
-                    attempt += 1;
-                    continue;
-                }
+) -> Vec<PromptResult> {
+    let chunks = chunk_text_by_chars(full_text, cfg.max_chars);
+    let sem = Arc::new(Semaphore::new(cfg.max_parallel));
+    let mut tasks = FuturesUnordered::new();
 
-                // Nach Retries: splitten, wenn sinnvoll
-                if pages.len() > 1 && depth < 4 {
-                    let mid = pages.len() / 2;
-                    let (left_pages, right_pages) = ( &pages[..mid], &pages[mid..] );
+    for (idx, chunk) in chunks.into_iter().enumerate() {
+        let permit = sem.clone().acquire_owned().await.expect("semaphore");
+        let chunk_clone = chunk.clone();
+        let cfg = cfg.clone();
+        tasks.push(tokio::spawn(async move {
+            let _guard = permit;
 
-                    // Text für linker/rechter Teil rekonstruieren (Heuristik: wir nehmen den vorhandenen Text und splitten grob halb)
-                    // Für Robustheit: lieber nach Seiten neu aufbauen (Anrufer hat die Volltexte der Seiten nicht hier vorliegen),
-                    // daher splitten wir anhand der Länge:
-                    let split_at = text.len() / 2;
-                    let (left_text, right_text) = text.split_at(split_at);
-
-                    call_extract_retry_or_split(prompt_id, left_pages, left_text, cfg, depth + 1, acc, prompt_text_for_log).await;
-                    call_extract_retry_or_split(prompt_id, right_pages, right_text, cfg, depth + 1, acc, prompt_text_for_log).await;
-                    return;
-                } else {
-                    // Finaler Fehler
-                    warn!(%e, depth, "extract failed; giving up for this batch");
-                    let pr = PromptResult {
-                        prompt_id,
-                        prompt_type: PromptType::ExtractionPrompt,
-                        prompt_text: prompt_text_for_log.to_string(),
-                        boolean: None,
-                        value: None,
-                        weight: None,
-                        route: None,
-                        json_key: None,
-                        source: None,
-                        error: Some(e.to_string()),
-                        openai_raw: String::new(),
-                    };
-                    acc.push(pr);
-                    return;
+            let mut last_err: Option<String> = None;
+            for attempt in 0..=cfg.retries {
+                match openai_client::extract(prompt_id, &chunk_clone).await {
+                    Ok(ans) => {
+                        return PromptResult {
+                            prompt_id,
+                            prompt_type: PromptType::ExtractionPrompt,
+                            prompt_text: prompt_text_for_log.to_string(),
+                            boolean: None,
+                            value: ans.value,
+                            weight: None,
+                            route: None,
+                            json_key: None,
+                            source: ans.source,
+                            error: None,
+                            openai_raw: ans.raw,
+                        };
+                    }
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                        sleep(backoff(attempt)).await;
+                    }
                 }
             }
-        }
-    }
-}
-
-async fn call_score_once(
-    prompt_id: i32,
-    batch_text: &str,
-    timeout_ms: u64,
-) -> anyhow::Result<ScoringResult> {
-    let fut = openai_client::score(prompt_id, batch_text);
-    match timeout(Duration::from_millis(timeout_ms), fut).await {
-        Err(_) => anyhow::bail!("openai timeout after {}ms", timeout_ms),
-        Ok(res) => res.map_err(|e| anyhow::anyhow!(e)),
-    }
-}
-
-async fn call_decide_once(
-    prompt_id: i32,
-    batch_text: &str,
-    timeout_ms: u64,
-    state_map: &HashMap<String, Value>,
-) -> anyhow::Result<PromptResult> {
-    let fut = openai_client::decide(prompt_id, batch_text, state_map);
-    match timeout(Duration::from_millis(timeout_ms), fut).await {
-        Err(_) => anyhow::bail!("openai timeout after {}ms", timeout_ms),
-        Ok(res) => match res {
-            Ok(ans) => Ok(PromptResult {
+            PromptResult {
                 prompt_id,
-                prompt_type: PromptType::DecisionPrompt,
-                prompt_text: openai_client::fetch_prompt_text(prompt_id).await.unwrap_or_default(),
-                boolean: ans.boolean,
-                value: ans.value,
-                weight: None,
-                route: ans.route.clone(),
-                json_key: None,
-                source: ans.source,
-                error: None,
-                openai_raw: ans.raw,
-            }),
-            Err(e) => Err(anyhow::anyhow!(e)),
-        },
-    }
-}
-
-fn consolidate_extractions(mut v: Vec<PromptResult>) -> PromptResult {
-    // Mehrheit auf dem stringifizierten "value"
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    let mut first_source_for: HashMap<String, TextPosition> = HashMap::new();
-
-    for pr in v.iter() {
-        if let Some(val) = pr.value.as_ref() {
-            let vs = if let Some(s) = val.as_str() {
-                normalize_spaces(s)
-            } else {
-                normalize_spaces(&val.to_string())
-            };
-            *counts.entry(vs.clone()).or_default() += 1;
-            if pr.source.is_some() && !first_source_for.contains_key(&vs) {
-                first_source_for.insert(vs, pr.source.clone().unwrap());
-            }
-        }
-    }
-
-    // Fallback, wenn alles fehlschlug
-    if counts.is_empty() {
-        // nimm den ersten (oder den mit längster openai_raw) als "repräsentativ"
-        v.sort_by_key(|p| std::cmp::Reverse(p.openai_raw.len()));
-        return v
-            .into_iter()
-            .next()
-            .unwrap_or(PromptResult {
-                prompt_id: 0,
                 prompt_type: PromptType::ExtractionPrompt,
-                prompt_text: String::new(),
+                prompt_text: prompt_text_for_log.to_string(),
                 boolean: None,
                 value: None,
                 weight: None,
                 route: None,
                 json_key: None,
                 source: None,
-                error: Some("no successful extraction batch".into()),
+                error: last_err.or(Some("extraction failed".to_string())),
                 openai_raw: String::new(),
-            });
+            }
+        }));
+        if idx + 1 >= cfg.max_parallel {
+        }
     }
 
-    let (best_norm, _) = counts
-        .into_iter()
-        .max_by_key(|(_, c)| *c)
-        .unwrap();
-
-    // Nehme das erste PromptResult, überschreibe aber value/source auf "konsolidiert"
-    let mut base = v.into_iter().find(|p| p.value.is_some()).unwrap();
-    base.value = Some(Value::String(best_norm.clone()));
-    if let Some(src) = first_source_for.get(&best_norm) {
-        base.source = Some(src.clone());
+    let mut out = Vec::new();
+    while let Some(joined) = tasks.next().await {
+        match joined {
+            Ok(pr) => out.push(pr),
+            Err(e) => out.push(PromptResult {
+                prompt_id,
+                prompt_type: PromptType::ExtractionPrompt,
+                prompt_text: prompt_text_for_log.to_string(),
+                boolean: None,
+                value: None,
+                weight: None,
+                route: None,
+                json_key: None,
+                source: None,
+                error: Some(format!("join error: {e}")),
+                openai_raw: String::new(),
+            }),
+        }
     }
-    base
+    out
+}
+
+async fn run_scoring_batched(
+    prompt_id: i32,
+    full_text: &str,
+    cfg: &BatchCfg,
+) -> Vec<ScoringResult> {
+    let chunks = chunk_text_by_chars(full_text, cfg.max_chars);
+    let sem = Arc::new(Semaphore::new(cfg.max_parallel));
+    let mut tasks = FuturesUnordered::new();
+
+    for chunk in chunks {
+        let permit = sem.clone().acquire_owned().await.expect("semaphore");
+        let cfg = cfg.clone();
+        tasks.push(tokio::spawn(async move {
+            let _guard = permit;
+            let mut last: Option<ScoringResult> = None;
+            for attempt in 0..=cfg.retries {
+                match openai_client::score(prompt_id, &chunk).await {
+                    Ok(sr) => return sr,
+                    Err(e) => {
+                        last = Some(ScoringResult {
+                            prompt_id,
+                            result: false,
+                            source: TextPosition {
+                                page: 0,
+                                bbox: [0.0, 0.0, 0.0, 0.0],
+                                quote: Some(String::new()),
+                            },
+                            explanation: e.to_string(),
+                        });
+                        sleep(backoff(attempt)).await;
+                    }
+                }
+            }
+            last.unwrap_or(ScoringResult {
+                prompt_id,
+                result: false,
+                source: TextPosition {
+                    page: 0,
+                    bbox: [0.0, 0.0, 0.0, 0.0],
+                    quote: Some(String::new()),
+                },
+                explanation: "scoring failed".to_string(),
+            })
+        }));
+    }
+
+    let mut out = Vec::new();
+    while let Some(joined) = tasks.next().await {
+        match joined {
+            Ok(sr) => out.push(sr),
+            Err(e) => out.push(ScoringResult {
+                prompt_id,
+                result: false,
+                source: TextPosition {
+                    page: 0,
+                    bbox: [0.0, 0.0, 0.0, 0.0],
+                    quote: Some(String::new()),
+                },
+                explanation: format!("join error: {e}"),
+            }),
+        }
+    }
+    out
+}
+
+async fn run_decision_batched(
+    prompt_id: i32,
+    full_text: &str,
+    cfg: &BatchCfg,
+    state_map: &HashMap<String, Value>,
+    prompt_text_for_log: &str,
+) -> Vec<PromptResult> {
+    let chunks = chunk_text_by_chars(full_text, cfg.max_chars);
+    let sem = Arc::new(Semaphore::new(cfg.max_parallel));
+    let mut tasks = FuturesUnordered::new();
+
+    for chunk in chunks {
+        let permit = sem.clone().acquire_owned().await.expect("semaphore");
+        let cfg = cfg.clone();
+        let state_map = state_map.clone();
+        let chunk_clone = chunk.clone();
+
+        tasks.push(tokio::spawn(async move {
+            let _guard = permit;
+            let mut last_err: Option<String> = None;
+            for attempt in 0..=cfg.retries {
+                match openai_client::decide(prompt_id, &chunk_clone, &state_map).await {
+                    Ok(ans) => {
+                        return PromptResult {
+                            prompt_id,
+                            prompt_type: PromptType::DecisionPrompt,
+                            prompt_text: prompt_text_for_log.to_string(),
+                            boolean: ans.boolean,
+                            value: ans.value,
+                            weight: None,
+                            route: ans.route.clone(),
+                            json_key: None,
+                            source: ans.source,
+                            error: None,
+                            openai_raw: ans.raw,
+                        }
+                    }
+                    Err(e) => {
+                        last_err = Some(e.to_string());
+                        sleep(backoff(attempt)).await;
+                    }
+                }
+            }
+            PromptResult {
+                prompt_id,
+                prompt_type: PromptType::DecisionPrompt,
+                prompt_text: prompt_text_for_log.to_string(),
+                boolean: None,
+                value: None,
+                weight: None,
+                route: None,
+                json_key: None,
+                source: None,
+                error: last_err.or(Some("decision failed".to_string())),
+                openai_raw: String::new(),
+            }
+        }));
+    }
+
+    let mut out = Vec::new();
+    while let Some(joined) = tasks.next().await {
+        match joined {
+            Ok(pr) => out.push(pr),
+            Err(e) => out.push(PromptResult {
+                prompt_id,
+                prompt_type: PromptType::DecisionPrompt,
+                prompt_text: prompt_text_for_log.to_string(),
+                boolean: None,
+                value: None,
+                weight: None,
+                route: None,
+                json_key: None,
+                source: None,
+                error: Some(format!("join error: {e}")),
+                openai_raw: String::new(),
+            }),
+        }
+    }
+    out
+}
+
+fn normalize_string_value(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        }
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        Value::Null => None,
+        _ => Some(v.to_string()),
+    }
+}
+
+fn consolidate_extraction(mut v: Vec<PromptResult>) -> PromptResult {
+    // Mehrheitsentscheid über "value" (case-insensitive, trimmed); bei Gleichstand: längstes Quote bevorzugen
+    let mut freq: HashMap<String, usize> = HashMap::new();
+    for pr in &v {
+        if let Some(val) = pr.value.as_ref().and_then(normalize_string_value) {
+            *freq.entry(val.to_lowercase()).or_insert(0) += 1;
+        }
+    }
+
+    v.sort_by(|a, b| {
+        let fa = a
+            .value
+            .as_ref()
+            .and_then(normalize_string_value)
+            .map(|s| *freq.get(&s.to_lowercase()).unwrap_or(&0))
+            .unwrap_or(0);
+        let fb = b
+            .value
+            .as_ref()
+            .and_then(normalize_string_value)
+            .map(|s| *freq.get(&s.to_lowercase()).unwrap_or(&0))
+            .unwrap_or(0);
+        match fb.cmp(&fa) {
+            Ordering::Equal => {
+                // 2) längeres Quote bevorzugen
+                let qa = a
+                    .source
+                    .as_ref()
+                    .and_then(|p| p.quote.as_ref())
+                    .map(|q| q.len())
+                    .unwrap_or(0);
+                let qb = b
+                    .source
+                    .as_ref()
+                    .and_then(|p| p.quote.as_ref())
+                    .map(|q| q.len())
+                    .unwrap_or(0);
+                qb.cmp(&qa)
+            }
+            other => other,
+        }
+    });
+
+    v.into_iter().next().unwrap_or_else(|| PromptResult {
+        prompt_id: 0,
+        prompt_type: PromptType::ExtractionPrompt,
+        prompt_text: String::new(),
+        boolean: None,
+        value: None,
+        weight: None,
+        route: None,
+        json_key: None,
+        source: None,
+        error: Some("no results".to_string()),
+        openai_raw: String::new(),
+    })
 }
 
 fn consolidate_scoring(v: Vec<ScoringResult>) -> ScoringResult {
@@ -280,21 +430,24 @@ fn consolidate_scoring(v: Vec<ScoringResult>) -> ScoringResult {
         return ScoringResult {
             prompt_id: 0,
             result: false,
-            source: TextPosition { page: 0, bbox: [0.0, 0.0, 0.0, 0.0], quote: Some(String::new()) },
-            explanation: "no scoring batches".to_string(),
+            source: TextPosition {
+                page: 0,
+                bbox: [0.0; 4],
+                quote: Some(String::new()),
+            },
+            explanation: "no results".to_string(),
         };
     }
-    let true_cnt = v.iter().filter(|r| r.result).count();
-    let false_cnt = v.len() - true_cnt;
-    let majority = true_cnt > false_cnt;
-
-    // Nehme den ersten als Basis, setze result auf Mehrheit
-    let mut base = v.into_iter().next().unwrap();
-    base.result = majority;
-    base
+    let trues = v.iter().filter(|s| s.result).count();
+    let falses = v.len() - trues;
+    let majority_true = trues >= falses;
+    v.into_iter()
+        .filter(|s| s.result == majority_true)
+        .max_by_key(|s| s.source.quote.as_ref().map(|q| q.len()).unwrap_or(0))
+        .unwrap()
 }
 
-fn consolidate_decision(mut v: Vec<PromptResult>, yes: &str, no: &str) -> PromptResult {
+fn consolidate_decision(mut v: Vec<PromptResult>, _yes: &str, _no: &str) -> PromptResult {
     if v.is_empty() {
         return PromptResult {
             prompt_id: 0,
@@ -303,40 +456,64 @@ fn consolidate_decision(mut v: Vec<PromptResult>, yes: &str, no: &str) -> Prompt
             boolean: None,
             value: None,
             weight: None,
-            route: Some(no.to_string()), // konservativ
+            route: None,
             json_key: None,
             source: None,
-            error: Some("no decision batches".into()),
+            error: Some("no decision results".to_string()),
             openai_raw: String::new(),
         };
     }
+    let mut true_cnt = 0usize;
+    let mut false_cnt = 0usize;
+    let mut route_freq: HashMap<String, usize> = HashMap::new();
 
-    let mut counts: HashMap<String, usize> = HashMap::new();
-    for pr in v.iter() {
-        if let Some(r) = pr.route.as_ref() {
-            let rr = normalize_spaces(r);
-            *counts.entry(rr).or_default() += 1;
+    for pr in &v {
+        if let Some(b) = pr.boolean {
+            if b {
+                true_cnt += 1
+            } else {
+                false_cnt += 1
+            }
+        }
+        if let Some(r) = &pr.route {
+            *route_freq.entry(r.clone()).or_insert(0) += 1;
         }
     }
 
-    let chosen = if counts.is_empty() {
-        no.to_string()
-    } else {
-        let (best, _) = counts.into_iter().max_by_key(|(_, c)| *c).unwrap();
-        best
-    };
+    v.sort_by(|a, b| {
+        let fa = a
+            .boolean
+            .map(|x| if x { true_cnt } else { false_cnt })
+            .unwrap_or(0);
+        let fb = b
+            .boolean
+            .map(|x| if x { true_cnt } else { false_cnt })
+            .unwrap_or(0);
+        match fb.cmp(&fa) {
+            Ordering::Equal => {
+                // 2) Route-Mehrheit
+                let ra = a
+                    .route
+                    .as_ref()
+                    .map(|r| *route_freq.get(r).unwrap_or(&0))
+                    .unwrap_or(0);
+                let rb = b
+                    .route
+                    .as_ref()
+                    .map(|r| *route_freq.get(r).unwrap_or(&0))
+                    .unwrap_or(0);
+                rb.cmp(&ra)
+            }
+            other => other,
+        }
+    });
 
-    // nimm den ersten als Basis, setze aber route auf die Mehrheit
-    let mut base = v.remove(0);
-    base.route = Some(chosen);
-    base
+    v.into_iter().next().unwrap()
 }
 
-pub async fn execute_with_pages(
-    cfg: &PipelineConfig,
-    pages: &[(i32, String)],
-    batch_cfg: &BatchCfg,
-) -> anyhow::Result<RunOutcome> {
+pub async fn execute(cfg: &PipelineConfig, pdf_text: &str) -> Result<RunOutcome> {
+    let batch_cfg = BatchCfg::default();
+
     let mut state = RunState {
         route_stack: vec!["ROOT".to_string()],
         route: Some("ROOT".to_string()),
@@ -347,13 +524,9 @@ pub async fn execute_with_pages(
     let mut scoring = Vec::new();
     let mut decision = Vec::new();
     let mut run_log: Vec<RunStep> = Vec::new();
-
-    // Batches vorbereiten (einmal, alle Steps nutzen dieselben Textbatches)
-    let batches = make_batches(pages, batch_cfg.page_batch_size, batch_cfg.max_chars);
-    info!(batches = batches.len(), "prepared text batches");
+    let mut seq: u32 = 1;
 
     for step in &cfg.steps {
-        // Route-Gate & Stack-Verhalten wie zuvor
         if step.route.is_none() || step.route.as_deref() == Some("ROOT") {
             while state.route_stack.len() > 1 {
                 state.route_stack.pop();
@@ -365,17 +538,19 @@ pub async fn execute_with_pages(
                     state.route_stack.truncate(pos + 1);
                     state.route = state.route_stack.last().cloned();
                 } else {
-                    // anderer Branch
                     continue;
                 }
             }
         }
 
+        // Gate
         if let Some(req) = &step.route {
             if state.route.as_deref() != Some(req.as_str()) {
                 continue;
             }
         }
+
+        // Inaktive Steps überspringen
         if !step.active {
             continue;
         }
@@ -386,118 +561,44 @@ pub async fn execute_with_pages(
                     .await
                     .unwrap_or_default();
 
-                // Parallel begrenzen
-                let sem = Arc::new(Semaphore::new(batch_cfg.max_parallel));
-                let mut tasks = futures::stream::FuturesUnordered::new();
+                // Baches ausführen
+                let parts =
+                    run_extract_batched(step.prompt_id as i32, pdf_text, &batch_cfg, &prompt_text)
+                        .await;
 
-                for (idx, (pnos, btxt)) in batches.iter().enumerate() {
-                    let permit = sem.clone().acquire_owned().await.unwrap();
-                    let prompt_text_cl = prompt_text.clone();
-                    let text_cl = btxt.clone();
-                    let pnos_cl = pnos.clone();
-                    let cfg_cl = batch_cfg.clone();
-                    tasks.push(tokio::spawn(async move {
-                        let _p = permit;
-                        let mut acc = Vec::new();
-                        call_extract_retry_or_split(
-                            step.prompt_id as i32,
-                            &pnos_cl,
-                            &text_cl,
-                            &cfg_cl,
-                            0,
-                            &mut acc,
-                            &prompt_text_cl,
-                        )
-                            .await;
-                        acc
-                    }));
-                    info!(step_id = %step.id, batch_index = idx, "spawned extract batch task");
-                }
+                let pr = consolidate_extraction(parts);
+                let pr_log = pr.clone();
 
-                let mut all_results: Vec<PromptResult> = Vec::new();
-                while let Some(res) = tasks.next().await {
-                    match res {
-                        Ok(mut prs) => all_results.append(&mut prs),
-                        Err(e) => warn!(%e, "extract batch join error"),
-                    }
-                }
-
-                let final_pr = consolidate_extractions(all_results.clone());
-                extraction.push(final_pr.clone());
-
-                // Log konsolidierten Schritt
+                extraction.push(pr);
                 run_log.push(RunStep {
-                    seq_no: 0, // wird oben beim Insert sequenziert
+                    seq_no: seq,
                     step_id: step.id.clone(),
                     prompt_id: step.prompt_id,
                     prompt_type: step.step_type.clone(),
                     decision_key: None,
                     route: state.route.clone(),
-                    result: serde_json::to_value(&final_pr)?,
+                    result: serde_json::to_value(&pr_log)?,
                 });
+                seq += 1;
             }
 
             PromptType::ScoringPrompt => {
-                let _prompt_text = openai_client::fetch_prompt_text(step.prompt_id as i32)
-                    .await
-                    .unwrap_or_default();
+                // Mehrere Batches scoren & konsolidieren
+                let scored = run_scoring_batched(step.prompt_id as i32, pdf_text, &batch_cfg).await;
+                let sr = consolidate_scoring(scored);
+                let sr_log = sr.clone();
 
-                let sem = Arc::new(Semaphore::new(batch_cfg.max_parallel));
-                let mut tasks = futures::stream::FuturesUnordered::new();
-
-                for (idx, (_pnos, btxt)) in batches.iter().enumerate() {
-                    let permit = sem.clone().acquire_owned().await.unwrap();
-                    let text_cl = btxt.clone();
-                    let cfg_cl = batch_cfg.clone();
-                    tasks.push(tokio::spawn(async move {
-                        let _p = permit;
-                        let mut attempt = 0usize;
-                        loop {
-                            match call_score_once(step.prompt_id as i32, &text_cl, cfg_cl.openai_timeout_ms).await {
-                                Ok(sr) => return sr,
-                                Err(e) => {
-                                    if attempt < cfg_cl.openai_retries {
-                                        let backoff = 600 * (attempt + 1);
-                                        warn!(%e, attempt, backoff_ms=backoff, "score failed; retrying");
-                                        tokio::time::sleep(Duration::from_millis(backoff as u64)).await;
-                                        attempt += 1;
-                                        continue;
-                                    } else {
-                                        warn!(%e, "score failed; marking false");
-                                        return ScoringResult {
-                                            prompt_id: step.prompt_id as i32,
-                                            result: false,
-                                            source: TextPosition { page: 0, bbox: [0.0,0.0,0.0,0.0], quote: Some(String::new()) },
-                                            explanation: e.to_string(),
-                                        };
-                                    }
-                                }
-                            }
-                        }
-                    }));
-                    info!(step_id = %step.id, batch_index = idx, "spawned score batch task");
-                }
-
-                let mut all_srs: Vec<ScoringResult> = Vec::new();
-                while let Some(sr) = tasks.next().await {
-                    match sr {
-                        Ok(s) => all_srs.push(s),
-                        Err(e) => warn!(%e, "score batch join error"),
-                    }
-                }
-
-                let final_sr = consolidate_scoring(all_srs.clone());
-                scoring.push(final_sr.clone());
-
+                scoring.push(sr);
                 run_log.push(RunStep {
-                    seq_no: 0,
+                    seq_no: seq,
                     step_id: step.id.clone(),
                     prompt_id: step.prompt_id,
                     prompt_type: step.step_type.clone(),
                     decision_key: None,
                     route: state.route.clone(),
-                    result: serde_json::to_value(&final_sr)?,
+                    result: serde_json::to_value(&sr_log)?,
                 });
+                seq += 1;
             }
 
             PromptType::DecisionPrompt => {
@@ -525,83 +626,41 @@ pub async fn execute_with_pages(
                     state_map.insert("result".into(), res.clone());
                 }
 
-                let sem = Arc::new(Semaphore::new(batch_cfg.max_parallel));
-                let mut tasks = futures::stream::FuturesUnordered::new();
-
-                for (idx, (_pnos, btxt)) in batches.iter().enumerate() {
-                    let permit = sem.clone().acquire_owned().await.unwrap();
-                    let text_cl = btxt.clone();
-                    let cfg_cl = batch_cfg.clone();
-                    let state_map_cl = state_map.clone();
-                    tasks.push(tokio::spawn(async move {
-                        let _p = permit;
-                        let mut attempt = 0usize;
-                        loop {
-                            match call_decide_once(step.prompt_id as i32, &text_cl, cfg_cl.openai_timeout_ms, &state_map_cl).await {
-                                Ok(pr) => return pr,
-                                Err(e) => {
-                                    if attempt < cfg_cl.openai_retries {
-                                        let backoff = 600 * (attempt + 1);
-                                        warn!(%e, attempt, backoff_ms=backoff, "decide failed; retrying");
-                                        tokio::time::sleep(Duration::from_millis(backoff as u64)).await;
-                                        attempt += 1;
-                                        continue;
-                                    } else {
-                                        warn!(%e, "decide failed; returning empty");
-                                        return PromptResult {
-                                            prompt_id: step.prompt_id as i32,
-                                            prompt_type: PromptType::DecisionPrompt,
-                                            prompt_text: prompt_text.clone(),
-                                            boolean: None,
-                                            value: None,
-                                            weight: None,
-                                            route: None,
-                                            json_key: None,
-                                            source: None,
-                                            error: Some(e.to_string()),
-                                            openai_raw: String::new(),
-                                        };
-                                    }
-                                }
-                            }
-                        }
-                    }));
-                    info!(step_id = %step.id, batch_index = idx, "spawned decision batch task");
-                }
-
-                let mut all_prs: Vec<PromptResult> = Vec::new();
-                while let Some(res) = tasks.next().await {
-                    match res {
-                        Ok(p) => all_prs.push(p),
-                        Err(e) => warn!(%e, "decision batch join error"),
-                    }
-                }
+                let parts = run_decision_batched(
+                    step.prompt_id as i32,
+                    pdf_text,
+                    &batch_cfg,
+                    &state_map,
+                    &prompt_text,
+                )
+                .await;
 
                 let yes = step.yes_key.as_deref().unwrap_or("yes");
-                let no  = step.no_key.as_deref().unwrap_or("no");
+                let no = step.no_key.as_deref().unwrap_or("no");
 
-                let final_pr = consolidate_decision(all_prs.clone(), yes, no);
-                let chosen_route = final_pr.route.clone();
+                let mut pr = consolidate_decision(parts, yes, no);
 
-                // Route-Stack aktualisieren
+                let res_json = serde_json::from_str::<Value>(&pr.openai_raw).unwrap_or(Value::Null);
+                let route_key =
+                    normalize_decision(&res_json, pr.route.as_deref(), pr.boolean, yes, no);
                 let exec_route = state.route.clone();
-                if let Some(r) = chosen_route.as_ref() {
-                    state.result = Some(serde_json::json!({ "route": r }));
-                    state.route_stack.push(r.clone());
-                    state.route = Some(r.clone());
-                }
+                state.result = Some(res_json);
+                state.route_stack.push(route_key.clone());
+                state.route = Some(route_key.clone());
+                pr.route = Some(route_key.clone());
 
-                decision.push(final_pr.clone());
-
+                let pr_log = pr.clone();
+                decision.push(pr);
                 run_log.push(RunStep {
-                    seq_no: 0,
+                    seq_no: seq,
                     step_id: step.id.clone(),
                     prompt_id: step.prompt_id,
                     prompt_type: step.step_type.clone(),
-                    decision_key: chosen_route.clone(),
+                    decision_key: Some(route_key),
                     route: exec_route,
-                    result: serde_json::to_value(&final_pr)?,
+                    result: serde_json::to_value(&pr_log)?,
                 });
+                seq += 1;
             }
         }
     }
