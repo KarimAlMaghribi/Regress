@@ -2838,6 +2838,7 @@ dependencies = [
  "actix-cors",
  "actix-web",
  "anyhow",
+ "futures",
  "openai",
  "rdkafka",
  "rhai",

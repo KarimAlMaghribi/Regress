@@ -5,7 +5,6 @@ use rdkafka::{
 };
 use serde_json::Value;
 use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult};
-use shared::kafka;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::time::Duration;
 use tokio::task::LocalSet;
@@ -15,10 +14,6 @@ use uuid::Uuid;
 
 mod runner;
 
-/* ------------------------------ Helpers ------------------------------ */
-
-/// Erzwingt `sslmode=disable`, wenn kein sslmode in der URL vorhanden ist.
-/// Damit verbindet sqlx garantiert im Klartext zu deiner DB (Patroni/HAProxy mit ssl=off).
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.contains("sslmode=") {
         url.to_string()
@@ -29,6 +24,13 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
+fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<T>().ok())
+        .unwrap_or(default)
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     let local = LocalSet::new();
@@ -36,26 +38,35 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn app_main() -> anyhow::Result<()> {
-    // Logging: Level via RUST_LOG (z.B. RUST_LOG=info,pipeline_runner=debug)
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
-    // Broker: MESSAGE_BROKER_URL bevorzugen, sonst BROKER, sonst kafka:9092
     let broker = std::env::var("MESSAGE_BROKER_URL")
         .or_else(|_| std::env::var("BROKER"))
         .unwrap_or_else(|_| "kafka:9092".into());
 
-    if let Err(e) = kafka::ensure_topics(&broker, &["pipeline-run", "pipeline-result"]).await {
+    if let Err(e) = shared::kafka::ensure_topics(&broker, &["pipeline-run", "pipeline-result"]).await {
         warn!(%e, "failed to ensure kafka topics (continuing)");
     }
 
-    // DATABASE_URL robust auf Klartext-Verbindung bringen
     let db_url_raw = std::env::var("DATABASE_URL").expect("DATABASE_URL missing");
     let db_url = ensure_sslmode_disable(&db_url_raw);
     if db_url != db_url_raw {
         warn!("DATABASE_URL had no sslmode – using '{}'", db_url);
     }
 
-    // Stabilen Connection-Pool aufbauen
+    let batch_cfg = runner::BatchCfg {
+        page_batch_size:      env_parse("PIPELINE_PAGE_BATCH_SIZE", 5usize),
+        max_parallel:         env_parse("PIPELINE_MAX_PARALLEL", 3usize),
+        max_chars:            env_parse("PIPELINE_MAX_CHARS", 20_000usize),
+        openai_timeout_ms:    env_parse("PIPELINE_OPENAI_TIMEOUT_MS", 25_000u64),
+        openai_retries:       env_parse("PIPELINE_OPENAI_RETRIES", 2usize),
+    };
+    info!(
+        "batch_cfg={{page_batch_size:{}, max_parallel:{}, max_chars:{}, timeout_ms:{}, retries:{}}}",
+        batch_cfg.page_batch_size, batch_cfg.max_parallel, batch_cfg.max_chars,
+        batch_cfg.openai_timeout_ms, batch_cfg.openai_retries
+    );
+
     let pool: PgPool = PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))
@@ -66,16 +77,13 @@ async fn app_main() -> anyhow::Result<()> {
             e
         })?;
 
-    // Optional: Extension für gen_random_uuid(), falls Tabellen Defaults nutzen
     if let Err(e) = sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
         .execute(&pool)
         .await
     {
-        // kein harter Fehler, nur Warnung – wir generieren unten die UUID ohnehin selbst
         warn!(%e, "CREATE EXTENSION pgcrypto failed (continuing)");
     }
 
-    // Tabellen sicherstellen (id ohne DEFAULT, da wir selbst eine UUID generieren)
     if let Err(e) = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipeline_runs (
             id UUID PRIMARY KEY,
@@ -115,22 +123,19 @@ async fn app_main() -> anyhow::Result<()> {
         return Err(e.into());
     }
 
-    // Kafka Consumer/Producer
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "pipeline-runner")
         .set("bootstrap.servers", &broker)
-        // "enable.auto.commit" ist standardmäßig true – passt hier
         .create()
         .map_err(|e| {
             error!(%e, "failed to create kafka consumer");
             e
         })?;
 
-    if let Err(e) = consumer.subscribe(&["pipeline-run"]) {
+    consumer.subscribe(&["pipeline-run"]).map_err(|e| {
         error!(%e, "failed to subscribe to topic pipeline-run");
-        // Ohne Subscription macht der Service keinen Sinn.
-        return Err(e.into());
-    }
+        e
+    })?;
 
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &broker)
@@ -142,7 +147,6 @@ async fn app_main() -> anyhow::Result<()> {
 
     info!("pipeline-runner started (broker={})", broker);
 
-    // Hauptloop: Events verarbeiten, Fehler *nie* nach oben propagieren
     loop {
         match consumer.recv().await {
             Err(e) => {
@@ -150,7 +154,6 @@ async fn app_main() -> anyhow::Result<()> {
                 continue;
             }
             Ok(m) => {
-                // payload parsen
                 let Some(Ok(payload)) = m.payload_view::<str>() else {
                     warn!("received message without valid UTF-8 payload");
                     continue;
@@ -196,28 +199,36 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
-                // OCR-Text laden (Fix: merged_pdf_id + seitenweise Aggregation)
-                let text: String = match sqlx::query_scalar::<_, Option<String>>(
+                let pages: Vec<(i32, String)> = match sqlx::query(
                     r#"
-                    SELECT COALESCE(string_agg(text, E'\n' ORDER BY page_no), '')
+                    SELECT page_no, text
                     FROM pdf_texts
                     WHERE merged_pdf_id = $1
+                    ORDER BY page_no
                     "#,
                 )
                     .bind(evt.pdf_id)
-                    .fetch_one(&pool)
+                    .fetch_all(&pool)
                     .await
                 {
-                    Ok(Some(s)) => s,
-                    Ok(None) => String::new(),
+                    Ok(rows) => rows
+                        .into_iter()
+                        .map(|r| {
+                            let pno: i32 = r.get("page_no");
+                            let txt: String = r.get("text");
+                            (pno, txt)
+                        })
+                        .collect(),
                     Err(e) => {
-                        warn!(%e, pdf_id = evt.pdf_id, "pdf_text not found");
+                        warn!(%e, pdf_id = evt.pdf_id, "pdf_texts not found");
                         continue;
                     }
                 };
-                info!(id = evt.pdf_id, len = text.len(), "loaded text from db");
 
-                // Run anlegen (UUID explizit vergeben, nicht von DB-DEFAULT abhängig)
+                let total_chars: usize = pages.iter().map(|(_, t)| t.len()).sum();
+                info!(id = evt.pdf_id, pages = pages.len(), total_chars, "loaded pages from db");
+
+                // Run anlegen (UUID explizit vergeben)
                 let run_id = Uuid::new_v4();
                 if let Err(e) = sqlx::query(
                     "INSERT INTO pipeline_runs (id, pipeline_id, pdf_id) VALUES ($1,$2,$3)",
@@ -232,12 +243,10 @@ async fn app_main() -> anyhow::Result<()> {
                     continue;
                 }
 
-                // Ausführen
-                match runner::execute(&cfg, &text).await {
+                match runner::execute_with_pages(&cfg, &pages, &batch_cfg).await {
                     Ok(outcome) => {
                         let overall = runner::compute_overall_score(&outcome.scoring);
 
-                        // kompaktes extracted-Map bauen
                         let mut extracted: std::collections::HashMap<String, serde_json::Value> =
                             std::collections::HashMap::new();
                         for p in &outcome.extraction {
@@ -246,11 +255,11 @@ async fn app_main() -> anyhow::Result<()> {
                             }
                         }
 
-                        // Steps loggen (best-effort)
+                        let mut seq: i32 = 1;
                         for rs in &outcome.log {
                             if let Err(e) = sqlx::query("INSERT INTO pipeline_run_steps (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, result) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
                                 .bind(run_id)
-                                .bind(rs.seq_no as i32)
+                                .bind(seq)
                                 .bind(&rs.step_id)
                                 .bind(rs.prompt_id as i32)
                                 .bind(rs.prompt_type.to_string())
@@ -260,11 +269,11 @@ async fn app_main() -> anyhow::Result<()> {
                                 .execute(&pool)
                                 .await
                             {
-                                warn!(%e, %run_id, seq=rs.seq_no, "failed to insert run step");
+                                warn!(%e, %run_id, seq, "failed to insert run step");
                             }
+                            seq += 1;
                         }
 
-                        // Run abschließen
                         if let Err(e) = sqlx::query(
                             "UPDATE pipeline_runs SET finished_at = now(), overall_score = $2, extracted = $3 WHERE id = $1",
                         )
@@ -277,7 +286,6 @@ async fn app_main() -> anyhow::Result<()> {
                             warn!(%e, %run_id, "failed to finalize pipeline_run row");
                         }
 
-                        // Ergebnis publizieren
                         let result = PipelineRunResult {
                             pdf_id: evt.pdf_id,
                             pipeline_id: evt.pipeline_id,
@@ -289,23 +297,17 @@ async fn app_main() -> anyhow::Result<()> {
                             log: outcome.log,
                         };
 
-                        match serde_json::to_string(&result) {
-                            Ok(payload) => {
-                                let _ = producer
-                                    .send(
-                                        FutureRecord::to("pipeline-result")
-                                            .payload(&payload)
-                                            .key(&()),
-                                        Duration::from_secs(0),
-                                    )
-                                    .await;
-                            }
-                            Err(e) => warn!(%e, "failed to serialize PipelineRunResult"),
+                        if let Ok(payload) = serde_json::to_string(&result) {
+                            let _ = producer
+                                .send(
+                                    FutureRecord::to("pipeline-result").payload(&payload).key(&()),
+                                    Duration::from_secs(0),
+                                )
+                                .await;
                         }
                     }
                     Err(e) => {
                         error!(%e, %run_id, "pipeline execution failed");
-                        // (Optional) Man könnte hier auch einen Fehlerstatus speichern.
                     }
                 }
             }
