@@ -8,8 +8,6 @@ use tracing::{info, warn};
 use shared::dto::{PipelineConfig, PromptResult, PromptType, RunStep, ScoringResult, TextPosition};
 use shared::openai_client as ai;
 
-/// Steuerung der Seitensplittung und der OpenAI-Parameter.
-/// Diese Felder werden in `main.rs` aus ENV gebaut.
 #[derive(Clone, Debug)]
 pub struct BatchCfg {
     pub page_batch_size: usize, // z.B. PIPELINE_PAGE_BATCH_SIZE
@@ -19,7 +17,6 @@ pub struct BatchCfg {
     pub openai_retries: usize,  // z.B. PIPELINE_OPENAI_RETRIES
 }
 
-/// Ergebnis eines kompletten Pipeline-Laufs – wird an `main.rs` zurückgegeben.
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
     pub extraction: Vec<PromptResult>,
@@ -28,8 +25,6 @@ pub struct RunOutcome {
     pub log: Vec<RunStep>,
 }
 
-/// Haupt-Einstieg: verarbeitet die übergebenen `pages` (Tupel aus (page_no, text))
-/// mit der gegebenen Pipeline-Konfiguration.
 pub async fn execute_with_pages(
     cfg: &PipelineConfig,
     pages: &[(i32, String)],
@@ -45,7 +40,6 @@ pub async fn execute_with_pages(
         batch_cfg.openai_retries
     );
 
-    // Vorab Batchbildung über alle Seiten:
     let batches = make_batches(pages, batch_cfg.page_batch_size, batch_cfg.max_chars);
 
     let mut extraction_all: Vec<PromptResult> = Vec::new();
@@ -104,12 +98,11 @@ pub async fn execute_with_pages(
                     .collect()
                     .await;
 
-                // Log pro Step
                 seq_no += 1;
                 run_log.push(RunStep {
                     seq_no,
                     step_id: step.id.clone(),
-                    prompt_id: step.prompt_id, // i64
+                    prompt_id: step.prompt_id,
                     prompt_type: PromptType::ExtractionPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
@@ -130,7 +123,6 @@ pub async fn execute_with_pages(
             PromptType::ScoringPrompt => {
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
-                // nur erfolgreiche Ergebnisse sammeln; bei Fehlern -> None
                 let futs = batches.iter().map(|(_pnos, text)| {
                     let text = text.clone();
                     let prompt_id = step.prompt_id as i32;
@@ -241,9 +233,9 @@ pub async fn execute_with_pages(
                 run_log.push(RunStep {
                     seq_no,
                     step_id: step.id.clone(),
-                    prompt_id: step.prompt_id, // i64
+                    prompt_id: step.prompt_id,
                     prompt_type: PromptType::DecisionPrompt,
-                    decision_key: None, // PipelineStep hat kein decision_key-Feld
+                    decision_key: None,
                     route: Some(current_route.clone()),
                     result: json!({
                         "prompt_text": prompt_text,
@@ -274,9 +266,6 @@ pub async fn execute_with_pages(
     })
 }
 
-/// -------- Helpers
-
-/// Batching über Seiten: bündelt bis `page_batch_size` Seiten und höchstens `max_chars` Zeichen.
 fn make_batches(
     pages: &[(i32, String)],
     page_batch_size: usize,
@@ -324,7 +313,6 @@ fn normalize_spaces(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// Extraktion mit Timeout + Retries (Splits übernimmt bereits das Batching).
 async fn call_extract_with_retries(
     prompt_id: i32,
     text: &str,
@@ -429,7 +417,6 @@ async fn call_decide_with_retries(
     let mut last_err: Option<anyhow::Error> = None;
 
     for attempt in 0..=cfg.openai_retries {
-        // decide() benötigt Context-Map als 3. Parameter:
         let ctx: HashMap<String, JsonValue> = HashMap::new();
 
         let res = tokio::time::timeout(
@@ -440,7 +427,6 @@ async fn call_decide_with_retries(
 
         match res {
             Ok(Ok(ans)) => {
-                // robustes Parsing: boolean/route aus boolean -> value (bool/str) -> raw
                 let (boolean, route) = if let Some(b) = ans.boolean {
                     (
                         Some(b),
@@ -518,8 +504,6 @@ async fn call_decide_with_retries(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("decision failed")))
 }
 
-/// Konsolidierung für Scoring: Durchschnitt der Ergebnisse.
-/// Gibt `None` zurück, wenn keine gültigen Ergebnisse vorhanden sind.
 fn consolidate_scoring(v: &Vec<ScoringResult>) -> Option<ScoringResult> {
     if v.is_empty() {
         return None;
@@ -536,7 +520,6 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> Option<ScoringResult> {
     })
 }
 
-/// Konsolidierung für Decision (Mehrheit der Routen).
 fn consolidate_decision(mut v: Vec<PromptResult>, yes: &str, no: &str) -> PromptResult {
     let pid = v.get(0).map(|r| r.prompt_id).unwrap_or_default();
 
@@ -620,7 +603,6 @@ async fn fetch_prompt_text_for_log(prompt_id: i32) -> String {
     }
 }
 
-/// Durchschnitt über konsolidierte Scores (so wird es in `main.rs` aufgerufen).
 pub fn compute_overall_score(scoring: &Vec<ScoringResult>) -> Option<f32> {
     if scoring.is_empty() {
         return None;
