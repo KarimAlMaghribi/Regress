@@ -2,5 +2,3 @@ ALTER TABLE prompts
     ADD COLUMN IF NOT EXISTS json_key TEXT;
 ALTER TABLE prompts
     ALTER COLUMN weight SET DEFAULT 1;
-
-ALTER TABLE prompts DROP COLUMN IF EXISTS json_key;
