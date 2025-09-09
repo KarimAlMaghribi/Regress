@@ -5,15 +5,24 @@ use rdkafka::consumer::{Consumer, StreamConsumer};
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::{ClientConfig, Message};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use shared::dto::{
     PdfUploaded, PipelineConfig, PipelineRunResult, PipelineStep, PromptType, RunStep,
 };
 use shared::kafka;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::time::Duration;
 use tracing::{error, info, warn};
 use uuid::Uuid;
+
+// ▼▼▼ Konsolidierung
+mod consolidation;
+use consolidation::{
+    ConsCfg, FieldType, CanonicalField, ScoreOutcome, DecisionOutcome,
+    consolidate_field, consolidate_scoring_weighted, consolidate_decision_generic,
+};
+// ▲▲▲
 
 #[derive(Clone)]
 struct AppState {
@@ -31,8 +40,6 @@ struct PipelineInfo {
 
 /* ------------------------------ Helpers ------------------------------ */
 
-/// Erzwingt `sslmode=disable`, falls in der URL nicht vorhanden.
-/// (Damit passt es zu deiner DB mit `ssl=off` hinter HAProxy.)
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.contains("sslmode=") {
         url.to_string()
@@ -41,6 +48,44 @@ fn ensure_sslmode_disable(url: &str) -> String {
     } else {
         format!("{url}?sslmode=disable")
     }
+}
+
+// einfacher Slug für Keys (aus Prompt-Text)
+fn slugify(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut last_us = false;
+    for ch in s.chars() {
+        let c = ch.to_ascii_lowercase();
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            last_us = false;
+        } else if !last_us {
+            out.push('_');
+            last_us = true;
+        }
+    }
+    out.trim_matches('_').to_string()
+}
+
+// Key-Ermittlung für ein Prompt-Ergebnis
+fn key_for_prompt<'a>(items: impl IntoIterator<Item = &'a shared::dto::PromptResult>, prompt_id: i64) -> String {
+    // 1) bevorzugt json_key wenn gesetzt
+    if let Some(k) = items
+        .into_iter()
+        .find(|r| r.prompt_id == prompt_id)
+        .and_then(|r| r.json_key.clone())
+    {
+        return slugify(&k);
+    }
+    // 2) fallback: prompt_text sluggified
+    let mut prompt_text = "prompt".to_string();
+    for r in items {
+        if r.prompt_id == prompt_id {
+            prompt_text = r.prompt_text.clone();
+            break;
+        }
+    }
+    format!("{}_{}", slugify(&prompt_text), prompt_id)
 }
 
 /* ------------------------------ DB Init ------------------------------ */
@@ -61,16 +106,12 @@ async fn init_db(pool: &PgPool) {
         error!(%e, "failed to create table pipelines");
     }
 
-    // Falls alte Deployments ohne Spalte liefen – harmless, IF NOT EXISTS.
     if let Err(e) = sqlx::query("ALTER TABLE pipelines ADD COLUMN IF NOT EXISTS config_json JSONB")
         .execute(pool)
         .await
     {
         error!(%e, "failed to ensure column config_json");
     }
-
-    // Pipeline-Run-Tabellen werden hier nicht angelegt; wir gehen davon aus,
-    // dass sie vom Runner angelegt/migriert sind.
 
     info!("ensured pipelines table exists");
 }
@@ -122,11 +163,7 @@ async fn list_pipelines(data: web::Data<AppState>) -> impl Responder {
                     let cfg: PipelineConfig =
                         serde_json::from_value(r.try_get::<serde_json::Value, _>("config_json").ok()?).ok()?;
                     let id: Uuid = r.try_get("id").ok()?;
-                    Some(PipelineInfo {
-                        id,
-                        name: cfg.name,
-                        steps: cfg.steps,
-                    })
+                    Some(PipelineInfo { id, name: cfg.name, steps: cfg.steps })
                 })
                 .collect();
             HttpResponse::Ok().json(res)
@@ -261,9 +298,7 @@ async fn get_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl 
 }
 
 #[derive(Deserialize)]
-struct NameInput {
-    name: String,
-}
+struct NameInput { name: String }
 
 async fn update_pipeline(
     data: web::Data<AppState>,
@@ -319,10 +354,7 @@ async fn delete_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> im
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StepInput {
-    index: usize,
-    step: PipelineStep,
-}
+struct StepInput { index: usize, step: PipelineStep }
 
 async fn add_step(
     data: web::Data<AppState>,
@@ -371,24 +403,12 @@ async fn update_step(
     let Some(step) = cfg.steps.iter_mut().find(|s| s.id == step_id) else {
         return HttpResponse::NotFound().finish();
     };
-    if let Some(v) = patch.step_type {
-        step.step_type = v;
-    }
-    if let Some(v) = patch.prompt_id {
-        step.prompt_id = v;
-    }
-    if let Some(v) = patch.route {
-        step.route = v;
-    }
-    if let Some(v) = patch.yes_key {
-        step.yes_key = v;
-    }
-    if let Some(v) = patch.no_key {
-        step.no_key = v;
-    }
-    if let Some(v) = patch.active {
-        step.active = v;
-    }
+    if let Some(v) = patch.step_type { step.step_type = v; }
+    if let Some(v) = patch.prompt_id { step.prompt_id = v; }
+    if let Some(v) = patch.route     { step.route = v; }
+    if let Some(v) = patch.yes_key   { step.yes_key = v; }
+    if let Some(v) = patch.no_key    { step.no_key = v; }
+    if let Some(v) = patch.active    { step.active = v; }
     match store_config(&data.pool, id, &cfg).await {
         Ok(()) => HttpResponse::NoContent().finish(),
         Err(e) => e,
@@ -413,9 +433,7 @@ async fn delete_step(data: web::Data<AppState>, path: web::Path<(Uuid, String)>)
 }
 
 #[derive(Deserialize)]
-struct OrderInput {
-    order: Vec<String>,
-}
+struct OrderInput { order: Vec<String> }
 
 async fn reorder_steps(
     data: web::Data<AppState>,
@@ -446,9 +464,7 @@ async fn reorder_steps(
 }
 
 #[derive(Deserialize)]
-struct RunInput {
-    file_id: i32,
-}
+struct RunInput { file_id: i32 }
 
 async fn run_pipeline(
     data: web::Data<AppState>,
@@ -474,23 +490,17 @@ async fn run_pipeline(
         .execute(&data.pool)
         .await;
 
-    let payload = match serde_json::to_string(&PdfUploaded {
-        pdf_id,
-        pipeline_id: *path,
-    }) {
+    let payload = match serde_json::to_string(&PdfUploaded { pdf_id, pipeline_id: *path }) {
         Ok(p) => p,
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
     let _ = data
         .producer
-        .send(
-            FutureRecord::to("pipeline-run").payload(&payload).key(&()),
-            Duration::from_secs(0),
-        )
+        .send(FutureRecord::to("pipeline-run").payload(&payload).key(&()), Duration::from_secs(0))
         .await;
 
-    // Auf "pipeline-result" für diesen PDF/Pipeline kurz warten (best-effort).
+    // Best-effort: auf "pipeline-result" warten und sofort konsolidieren + persistieren
     let group = format!("pipeline-api-{}", Uuid::new_v4());
     if let Ok(consumer) = ClientConfig::new()
         .set("group.id", &group)
@@ -499,13 +509,174 @@ async fn run_pipeline(
     {
         if let Err(e) = consumer.subscribe(&["pipeline-result"]) {
             warn!(%e, "failed to subscribe to pipeline-result");
-        } else if let Ok(Ok(msg)) =
-            tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await
-        {
+        } else if let Ok(Ok(msg)) = tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await {
             if let Some(Ok(p)) = msg.payload_view::<str>() {
-                if let Ok(res) = serde_json::from_str::<PipelineRunResult>(p) {
+                if let Ok(mut res) = serde_json::from_str::<PipelineRunResult>(p) {
                     if res.pdf_id == pdf_id && res.pipeline_id == *path {
-                        return HttpResponse::Ok().json(res);
+                        // ▼ Konsolidierung
+                        let cfgc = ConsCfg::default();
+
+                        // Extraction: je Prompt-ID genau 1 Feld
+                        let mut final_extracted: HashMap<String, serde_json::Value> = HashMap::new();
+                        let mut ids: BTreeSet<i64> = res.extraction.iter().map(|r| r.prompt_id).collect();
+                        for pid in ids.drain() {
+                            if let Some(canon) = consolidate_field(&res.extraction, pid as i32, FieldType::Auto, &cfgc) {
+                                let key = key_for_prompt(res.extraction.iter(), pid);
+                                final_extracted.insert(key, serde_json::to_value(canon).unwrap());
+                            }
+                        }
+
+                        // Scoring
+                        let mut final_scores: HashMap<String, serde_json::Value> = HashMap::new();
+                        let mut sids: BTreeSet<i32> = res.scoring.iter().map(|r| r.prompt_id).collect();
+                        for pid in sids.drain() {
+                            let outcome = consolidate_scoring_weighted(&res.scoring, pid, None, &cfgc);
+                            if let Some(o) = outcome {
+                                let key = format!("score_{}", pid);
+                                final_scores.insert(key, serde_json::to_value(o).unwrap());
+                            }
+                        }
+
+                        // Decision
+                        let mut final_decisions: HashMap<String, serde_json::Value> = HashMap::new();
+                        let mut dids: BTreeSet<i64> = res.decision.iter().map(|r| r.prompt_id).collect();
+                        for pid in dids.drain() {
+                            let outcome = consolidate_decision_generic(&res.decision, pid as i32, None, &cfgc);
+                            if let Some(o) = outcome {
+                                let key = format!("decision_{}", pid);
+                                final_decisions.insert(key, serde_json::to_value(o).unwrap());
+                            }
+                        }
+
+                        // Review-Flag
+                        let mut review_required = false;
+                        for v in final_extracted.values() {
+                            if let Some(c) = v.get("confidence").and_then(|x| x.as_f64()) {
+                                if c < cfgc.min_confidence as f64 { review_required = true; break; }
+                            }
+                        }
+                        if !review_required {
+                            for v in final_scores.values() {
+                                if let Some(c) = v.get("confidence").and_then(|x| x.as_f64()) {
+                                    if c < cfgc.min_confidence as f64 { review_required = true; break; }
+                                }
+                            }
+                        }
+                        if !review_required {
+                            for v in final_decisions.values() {
+                                if let Some(c) = v.get("confidence").and_then(|x| x.as_f64()) {
+                                    if c < cfgc.min_confidence as f64 { review_required = true; break; }
+                                }
+                            }
+                        }
+
+                        // ▼ Persistenz in pipeline_runs
+                        let ext_json  = serde_json::to_value(&final_extracted).unwrap_or(json!({}));
+                        let scor_json = serde_json::to_value(&final_scores).unwrap_or(json!({}));
+                        let dec_json  = serde_json::to_value(&final_decisions).unwrap_or(json!({}));
+
+                        // run_id robust aus der rohen Nachricht holen (falls im DTO nicht vorhanden)
+                        let run_id_opt: Option<Uuid> = serde_json::from_str::<serde_json::Value>(p)
+                            .ok()
+                            .and_then(|v| v.get("run_id").or_else(|| v.get("id")))
+                            .and_then(|x| x.as_str())
+                            .and_then(|s| Uuid::parse_str(s).ok());
+
+                        if let Some(run_id) = run_id_opt {
+                            // Versuch mit final_* Spalten
+                            let upd = sqlx::query(
+                                r#"UPDATE pipeline_runs
+                                   SET extracted = $1,
+                                       final_scores = $2,
+                                       final_decisions = $3,
+                                       review_required = $4,
+                                       updated_at = now()
+                                   WHERE id = $5"#,
+                            )
+                                .bind(&ext_json)
+                                .bind(&scor_json)
+                                .bind(&dec_json)
+                                .bind(review_required)
+                                .bind(run_id)
+                                .execute(&data.pool)
+                                .await;
+
+                            if upd.is_err() {
+                                // Fallback: nur extracted (falls Migration noch fehlt)
+                                let _ = sqlx::query(
+                                    r#"UPDATE pipeline_runs
+                                       SET extracted = $1, updated_at = now()
+                                       WHERE id = $2"#,
+                                )
+                                    .bind(&ext_json)
+                                    .bind(run_id)
+                                    .execute(&data.pool)
+                                    .await;
+                            }
+                        } else {
+                            // Fallback: jüngster Run für (pdf_id, pipeline_id)
+                            let upd = sqlx::query(
+                                r#"UPDATE pipeline_runs pr SET
+                                       extracted = $1,
+                                       final_scores = $2,
+                                       final_decisions = $3,
+                                       review_required = $4,
+                                       updated_at = now()
+                                   FROM (
+                                       SELECT id FROM pipeline_runs
+                                       WHERE pdf_id = $5 AND pipeline_id = $6
+                                       ORDER BY id DESC
+                                       LIMIT 1
+                                   ) last
+                                   WHERE pr.id = last.id"#,
+                            )
+                                .bind(&ext_json)
+                                .bind(&scor_json)
+                                .bind(&dec_json)
+                                .bind(review_required)
+                                .bind(res.pdf_id)
+                                .bind(res.pipeline_id)
+                                .execute(&data.pool)
+                                .await;
+
+                            if upd.is_err() {
+                                // Minimaler Fallback
+                                let _ = sqlx::query(
+                                    r#"UPDATE pipeline_runs pr SET
+                                           extracted = $1,
+                                           updated_at = now()
+                                       FROM (
+                                           SELECT id FROM pipeline_runs
+                                           WHERE pdf_id = $2 AND pipeline_id = $3
+                                           ORDER BY id DESC
+                                           LIMIT 1
+                                       ) last
+                                       WHERE pr.id = last.id"#,
+                                )
+                                    .bind(&ext_json)
+                                    .bind(res.pdf_id)
+                                    .bind(res.pipeline_id)
+                                    .execute(&data.pool)
+                                    .await;
+                            }
+                        }
+
+                        // Finale Antwort
+                        let final_payload = json!({
+                            "pdf_id": res.pdf_id,
+                            "pipeline_id": res.pipeline_id,
+                            "overall_score": res.overall_score,
+                            "extracted": final_extracted,
+                            "extraction": res.extraction,
+                            "scoring": res.scoring,
+                            "decision": res.decision,
+                            "log": res.log,
+                            "scores": final_scores,
+                            "decisions": final_decisions,
+                            "review_required": review_required
+                        });
+
+                        return HttpResponse::Ok().json(final_payload);
                     }
                 }
             }
@@ -529,19 +700,16 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    // Kafka Topics absichern (best-effort).
     let topics = ["pipeline-run", "pipeline-result"];
     if let Err(e) = kafka::ensure_topics(&settings.message_broker_url, &topics).await {
         warn!(%e, "failed to ensure kafka topics (continuing)");
     }
 
-    // DB-URL auf NoTLS zwingen, falls kein sslmode gesetzt wurde.
     let db_url = ensure_sslmode_disable(&settings.database_url);
     if db_url != settings.database_url {
         warn!("DATABASE_URL had no sslmode – using '{}'", db_url);
     }
 
-    // Robuster Pool-Aufbau ohne Panic.
     let pool = match PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))
@@ -568,11 +736,7 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    let state = AppState {
-        pool,
-        producer,
-        broker: settings.message_broker_url.clone(),
-    };
+    let state = AppState { pool, producer, broker: settings.message_broker_url.clone() };
 
     info!("starting pipeline-api on 0.0.0.0:8084");
 
