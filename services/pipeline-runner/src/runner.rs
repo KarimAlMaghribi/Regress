@@ -42,15 +42,12 @@ pub async fn execute_with_pages(
         batch_cfg.openai_retries
     );
 
-    let batches = make_batches(pages, batch_cfg.page_batch_size, batch_cfg.max_chars);
-
     let mut extraction_all: Vec<PromptResult> = Vec::new();
     let mut scoring_all: Vec<ScoringResult> = Vec::new();
     let mut decision_all: Vec<PromptResult> = Vec::new();
     let mut run_log: Vec<RunStep> = Vec::new();
 
     let mut current_route = "ROOT".to_string();
-    let mut _route_stack: Vec<String> = vec!["ROOT".to_string()];
     let mut seq_no: u32 = 1;
 
     for step in &cfg.steps {
@@ -67,7 +64,16 @@ pub async fn execute_with_pages(
             PromptType::ExtractionPrompt => {
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
-                let futs = batches.iter().map(|(_pnos, text)| {
+                // Extraction: strikt pro Seite (keine Überlappung; klare Zuordnung)
+                let batches = make_batches_step(
+                    pages,
+                    1,                  // page_batch_size
+                    batch_cfg.max_chars,
+                    1,                  // min_pages_for_batching
+                    0,                  // overlap_pages
+                );
+
+                let futs = batches.iter().map(|(_pnos, text, _cc)| {
                     let text = text.clone();
                     let prompt_id = step.prompt_id as i32;
                     let cfg_clone = batch_cfg.clone();
@@ -101,13 +107,13 @@ pub async fn execute_with_pages(
                 run_log.push(RunStep {
                     seq_no,
                     step_id: step.id.clone(),
-                    prompt_id: step.prompt_id, // i64 in DTO
+                    prompt_id: step.prompt_id,
                     prompt_type: PromptType::ExtractionPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
                     result: json!({
                         "prompt_text": prompt_text,
-                        "batches": batches.iter().map(|(pnos, _)| json!({ "pages": pnos })).collect::<Vec<_>>(),
+                        "batches": batches.iter().map(|(pnos, _t, cc)| json!({ "pages": pnos, "char_count": cc })).collect::<Vec<_>>(),
                         "results": results.iter().map(|r| json!({
                             "value": r.value,
                             "source": r.source,
@@ -121,7 +127,18 @@ pub async fn execute_with_pages(
             PromptType::ScoringPrompt => {
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
-                let futs = batches.iter().map(|(_pnos, text)| {
+                // Scoring: kleine Batches + optionale Text-Überlappung, erst ab N Seiten
+                let min_pages = env_usize("PIPELINE_MIN_PAGES_FOR_BATCHING", 4);
+                let overlap = env_usize("PIPELINE_OVERLAP_PAGES", 1);
+                let batches = make_batches_step(
+                    pages,
+                    batch_cfg.page_batch_size,
+                    batch_cfg.max_chars,
+                    min_pages,
+                    overlap,
+                );
+
+                let futs = batches.iter().map(|(_pnos, text, _cc)| {
                     let text = text.clone();
                     let prompt_id_i32 = step.prompt_id as i32;
                     let cfg_clone = batch_cfg.clone();
@@ -129,7 +146,6 @@ pub async fn execute_with_pages(
                         call_score_with_retries(prompt_id_i32, &text, &cfg_clone)
                             .await
                             .unwrap_or_else(|e| ScoringResult {
-                                // FIX: prompt_id ist i32 im DTO
                                 prompt_id: prompt_id_i32,
                                 result: false,
                                 source: TextPosition {
@@ -147,6 +163,7 @@ pub async fn execute_with_pages(
                     .collect()
                     .await;
 
+                // Mehrheitsentscheidung über Batches
                 let consolidated = consolidate_scoring(&batch_scores);
                 scoring_all.push(consolidated.clone());
 
@@ -159,7 +176,7 @@ pub async fn execute_with_pages(
                     route: Some(current_route.clone()),
                     result: json!({
                         "prompt_text": prompt_text,
-                        "batches": batches.len(),
+                        "batches": batches.iter().map(|(pnos, _t, cc)| json!({ "pages": pnos, "char_count": cc })).collect::<Vec<_>>(),
                         "scores": batch_scores,
                         "consolidated": consolidated
                     }),
@@ -172,7 +189,28 @@ pub async fn execute_with_pages(
                 let no_key  = step.no_key.clone().unwrap_or_else(|| "NO".into());
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
-                let futs = batches.iter().map(|(_pnos, text)| {
+                // Decision: versuche EINEN Batch (gesamtes Dokument). Fallback: dynamisch.
+                let single = make_batches_step(
+                    pages,
+                    usize::MAX,
+                    batch_cfg.max_chars,
+                    usize::MAX,
+                    0,
+                );
+                let min_pages = env_usize("PIPELINE_MIN_PAGES_FOR_BATCHING", 4);
+                let batches = if single.len() == 1 {
+                    single
+                } else {
+                    make_batches_step(
+                        pages,
+                        batch_cfg.page_batch_size,
+                        batch_cfg.max_chars,
+                        min_pages,
+                        0,
+                    )
+                };
+
+                let futs = batches.iter().map(|(_pnos, text, _cc)| {
                     let text = text.clone();
                     let prompt_id = step.prompt_id as i32;
                     let cfg_clone = batch_cfg.clone();
@@ -214,7 +252,6 @@ pub async fn execute_with_pages(
 
                 if let Some(ref r) = consolidated.route {
                     if r != &current_route {
-                        _route_stack.push(r.clone());
                         current_route = r.clone();
                     }
                 }
@@ -230,6 +267,7 @@ pub async fn execute_with_pages(
                     route: Some(current_route.clone()),
                     result: json!({
                         "prompt_text": prompt_text,
+                        "batches": batches.iter().map(|(pnos, _t, cc)| json!({ "pages": pnos, "char_count": cc })).collect::<Vec<_>>(),
                         "votes": decisions,
                         "consolidated": consolidated
                     }),
@@ -247,6 +285,7 @@ pub async fn execute_with_pages(
     })
 }
 
+#[allow(dead_code)]
 fn make_batches(
     pages: &[(i32, String)],
     page_batch_size: usize,
@@ -275,6 +314,102 @@ fn make_batches(
 
     if !cur_pages.is_empty() {
         out.push((cur_pages, cur));
+    }
+    out
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(default)
+}
+fn env_u64(key: &str, default: u64) -> u64 {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn make_batches_step(
+    pages: &[(i32, String)],
+    page_batch_size: usize,
+    max_chars: usize,
+    min_pages_for_batching: usize,
+    overlap_pages: usize,
+) -> Vec<(Vec<i32>, String, usize)> {
+    if pages.is_empty() {
+        return Vec::new();
+    }
+    let total_pages = pages.len();
+    if total_pages <= min_pages_for_batching || page_batch_size == usize::MAX {
+        let mut text = String::new();
+        for (_pno, t) in pages {
+            let normalized = normalize_spaces(t);
+            if !text.is_empty() {
+                text.push('\n');
+            }
+            text.push_str(&normalized);
+        }
+        let char_count = text.len();
+        if char_count > max_chars && max_chars > 0 && page_batch_size == usize::MAX {
+            return make_batches_step(pages, 6, max_chars, 4, 0);
+        }
+        let pnos: Vec<i32> = pages.iter().map(|(p, _)| *p).collect();
+        return vec![(pnos, text, char_count)];
+    }
+
+    let mut out: Vec<(Vec<i32>, String, usize)> = Vec::new();
+    let mut cur_pages: Vec<i32> = Vec::new();
+    let mut cur = String::new();
+    let mut cur_chars = 0usize;
+    let mut last_overlap: Vec<String> = Vec::new();
+
+    for (idx, (pno, txt)) in pages.iter().enumerate() {
+        let normalized = normalize_spaces(txt);
+        let needed = (if cur.is_empty() { 0 } else { 1 }) + normalized.len();
+        let would_exceed_chars = max_chars > 0 && (cur_chars + needed) > max_chars;
+        let would_exceed_pages = cur_pages.len() >= page_batch_size;
+
+        if would_exceed_chars || would_exceed_pages {
+            out.push((cur_pages.clone(), cur.clone(), cur_chars));
+            if overlap_pages > 0 {
+                last_overlap.clear();
+                let mut k = overlap_pages;
+                let mut i = idx;
+                while k > 0 && i > 0 {
+                    let (_pp, prev_txt) = &pages[i - 1];
+                    last_overlap.push(normalize_spaces(prev_txt));
+                    i -= 1;
+                    k -= 1;
+                }
+                last_overlap.reverse();
+            }
+            cur_pages.clear();
+            cur.clear();
+            cur_chars = 0;
+        }
+
+        if !last_overlap.is_empty() && cur.is_empty() {
+            for seg in &last_overlap {
+                if !cur.is_empty() {
+                    cur.push('\n');
+                }
+                cur.push_str(seg);
+            }
+            cur_chars = cur.len();
+            last_overlap.clear();
+        }
+
+        if !cur.is_empty() {
+            cur.push('\n');
+        }
+        cur.push_str(&normalized);
+        cur_pages.push(*pno);
+        cur_chars += needed;
+    }
+    if !cur_pages.is_empty() {
+        out.push((cur_pages, cur, cur_chars));
     }
     out
 }
@@ -329,12 +464,22 @@ async fn call_extract_with_retries(
             }
             Ok(Err(e)) => {
                 last_err = Some(anyhow::anyhow!(e));
-                warn!("extract attempt {} failed: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "extract attempt {} failed: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
             Err(e) => {
                 last_err = Some(anyhow::anyhow!("timeout: {e}"));
-                warn!("extract attempt {} timed out: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!("extract attempt {} timed out: {}", attempt + 1, e);
             }
+        }
+
+        if attempt < cfg.openai_retries {
+            let base = env_u64("PIPELINE_RETRY_BACKOFF_MS", 500);
+            let delay = (base.saturating_mul(1u64 << attempt)).min(5_000);
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
     }
 
@@ -356,17 +501,27 @@ async fn call_score_with_retries(
             .await;
 
         match res {
-            Ok(Ok(sr)) => {
-                return Ok(sr);
+            Ok(Ok(ans)) => {
+                return Ok(ans);
             }
             Ok(Err(e)) => {
                 last_err = Some(anyhow::anyhow!(e));
-                warn!("score attempt {} failed: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "score attempt {} failed: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
             Err(e) => {
                 last_err = Some(anyhow::anyhow!("timeout: {e}"));
-                warn!("score attempt {} timed out: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!("score attempt {} timed out: {}", attempt + 1, e);
             }
+        }
+
+        if attempt < cfg.openai_retries {
+            let base = env_u64("PIPELINE_RETRY_BACKOFF_MS", 500);
+            let delay = (base.saturating_mul(1u64 << attempt)).min(5_000);
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
     }
 
@@ -396,13 +551,13 @@ async fn call_decide_with_retries(
                 let (boolean, route_opt): (Option<bool>, Option<String>) =
                     match (ans.boolean, ans.route.clone(), ans.value.as_ref()) {
                         (Some(b), Some(r), _) => (Some(b), Some(r)),
-                        (Some(b), None, _) => (Some(b), Some(if b { yes_key.to_string() } else { no_key.to_string() })),
-                        (None, Some(r), _) => (None, Some(r)),
-                        (None, None, Some(v)) => {
+                        (Some(b), None,   _) => (Some(b), Some(if b { yes_key.to_string() } else { no_key.to_string() })),
+                        (None,    Some(r), _) => (None, Some(r)),
+                        (None,    None,   Some(v)) => {
                             if let Some(s) = v.as_str() {
-                                if fuzzy_true(s) { (Some(true), Some(yes_key.to_string())) }
-                                else if fuzzy_false(s) { (Some(false), Some(no_key.to_string())) }
-                                else { (None, Some(no_key.to_string())) }
+                                if fuzzy_true(s)      { (Some(true),  Some(yes_key.to_string())) }
+                                else if fuzzy_false(s){ (Some(false), Some(no_key.to_string())) }
+                                else                  { (None,        Some(no_key.to_string())) }
                             } else {
                                 (None, Some(no_key.to_string()))
                             }
@@ -426,12 +581,22 @@ async fn call_decide_with_retries(
             }
             Ok(Err(e)) => {
                 last_err = Some(anyhow::anyhow!(e));
-                warn!("decision attempt {} failed: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!(
+                    "decision attempt {} failed: {}",
+                    attempt + 1,
+                    last_err.as_ref().unwrap()
+                );
             }
             Err(e) => {
                 last_err = Some(anyhow::anyhow!("timeout: {e}"));
-                warn!("decision attempt {} timed out: {}", attempt + 1, last_err.as_ref().unwrap());
+                warn!("decision attempt {} timed out: {}", attempt + 1, e);
             }
+        }
+
+        if attempt < cfg.openai_retries {
+            let base = env_u64("PIPELINE_RETRY_BACKOFF_MS", 500);
+            let delay = (base.saturating_mul(1u64 << attempt)).min(5_000);
+            tokio::time::sleep(Duration::from_millis(delay)).await;
         }
     }
 
@@ -525,7 +690,6 @@ async fn fetch_prompt_text_for_log(prompt_id: i32) -> String {
     }
 }
 
-/// Anteil wahrer Scoring-Ergebnisse als Overall-Score (0..1).
 pub fn compute_overall_score(scoring: &Vec<ScoringResult>) -> Option<f32> {
     if scoring.is_empty() {
         return None;
