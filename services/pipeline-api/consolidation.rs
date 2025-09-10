@@ -4,19 +4,16 @@ use shared::dto::{PromptResult, ScoringResult, TextPosition};
 use std::collections::HashMap;
 
 /* -------------------- Konfiguration -------------------- */
-
 #[derive(Clone)]
 pub struct ConsCfg {
-    pub header_y: f32,               // y1 <= header_y => Header-Bonus
-    pub min_expl_len: usize,         // Mindestlänge Erklärung für Bonus
-    pub min_confidence: f32,         // Flag "review_required" im Caller
-
-    // Gewichte: Extraction = vote/page/header/pattern
+    pub header_y: f32,
+    pub min_expl_len: usize,
+    pub min_confidence: f32,
+    // Extraction: vote/page/header/pattern
     pub w_extraction: (f32, f32, f32, f32),
-    // Gewichte: Scoring/Decision = vote/near/header/expl
+    // Scoring/Decision: vote/near/header/expl
     pub w_scoring: (f32, f32, f32, f32),
 }
-
 impl Default for ConsCfg {
     fn default() -> Self {
         Self {
@@ -39,8 +36,7 @@ impl Default for ConsCfg {
     }
 }
 
-/* -------------------- Gemeinsame DTOs -------------------- */
-
+/* -------------------- DTOs -------------------- */
 #[derive(Copy, Clone)]
 pub enum FieldType { Auto, String, Number, Boolean }
 
@@ -65,18 +61,17 @@ pub struct ScoreOutcome {
 
 #[derive(Serialize, Clone)]
 pub struct DecisionOutcome {
-    pub route: String,            // z. B. "YES"/"NO" oder benannte Route
-    pub answer: Option<bool>,     // Some(true/false) wenn ableitbar, sonst None
+    pub route: String,
+    pub answer: Option<bool>,
     pub confidence: f32,
-    pub votes_yes: usize,         // bei Multi-Route ggf. ignorieren
+    pub votes_yes: usize,
     pub votes_no: usize,
     pub support: Vec<TextPosition>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub explanation: Option<String>,
 }
 
-/* -------------------- Extraction → ein Wert -------------------- */
-
+/* -------------------- Extraction → 1 Wert -------------------- */
 pub fn consolidate_field(
     results: &[PromptResult],
     prompt_id: i32,
@@ -133,9 +128,8 @@ fn consolidate_string(cands: &[(&PromptResult, JsonValue)], cfg: &ConsCfg) -> Op
             if q.to_lowercase().contains("kundennummer") { continue; }
         }
         let page   = r.source.as_ref().map(|s| s.page as u32).unwrap_or(9999);
-        let header = r.source.as_ref().map(|s| s.bbox[1])
-            .map(|y| if y <= cfg.header_y { 1.0 } else { 0.0 }).unwrap_or(0.0);
-        let ptrn = if re_ptrn.is_match(&s) { 1.0 } else { 0.0 };
+        let header = r.source.as_ref().map(|s| s.bbox[1]).map(|y| if y <= cfg.header_y { 1.0 } else { 0.0 }).unwrap_or(0.0);
+        let ptrn   = if re_ptrn.is_match(&s) { 1.0 } else { 0.0 };
 
         let e = buckets.entry(s.clone()).or_insert_with(|| Bucket {
             votes: 0, min_page: page, header, pattern: ptrn,
@@ -160,8 +154,7 @@ fn consolidate_number(cands: &[(&PromptResult, JsonValue)], cfg: &ConsCfg) -> Op
             let key = if decimals == 0 { format!("{}", num.round() as i128) } else { format!("{:.2}", num) };
 
             let page   = r.source.as_ref().map(|s| s.page as u32).unwrap_or(9999);
-            let header = r.source.as_ref().map(|s| s.bbox[1])
-                .map(|y| if y <= cfg.header_y { 1.0 } else { 0.0 }).unwrap_or(0.0);
+            let header = r.source.as_ref().map(|s| s.bbox[1]).map(|y| if y <= cfg.header_y { 1.0 } else { 0.0 }).unwrap_or(0.0);
 
             let e = buckets.entry(key.clone()).or_insert_with(|| Bucket {
                 votes: 0, min_page: page, header, pattern: 0.0,
@@ -182,8 +175,8 @@ fn consolidate_bool(cands: &[(&PromptResult, JsonValue)], cfg: &ConsCfg) -> Opti
         if let Some(b) = parse_bool(v) {
             let key = if b { "true" } else { "false" }.to_string();
             let page   = r.source.as_ref().map(|s| s.page as u32).unwrap_or(9999);
-            let header = r.source.as_ref().map(|s| s.bbox[1])
-                .map(|y| if y <= cfg.header_y { 1.0 } else { 0.0 }).unwrap_or(0.0);
+            let header = r.source.as_ref().map(|s| s.bbox[1]).map(|y| if y <= cfg.header_y { 1.0 } else { 0.0 }).unwrap_or(0.0);
+
             let e = buckets.entry(key).or_insert_with(|| Bucket {
                 votes: 0, min_page: page, header, pattern: 0.0,
                 sample: (r, JsonValue::Bool(b)),
@@ -204,7 +197,6 @@ struct Bucket<'a> {
     pattern: f32,
     sample: (&'a PromptResult, JsonValue),
 }
-
 fn select_extraction_winner<'a>(buckets: HashMap<String, Bucket<'a>>, cfg: &ConsCfg) -> Option<CanonicalField> {
     if buckets.is_empty() { return None; }
     let max_votes = buckets.values().map(|b| b.votes).max().unwrap_or(1) as f32;
@@ -237,8 +229,7 @@ fn select_extraction_winner<'a>(buckets: HashMap<String, Bucket<'a>>, cfg: &Cons
     None
 }
 
-/* -------------------- Scoring → ein Ja/Nein -------------------- */
-
+/* -------------------- Scoring → 1 Ja/Nein -------------------- */
 pub fn consolidate_scoring_weighted(
     results: &[ScoringResult],
     prompt_id: i32,
@@ -302,8 +293,7 @@ pub fn consolidate_scoring_weighted(
     })
 }
 
-/* -------------------- Decision → finale Route -------------------- */
-
+/* -------------------- Decision → 1 Route -------------------- */
 pub fn consolidate_decision_generic(
     decisions: &[PromptResult],
     prompt_id: i32,
@@ -344,7 +334,7 @@ pub fn consolidate_decision_generic(
     let mut winner: Option<(usize, f32, Vec<TextPosition>, Option<String>)> = None;
     let mut sum_all = 0.0f32;
 
-    for (route, (cnt, score, _sup, _expl)) in &buckets {
+    for (route, (_cnt, score, _sup, _expl)) in &buckets {
         sum_all += *score;
         if *score > best_score {
             best_score = *score;
@@ -356,8 +346,8 @@ pub fn consolidate_decision_generic(
     let (votes_cnt, score_winner, support, explanation) = winner.unwrap();
     let confidence = if sum_all <= 1e-6 { 1.0 } else { (score_winner / sum_all).clamp(0.0, 1.0) };
     let answer = match best_route.as_str() {
-        "YES" | "TRUE"  | "JA" | "Y" | "1" => Some(true),
-        "NO"  | "FALSE" | "NEIN"| "N" | "0" => Some(false),
+        "YES" | "TRUE" | "JA" | "Y" | "1" => Some(true),
+        "NO"  | "FALSE"| "NEIN"| "N" | "0" => Some(false),
         _ => None,
     };
 
@@ -373,7 +363,6 @@ pub fn consolidate_decision_generic(
 }
 
 /* -------------------- Helpers -------------------- */
-
 fn parse_bool(v: &JsonValue) -> Option<bool> {
     match v {
         JsonValue::Bool(b) => Some(*b),
@@ -386,7 +375,6 @@ fn parse_bool(v: &JsonValue) -> Option<bool> {
         _ => None,
     }
 }
-
 fn parse_f64(v: &JsonValue) -> Option<f64> {
     match v {
         JsonValue::Number(n) => n.as_f64(),
@@ -394,7 +382,6 @@ fn parse_f64(v: &JsonValue) -> Option<f64> {
         _ => None,
     }
 }
-
 fn parse_number_str(raw: &str) -> Option<f64> {
     let mut s = raw.trim().replace('\u{00A0}', "");
     for sym in ["€","$","£","CHF","EUR","USD"] { s = s.replace(sym, ""); }
@@ -420,7 +407,6 @@ fn parse_number_str(raw: &str) -> Option<f64> {
     if clean2.is_empty() { return None; }
     clean2.parse::<f64>().ok()
 }
-
 fn normalize_str(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_space = false;
@@ -435,12 +421,10 @@ fn normalize_str(s: &str) -> String {
     }
     out.trim().trim_matches(|c: char| matches!(c, '.' | ',' | ';')).to_string()
 }
-
 fn non_empty(s: &str) -> Option<String> {
     let t = s.trim();
     if t.is_empty() { None } else { Some(t.to_string()) }
 }
-
 fn env_f32(key: &str, default: f32) -> f32 {
     std::env::var(key).ok().and_then(|s| s.parse::<f32>().ok()).unwrap_or(default)
 }
