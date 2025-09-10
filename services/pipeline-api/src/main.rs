@@ -539,7 +539,7 @@ async fn run_pipeline(
             tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await
         {
             if let Some(Ok(p)) = msg.payload_view::<str>() {
-                if let Ok(mut res) = serde_json::from_str::<PipelineRunResult>(p) {
+                if let Ok(res) = serde_json::from_str::<PipelineRunResult>(p) {
                     if res.pdf_id == pdf_id && res.pipeline_id == *path {
                         // ▼ Konsolidierung
                         let cfgc = ConsCfg::default();
@@ -628,9 +628,12 @@ async fn run_pipeline(
                         // run_id robust aus der rohen Nachricht holen (falls im DTO nicht vorhanden)
                         let run_id_opt: Option<Uuid> = serde_json::from_str::<serde_json::Value>(p)
                             .ok()
-                            .and_then(|v| v.get("run_id").or_else(|| v.get("id")))
-                            .and_then(|x| x.as_str())
-                            .and_then(|s| Uuid::parse_str(s).ok());
+                            .and_then(|v| {
+                                v.get("run_id")
+                                    .or_else(|| v.get("id"))
+                                    .and_then(|x| x.as_str())
+                                    .and_then(|s| Uuid::parse_str(s).ok())
+                            });
 
                         if let Some(run_id) = run_id_opt {
                             // Versuch mit final_* Spalten

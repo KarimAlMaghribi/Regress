@@ -78,7 +78,7 @@ pub fn consolidate_field(
     field_type: FieldType,
     cfg: &ConsCfg,
 ) -> Option<CanonicalField> {
-    let mut cands: Vec<(&PromptResult, JsonValue)> = results
+    let cands: Vec<(&PromptResult, JsonValue)> = results
         .iter()
         .filter(|r| r.prompt_id == prompt_id)
         .filter(|r| r.error.is_none())
@@ -115,10 +115,16 @@ fn consolidate_string(cands: &[(&PromptResult, JsonValue)], cfg: &ConsCfg) -> Op
 
     let mut buckets: HashMap<String, Bucket> = HashMap::new();
     for (r, v) in cands {
-        let raw = match v {
+        // langlebiger Buffer für Nicht-String-Values
+        let mut raw_buf = String::new();
+        let raw: &str = match v {
             JsonValue::String(s) => s.as_str(),
-            other => other.to_string().as_str(),
+            other => {
+                raw_buf = other.to_string();
+                &raw_buf
+            }
         };
+
         let mut s = raw.trim().to_lowercase();
         s = re_ws.replace_all(&s, " ").to_string();
         s = s.trim_matches(|c: char| matches!(c, '.' | ',' | ';')).to_string();
@@ -273,11 +279,11 @@ pub fn consolidate_scoring_weighted(
     let (result, conf, support, explanation) = if score_true >= score_false {
         let sum = (score_true + score_false).max(1e-6);
         items_true.sort_by(|a,b| b.strength.total_cmp(&a.strength));
-        (true, (score_true / sum).clamp(0.0, 1.0), items_true, None)
+        (true, (score_true / sum).clamp(0.0, 1.0), items_true, None::<String>)
     } else {
         let sum = (score_true + score_false).max(1e-6);
         items_false.sort_by(|a,b| b.strength.total_cmp(&a.strength));
-        (false, (score_false / sum).clamp(0.0, 1.0), items_false, None)
+        (false, (score_false / sum).clamp(0.0, 1.0), items_false, None::<String>)
     };
 
     let best_expl = support.iter().find_map(|i| i.expl.clone());
