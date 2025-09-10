@@ -68,7 +68,7 @@ pub struct DecisionOutcome {
     pub route: String,            // z. B. "YES"/"NO" oder benannte Route
     pub answer: Option<bool>,     // Some(true/false) wenn ableitbar, sonst None
     pub confidence: f32,
-    pub votes_yes: usize,         // bei Multi-Route werden diese Felder 0 bleiben
+    pub votes_yes: usize,         // bei Multi-Route ggf. ignorieren
     pub votes_no: usize,
     pub support: Vec<TextPosition>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -85,7 +85,7 @@ pub fn consolidate_field(
 ) -> Option<CanonicalField> {
     let mut cands: Vec<(&PromptResult, JsonValue)> = results
         .iter()
-        .filter(|r| r.prompt_id == prompt_id as i64)
+        .filter(|r| r.prompt_id == prompt_id)
         .filter(|r| r.error.is_none())
         .filter_map(|r| r.value.clone().map(|v| (r, v)))
         .collect();
@@ -256,7 +256,7 @@ pub fn consolidate_scoring_weighted(
 
     let (wv, wn, wh, we) = cfg.w_scoring;
 
-    for r in results.iter().filter(|r| r.prompt_id == prompt_id as i32) {
+    for r in results.iter().filter(|r| r.prompt_id == prompt_id) {
         let page  = r.source.page as u32;
         let y1    = r.source.bbox[1];
         let near  = anchor_page.map(|a| 1.0 / (1.0 + (page as f32 - a as f32).abs())).unwrap_or(0.5);
@@ -302,12 +302,8 @@ pub fn consolidate_scoring_weighted(
     })
 }
 
-/* -------------------- Decision → eine finale Route -------------------- */
+/* -------------------- Decision → finale Route -------------------- */
 
-/// Generische Konsolidierung ohne bekannte YES/NO-Keys:
-/// - Gruppiert nach `route` (String, Uppercase).
-/// - Winner = Route mit den meisten (gewichteten) Stimmen.
-/// - `answer` wird gesetzt, wenn Route wie YES/NO/TRUE/FALSE aussieht.
 pub fn consolidate_decision_generic(
     decisions: &[PromptResult],
     prompt_id: i32,
@@ -318,7 +314,7 @@ pub fn consolidate_decision_generic(
     let mut buckets: BTreeMap<String, (usize, f32, Vec<TextPosition>, Option<String>)> = BTreeMap::new();
     let (wv, wn, wh, we) = cfg.w_scoring;
 
-    for r in decisions.iter().filter(|r| r.prompt_id == prompt_id as i64).filter(|r| r.error.is_none()) {
+    for r in decisions.iter().filter(|r| r.prompt_id == prompt_id).filter(|r| r.error.is_none()) {
         let route = r.route.clone().unwrap_or_else(|| "UNKNOWN".to_string()).trim().to_ascii_uppercase();
         let (page, y1) = match r.source.as_ref() {
             Some(s) => (s.page as u32, s.bbox[1]),
@@ -343,7 +339,6 @@ pub fn consolidate_decision_generic(
 
     if buckets.is_empty() { return None; }
 
-    // Winner nach gewichteter Summe
     let mut best_route = String::new();
     let mut best_score = -1.0f32;
     let mut winner: Option<(usize, f32, Vec<TextPosition>, Option<String>)> = None;
