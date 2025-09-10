@@ -2821,6 +2821,7 @@ dependencies = [
  "actix-cors",
  "actix-web",
  "rdkafka",
+ "regex",
  "serde",
  "serde_json",
  "shared",
