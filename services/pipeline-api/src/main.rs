@@ -67,13 +67,10 @@ fn slugify(s: &str) -> String {
 }
 
 // Key-Ermittlung für ein Prompt-Ergebnis (prompt_id ist i32)
-fn key_for_prompt<'a>(
-    items: impl IntoIterator<Item = &'a shared::dto::PromptResult>,
-    prompt_id: i32,
-) -> String {
+fn key_for_prompt(items: &[shared::dto::PromptResult], prompt_id: i32) -> String {
     // 1) bevorzugt json_key wenn gesetzt
     if let Some(k) = items
-        .into_iter()
+        .iter()
         .find(|r| r.prompt_id == prompt_id)
         .and_then(|r| r.json_key.clone())
     {
@@ -81,7 +78,7 @@ fn key_for_prompt<'a>(
     }
     // 2) fallback: prompt_text sluggified
     let mut prompt_text = "prompt".to_string();
-    for r in items {
+    for r in items.iter() {
         if r.prompt_id == prompt_id {
             prompt_text = r.prompt_text.clone();
             break;
@@ -556,7 +553,7 @@ async fn run_pipeline(
                             if let Some(canon) =
                                 consolidate_field(&res.extraction, pid, FieldType::Auto, &cfgc)
                             {
-                                let key = key_for_prompt(res.extraction.iter(), pid);
+                                let key = key_for_prompt(&res.extraction, pid);
                                 final_extracted
                                     .insert(key, serde_json::to_value(canon).unwrap());
                             }
