@@ -19,8 +19,7 @@ use uuid::Uuid;
 // ▼▼▼ Konsolidierung
 mod consolidation;
 use consolidation::{
-    ConsCfg, FieldType, CanonicalField, ScoreOutcome, DecisionOutcome,
-    consolidate_field, consolidate_scoring_weighted, consolidate_decision_generic,
+    ConsCfg, FieldType, consolidate_field, consolidate_scoring_weighted, consolidate_decision_generic,
 };
 // ▲▲▲
 
@@ -67,8 +66,11 @@ fn slugify(s: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
-// Key-Ermittlung für ein Prompt-Ergebnis
-fn key_for_prompt<'a>(items: impl IntoIterator<Item = &'a shared::dto::PromptResult>, prompt_id: i64) -> String {
+// Key-Ermittlung für ein Prompt-Ergebnis (prompt_id ist i32)
+fn key_for_prompt<'a>(
+    items: impl IntoIterator<Item = &'a shared::dto::PromptResult>,
+    prompt_id: i32,
+) -> String {
     // 1) bevorzugt json_key wenn gesetzt
     if let Some(k) = items
         .into_iter()
@@ -298,7 +300,9 @@ async fn get_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl 
 }
 
 #[derive(Deserialize)]
-struct NameInput { name: String }
+struct NameInput {
+    name: String,
+}
 
 async fn update_pipeline(
     data: web::Data<AppState>,
@@ -354,7 +358,10 @@ async fn delete_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> im
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct StepInput { index: usize, step: PipelineStep }
+struct StepInput {
+    index: usize,
+    step: PipelineStep,
+}
 
 async fn add_step(
     data: web::Data<AppState>,
@@ -403,12 +410,24 @@ async fn update_step(
     let Some(step) = cfg.steps.iter_mut().find(|s| s.id == step_id) else {
         return HttpResponse::NotFound().finish();
     };
-    if let Some(v) = patch.step_type { step.step_type = v; }
-    if let Some(v) = patch.prompt_id { step.prompt_id = v; }
-    if let Some(v) = patch.route     { step.route = v; }
-    if let Some(v) = patch.yes_key   { step.yes_key = v; }
-    if let Some(v) = patch.no_key    { step.no_key = v; }
-    if let Some(v) = patch.active    { step.active = v; }
+    if let Some(v) = patch.step_type {
+        step.step_type = v;
+    }
+    if let Some(v) = patch.prompt_id {
+        step.prompt_id = v;
+    }
+    if let Some(v) = patch.route {
+        step.route = v;
+    }
+    if let Some(v) = patch.yes_key {
+        step.yes_key = v;
+    }
+    if let Some(v) = patch.no_key {
+        step.no_key = v;
+    }
+    if let Some(v) = patch.active {
+        step.active = v;
+    }
     match store_config(&data.pool, id, &cfg).await {
         Ok(()) => HttpResponse::NoContent().finish(),
         Err(e) => e,
@@ -433,7 +452,9 @@ async fn delete_step(data: web::Data<AppState>, path: web::Path<(Uuid, String)>)
 }
 
 #[derive(Deserialize)]
-struct OrderInput { order: Vec<String> }
+struct OrderInput {
+    order: Vec<String>,
+}
 
 async fn reorder_steps(
     data: web::Data<AppState>,
@@ -464,7 +485,9 @@ async fn reorder_steps(
 }
 
 #[derive(Deserialize)]
-struct RunInput { file_id: i32 }
+struct RunInput {
+    file_id: i32,
+}
 
 async fn run_pipeline(
     data: web::Data<AppState>,
@@ -490,14 +513,20 @@ async fn run_pipeline(
         .execute(&data.pool)
         .await;
 
-    let payload = match serde_json::to_string(&PdfUploaded { pdf_id, pipeline_id: *path }) {
+    let payload = match serde_json::to_string(&PdfUploaded {
+        pdf_id,
+        pipeline_id: *path,
+    }) {
         Ok(p) => p,
         Err(_) => return HttpResponse::InternalServerError().finish(),
     };
 
     let _ = data
         .producer
-        .send(FutureRecord::to("pipeline-run").payload(&payload).key(&()), Duration::from_secs(0))
+        .send(
+            FutureRecord::to("pipeline-run").payload(&payload).key(&()),
+            Duration::from_secs(0),
+        )
         .await;
 
     // Best-effort: auf "pipeline-result" warten und sofort konsolidieren + persistieren
@@ -509,7 +538,9 @@ async fn run_pipeline(
     {
         if let Err(e) = consumer.subscribe(&["pipeline-result"]) {
             warn!(%e, "failed to subscribe to pipeline-result");
-        } else if let Ok(Ok(msg)) = tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await {
+        } else if let Ok(Ok(msg)) =
+            tokio::time::timeout(Duration::from_secs(30), consumer.recv()).await
+        {
             if let Some(Ok(p)) = msg.payload_view::<str>() {
                 if let Ok(mut res) = serde_json::from_str::<PipelineRunResult>(p) {
                     if res.pdf_id == pdf_id && res.pipeline_id == *path {
@@ -517,20 +548,27 @@ async fn run_pipeline(
                         let cfgc = ConsCfg::default();
 
                         // Extraction: je Prompt-ID genau 1 Feld
-                        let mut final_extracted: HashMap<String, serde_json::Value> = HashMap::new();
-                        let mut ids: BTreeSet<i64> = res.extraction.iter().map(|r| r.prompt_id).collect();
-                        for pid in ids.drain() {
-                            if let Some(canon) = consolidate_field(&res.extraction, pid as i32, FieldType::Auto, &cfgc) {
+                        let ids: BTreeSet<i32> =
+                            res.extraction.iter().map(|r| r.prompt_id).collect();
+                        let mut final_extracted: HashMap<String, serde_json::Value> =
+                            HashMap::new();
+                        for pid in ids.into_iter() {
+                            if let Some(canon) =
+                                consolidate_field(&res.extraction, pid, FieldType::Auto, &cfgc)
+                            {
                                 let key = key_for_prompt(res.extraction.iter(), pid);
-                                final_extracted.insert(key, serde_json::to_value(canon).unwrap());
+                                final_extracted
+                                    .insert(key, serde_json::to_value(canon).unwrap());
                             }
                         }
 
                         // Scoring
+                        let sids: BTreeSet<i32> =
+                            res.scoring.iter().map(|r| r.prompt_id).collect();
                         let mut final_scores: HashMap<String, serde_json::Value> = HashMap::new();
-                        let mut sids: BTreeSet<i32> = res.scoring.iter().map(|r| r.prompt_id).collect();
-                        for pid in sids.drain() {
-                            let outcome = consolidate_scoring_weighted(&res.scoring, pid, None, &cfgc);
+                        for pid in sids.into_iter() {
+                            let outcome =
+                                consolidate_scoring_weighted(&res.scoring, pid, None, &cfgc);
                             if let Some(o) = outcome {
                                 let key = format!("score_{}", pid);
                                 final_scores.insert(key, serde_json::to_value(o).unwrap());
@@ -538,10 +576,13 @@ async fn run_pipeline(
                         }
 
                         // Decision
-                        let mut final_decisions: HashMap<String, serde_json::Value> = HashMap::new();
-                        let mut dids: BTreeSet<i64> = res.decision.iter().map(|r| r.prompt_id).collect();
-                        for pid in dids.drain() {
-                            let outcome = consolidate_decision_generic(&res.decision, pid as i32, None, &cfgc);
+                        let dids: BTreeSet<i32> =
+                            res.decision.iter().map(|r| r.prompt_id).collect();
+                        let mut final_decisions: HashMap<String, serde_json::Value> =
+                            HashMap::new();
+                        for pid in dids.into_iter() {
+                            let outcome =
+                                consolidate_decision_generic(&res.decision, pid, None, &cfgc);
                             if let Some(o) = outcome {
                                 let key = format!("decision_{}", pid);
                                 final_decisions.insert(key, serde_json::to_value(o).unwrap());
@@ -552,28 +593,40 @@ async fn run_pipeline(
                         let mut review_required = false;
                         for v in final_extracted.values() {
                             if let Some(c) = v.get("confidence").and_then(|x| x.as_f64()) {
-                                if c < cfgc.min_confidence as f64 { review_required = true; break; }
+                                if c < cfgc.min_confidence as f64 {
+                                    review_required = true;
+                                    break;
+                                }
                             }
                         }
                         if !review_required {
                             for v in final_scores.values() {
                                 if let Some(c) = v.get("confidence").and_then(|x| x.as_f64()) {
-                                    if c < cfgc.min_confidence as f64 { review_required = true; break; }
+                                    if c < cfgc.min_confidence as f64 {
+                                        review_required = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
                         if !review_required {
                             for v in final_decisions.values() {
                                 if let Some(c) = v.get("confidence").and_then(|x| x.as_f64()) {
-                                    if c < cfgc.min_confidence as f64 { review_required = true; break; }
+                                    if c < cfgc.min_confidence as f64 {
+                                        review_required = true;
+                                        break;
+                                    }
                                 }
                             }
                         }
 
                         // ▼ Persistenz in pipeline_runs
-                        let ext_json  = serde_json::to_value(&final_extracted).unwrap_or(json!({}));
-                        let scor_json = serde_json::to_value(&final_scores).unwrap_or(json!({}));
-                        let dec_json  = serde_json::to_value(&final_decisions).unwrap_or(json!({}));
+                        let ext_json =
+                            serde_json::to_value(&final_extracted).unwrap_or(json!({}));
+                        let scor_json =
+                            serde_json::to_value(&final_scores).unwrap_or(json!({}));
+                        let dec_json =
+                            serde_json::to_value(&final_decisions).unwrap_or(json!({}));
 
                         // run_id robust aus der rohen Nachricht holen (falls im DTO nicht vorhanden)
                         let run_id_opt: Option<Uuid> = serde_json::from_str::<serde_json::Value>(p)
