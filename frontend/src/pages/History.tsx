@@ -16,6 +16,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import dayjs, { Dayjs } from 'dayjs';
 import { PipelineRunResult } from '../types/pipeline';
 import RunDetails from '../components/RunDetails';
+import { FinalSnapshotCell } from '../components/final/FinalPills';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -69,9 +70,12 @@ export default function History() {
     if (end && ts.isAfter(end, 'day')) return false;
     if (search) {
       const s = search.toLowerCase();
-      if (!(e.prompt?.toLowerCase().includes(s) || JSON.stringify(e.result).toLowerCase().includes(s))) {
-        return false;
-      }
+      const hay = [
+        e.prompt?.toLowerCase() ?? '',
+        JSON.stringify(e.result ?? {}).toLowerCase(),
+        String(e.pdfId),
+      ].join(' ');
+      if (!hay.includes(s)) return false;
     }
     return true;
   });
@@ -84,37 +88,56 @@ export default function History() {
   }, {});
   const groupKeys = Object.keys(groups).sort((a, b) => (a > b ? -1 : 1));
 
-  const baseCols: GridColDef[] = [
+  const baseCols: GridColDef<HistoryEntry>[] = [
     {
       field: 'timestamp',
       headerName: 'Zeit',
-      flex: 1,
+      flex: 0.6,
       valueGetter: p => dayjs(p.row.timestamp).format('HH:mm:ss'),
     },
     {
       field: 'prompt',
       headerName: 'Prompt',
-      flex: 1,
+      flex: 1.2,
       renderCell: params => (
-        <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>
-          {params.row.prompt && (
-            <Chip label={params.row.prompt} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
-          )}
-        </Box>
+          <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>
+            {params.row.prompt && (
+                <Chip label={params.row.prompt} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
+            )}
+          </Box>
       ),
     },
-    { field: 'status', headerName: 'Status', width: 110, valueGetter: p => p.row.status || '' },
+    {
+      field: 'status',
+      headerName: 'Status',
+      width: 120,
+      renderCell: params => (
+          <Chip
+              size="small"
+              label={params.row.status || ''}
+              color={params.row.status === 'completed' ? 'success' : params.row.status === 'running' ? 'warning' : 'default'}
+              variant="outlined"
+          />
+      ),
+    },
     {
       field: 'overall',
       headerName: 'Score',
-      flex: 0.8,
+      flex: 0.6,
       valueGetter: p => p.row.result?.overallScore?.toFixed(2) ?? '—',
     },
     {
       field: 'route',
       headerName: 'Route',
-      flex: 1,
-      valueGetter: p => p.row.result?.log?.map((l:any)=>l.route??'root').join(' › ') || '',
+      flex: 1.2,
+      valueGetter: p => p.row.result?.log?.map((l: any) => l.route ?? 'root').join(' › ') || '',
+    },
+    {
+      field: 'final',
+      headerName: 'Final',
+      flex: 1.6,
+      sortable: false,
+      renderCell: params => <FinalSnapshotCell result={params.row.result} />,
     },
     {
       field: 'actions',
@@ -122,59 +145,59 @@ export default function History() {
       sortable: false,
       width: 60,
       renderCell: params => (
-        <IconButton size="small" onClick={() => setSelected(params.row)}>
-          <VisibilityIcon fontSize="small" />
-        </IconButton>
+          <IconButton size="small" onClick={() => setSelected(params.row)}>
+            <VisibilityIcon fontSize="small" />
+          </IconButton>
       ),
     },
   ];
 
   return (
-    <Box>
-      <PageHeader title="History" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'History' }]} />
+      <Box>
+        <PageHeader title="History" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'History' }]} />
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2 }}>
-        <TextField label="Suche" size="small" value={search} onChange={e => setSearch(e.target.value)} />
-        <DatePicker label="Start" value={start} onChange={d => setStart(d)} slotProps={{ textField: { size: 'small' } }} />
-        <DatePicker label="Ende" value={end} onChange={d => setEnd(d)} slotProps={{ textField: { size: 'small' } }} />
-      </Stack>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2 }}>
+          <TextField label="Suche" size="small" value={search} onChange={e => setSearch(e.target.value)} />
+          <DatePicker label="Start" value={start} onChange={d => setStart(d)} slotProps={{ textField: { size: 'small' } }} />
+          <DatePicker label="Ende" value={end} onChange={d => setEnd(d)} slotProps={{ textField: { size: 'small' } }} />
+        </Stack>
 
-      {groupKeys.map(day => (
-        <Box key={day} sx={{ mb: 3 }}>
-          <Typography
-            variant="h6"
-            sx={{ position: 'sticky', top: 64, bgcolor: 'background.default', px: 1, py: 0.5, zIndex: 1 }}
-          >
-            {dayjs(day).format('LL')}
-          </Typography>
-          <Paper sx={{ mt: 1 }}>
-            <DataGrid
-              autoHeight
-              disableRowSelectionOnClick
-              rows={groups[day]}
-              columns={baseCols}
-              pageSizeOptions={[5, 10, 25]}
-              initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
-            />
-          </Paper>
-        </Box>
-      ))}
-
-      <Drawer anchor="right" open={!!selected} onClose={() => setSelected(null)}>
-        {selected && selected.result && (
-          <Box sx={{ width: { xs: 280, sm: 400 }, p: 2 }}>
-            {selected.prompt && (
-              <Typography variant="h6" gutterBottom>
-                {selected.prompt}
+        {groupKeys.map(day => (
+            <Box key={day} sx={{ mb: 3 }}>
+              <Typography
+                  variant="h6"
+                  sx={{ position: 'sticky', top: 64, bgcolor: 'background.default', px: 1, py: 0.5, zIndex: 1 }}
+              >
+                {dayjs(day).format('LL')}
               </Typography>
-            )}
-            <Typography variant="body2" gutterBottom>
-              {dayjs(selected.timestamp).format('LLL')}
-            </Typography>
-            <RunDetails run={selected.result} pdfUrl={selected.pdfUrl} />
-          </Box>
-        )}
-      </Drawer>
-    </Box>
+              <Paper sx={{ mt: 1 }}>
+                <DataGrid
+                    autoHeight
+                    disableRowSelectionOnClick
+                    rows={groups[day]}
+                    columns={baseCols}
+                    pageSizeOptions={[5, 10, 25]}
+                    initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
+                />
+              </Paper>
+            </Box>
+        ))}
+
+        <Drawer anchor="right" open={!!selected} onClose={() => setSelected(null)}>
+          {selected && selected.result && (
+              <Box sx={{ width: { xs: 320, sm: 440 }, p: 2 }}>
+                {selected.prompt && (
+                    <Typography variant="h6" gutterBottom>
+                      {selected.prompt}
+                    </Typography>
+                )}
+                <Typography variant="body2" gutterBottom>
+                  {dayjs(selected.timestamp).format('LLL')}
+                </Typography>
+                <RunDetails run={selected.result} pdfUrl={selected.pdfUrl} />
+              </Box>
+          )}
+        </Drawer>
+      </Box>
   );
 }
