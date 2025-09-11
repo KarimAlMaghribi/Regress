@@ -33,21 +33,20 @@ interface Entry {
 /** Reihenfolge-Präferenzen für prominente Final-Felder (sofern vorhanden) */
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
 
-const navigate = useNavigate();
-
 function getFinalExtractedKeys(e: Entry): string[] {
+
   const ex = (e.result as any)?.extracted || {};
   return Object.keys(ex);
 }
-
 function pickValueAndConf(obj: any, key: string): { value?: any; conf?: number } {
+
   const rec = obj?.[key];
   if (!rec) return {};
   return { value: rec.value, conf: typeof rec.confidence === 'number' ? rec.confidence : undefined };
 }
-
 /** Ermittelt eine geordnete Liste an Final-Feldern, die wir als Spalten zeigen (max 4) */
 function computeFinalKeyOrder(items: Entry[], maxCols = 4): string[] {
+
   const freq = new Map<string, number>();
   for (const it of items) {
     for (const k of getFinalExtractedKeys(it)) {
@@ -60,12 +59,13 @@ function computeFinalKeyOrder(items: Entry[], maxCols = 4): string[] {
   .filter(([k]) => !presentPreferred.includes(k))
   .sort((a, b) => b[1] - a[1])
   .map(([k]) => k);
-
   const ordered = [...presentPreferred, ...others].slice(0, maxCols);
+
   return ordered;
 }
-
 export default function Analyses() {
+  const navigate = useNavigate();
+
   const [tab, setTab] = useState(0);
   const [running, setRunning] = useState<Entry[]>([]);
   const [done, setDone] = useState<Entry[]>([]);
