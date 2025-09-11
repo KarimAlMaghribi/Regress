@@ -1,13 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Box,
-  Paper,
-  Typography,
-  IconButton,
-  Drawer,
-  Stack,
-  TextField,
-  Chip,
+  Box, Paper, Typography, IconButton, Drawer, Stack, TextField, Chip,
 } from '@mui/material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -17,6 +10,17 @@ import dayjs, { Dayjs } from 'dayjs';
 import { PipelineRunResult } from '../types/pipeline';
 import RunDetails from '../components/RunDetails';
 import { FinalSnapshotCell } from '../components/final/FinalPills';
+
+declare global {
+  interface Window { __ENV__?: any }
+}
+
+const RUNTIME = (window as any).__ENV__ || {};
+const BASE_HIST = RUNTIME.HISTORY_URL || import.meta.env.VITE_HISTORY_URL || '/hist';
+const WS_URL =
+    RUNTIME.HISTORY_WS ||
+    import.meta.env.VITE_HISTORY_WS ||
+    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/histws`;
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -47,48 +51,97 @@ export default function History() {
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
 
+  // --- Initial REST Load (running + completed) ---
   useEffect(() => {
-    const url = import.meta.env.VITE_HISTORY_WS || 'ws://localhost:8090';
-    const socket = new WebSocket(url);
-    socket.addEventListener('error', e => {
-      console.error('history ws', e);
-    });
+    const load = async () => {
+      try {
+        const [rRunning, rCompleted] = await Promise.all([
+          fetch(`${BASE_HIST}/analyses?status=running`).then(r => r.json()),
+          fetch(`${BASE_HIST}/analyses?status=completed`).then(r => r.json()),
+        ]);
+        const initial = [...rRunning, ...rCompleted].map(normalizeEntry);
+        // newest first
+        initial.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
+        setEntries(initial);
+
+        // pdfId aus Query übernehmen und Drawer öffnen
+        const pdfIdParam = new URLSearchParams(location.search).get('pdfId');
+        if (pdfIdParam) {
+          const wanted = initial.find(e => String(e.pdfId) === pdfIdParam);
+          if (wanted) setSelected(wanted);
+        }
+      } catch (e) {
+        console.error('history initial load failed', e);
+      }
+    };
+    load();
+  }, []);
+
+  // --- Live-Updates über WebSocket (weiterhin aktiv) ---
+  useEffect(() => {
+    const socket = new WebSocket(WS_URL);
+    socket.addEventListener('error', e => console.error('history ws', e));
     socket.addEventListener('message', ev => {
-      const msg = JSON.parse(ev.data);
-      if (msg.type === 'history') {
-        setEntries(msg.data.map((e: any) => normalizeEntry(e)));
-      } else if (msg.type === 'update') {
-        setEntries(e => [normalizeEntry(msg.data), ...e]);
+      try {
+        const msg = JSON.parse(ev.data);
+        if (msg.type === 'history' && Array.isArray(msg.data)) {
+          const bulk = msg.data.map((e: any) => normalizeEntry(e));
+          setEntries(prev => {
+            const map = new Map<number, HistoryEntry>();
+            [...prev, ...bulk].forEach(x => map.set(x.id, x));
+            const merged = Array.from(map.values());
+            merged.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
+            return merged;
+          });
+        } else if (msg.type === 'update' && msg.data) {
+          const one = normalizeEntry(msg.data);
+          setEntries(prev => {
+            const map = new Map<number, HistoryEntry>();
+            prev.forEach(x => map.set(x.id, x));
+            map.set(one.id, one);
+            const merged = Array.from(map.values());
+            merged.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
+            return merged;
+          });
+          // Falls der Update-Eintrag dem pdfId-Param entspricht und wir noch nichts selektiert haben
+          const pdfIdParam = new URLSearchParams(location.search).get('pdfId');
+          if (pdfIdParam && String(one.pdfId) === pdfIdParam && !selected) {
+            setSelected(one);
+          }
+        }
+      } catch (e) {
+        console.error('history ws parse', e);
       }
     });
     return () => socket.close();
-  }, []);
+  }, [selected]);
 
-  const filtered = entries.filter(e => {
-    const ts = dayjs(e.timestamp);
-    if (start && ts.isBefore(start, 'day')) return false;
-    if (end && ts.isAfter(end, 'day')) return false;
-    if (search) {
-      const s = search.toLowerCase();
-      const hay = [
-        e.prompt?.toLowerCase() ?? '',
-        JSON.stringify(e.result ?? {}).toLowerCase(),
-        String(e.pdfId),
-      ].join(' ');
-      if (!hay.includes(s)) return false;
-    }
-    return true;
-  });
+  const filtered = useMemo(() => {
+    return entries.filter(e => {
+      const ts = dayjs(e.timestamp);
+      if (start && ts.isBefore(start, 'day')) return false;
+      if (end && ts.isAfter(end, 'day')) return false;
+      if (search) {
+        const s = search.toLowerCase();
+        const hay = [
+          e.prompt?.toLowerCase() ?? '',
+          JSON.stringify(e.result ?? {}).toLowerCase(),
+          String(e.pdfId),
+        ].join(' ');
+        if (!hay.includes(s)) return false;
+      }
+      return true;
+    });
+  }, [entries, start, end, search]);
 
   const groups = filtered.reduce<Record<string, HistoryEntry[]>>((acc, cur) => {
     const day = dayjs(cur.timestamp).format('YYYY-MM-DD');
-    acc[day] = acc[day] || [];
-    acc[day].push(cur);
+    (acc[day] ||= []).push(cur);
     return acc;
   }, {});
   const groupKeys = Object.keys(groups).sort((a, b) => (a > b ? -1 : 1));
 
-  const baseCols: GridColDef<HistoryEntry>[] = [
+  const cols: GridColDef<HistoryEntry>[] = [
     {
       field: 'timestamp',
       headerName: 'Zeit',
@@ -175,7 +228,7 @@ export default function History() {
                     autoHeight
                     disableRowSelectionOnClick
                     rows={groups[day]}
-                    columns={baseCols}
+                    columns={cols}
                     pageSizeOptions={[5, 10, 25]}
                     initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
                 />
