@@ -12,6 +12,7 @@ import { PipelineRunResult } from '../types/pipeline';
 import RunDetails from '../components/RunDetails';
 import { FinalSnapshotCell } from '../components/final/FinalPills';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import { useNavigate } from 'react-router-dom';
 
 declare global {
   interface Window { __ENV__?: any }
