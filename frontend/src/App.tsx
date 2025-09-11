@@ -13,6 +13,7 @@ import ColorModeProvider from './ColorModeContext';
 import { PromptNotificationProvider } from './context/PromptNotifications';
 import { AnimatePresence, motion } from 'framer-motion';
 import PipelineList from './pages/PipelineList';
+import RunDetailsPage from "./pages/RunDetailsPage";
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ function AnimatedRoutes() {
     <AnimatePresence mode="wait">
       <Routes location={location} key={location.pathname}>
         <Route path="/" element={<PageFade><Dashboard /></PageFade>} />
+        <Route path="/runs/:id" element={<RunDetailsPage/>} />
         <Route path="/upload" element={<PageFade><Upload /></PageFade>} />
         <Route path="/prompts" element={<PageFade><Prompts /></PageFade>} />
         <Route path="/pipeline" element={<PageFade><PipelineList /></PageFade>} />

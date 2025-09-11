@@ -32,6 +32,8 @@ interface Entry {
 /** Reihenfolge-Präferenzen für prominente Final-Felder (sofern vorhanden) */
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
 
+const navigate = useNavigate();
+
 function getFinalExtractedKeys(e: Entry): string[] {
   const ex = (e.result as any)?.extracted || {};
   return Object.keys(ex);
@@ -237,7 +239,7 @@ export default function Analyses() {
                         <TableCell align="right">
                           <IconButton
                               size="small"
-                              onClick={(ev) => { ev.stopPropagation(); setSelected(e); }}
+                              onClick={(ev) => { ev.stopPropagation(); navigate(`/runs/${e.id}`); }}
                               title="Details"
                           >
                             <VisibilityIcon fontSize="small" />
