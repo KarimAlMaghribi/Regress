@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Box, TextField, FormControlLabel, Checkbox, Stack, Button } from "@mui/material";
+import { TextField, FormControlLabel, Checkbox, Stack, Button } from "@mui/material";
 
 export interface EvidenceFilters {
   page?: number;

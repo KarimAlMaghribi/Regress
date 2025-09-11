@@ -1,11 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Tabs, Tab, Paper, Button, Typography, Table, TableHead, TableRow, TableCell, TableBody, Chip, Stack } from '@mui/material';
+import {
+  Box, Tabs, Tab, Paper, Button, Typography, Table, TableHead, TableRow, TableCell, TableBody, Chip, Stack, Drawer, IconButton
+} from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
 import { utils as XLSXUtils, writeFile } from 'xlsx';
 import PageHeader from '../components/PageHeader';
 import { PipelineRunResult } from '../types/pipeline';
+import RunDetails from '../components/RunDetails';
 import { FinalSnapshotCell } from '../components/final/FinalPills';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 
 interface PromptCfg { text: string }
 
@@ -19,15 +23,24 @@ interface Entry {
   result?: PipelineRunResult;
 }
 
+declare global {
+  interface Window { __ENV__?: any }
+}
+
 export default function Analyses() {
   const [tab, setTab] = useState(0);
   const [running, setRunning] = useState<Entry[]>([]);
   const [done, setDone] = useState<Entry[]>([]);
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
+  const [selected, setSelected] = useState<Entry | null>(null);
 
   const load = () => {
-    const base = import.meta.env.VITE_HISTORY_URL || 'http://localhost:8090';
+    const base =
+        (window as any).__ENV__?.HISTORY_URL ||
+        import.meta.env.VITE_HISTORY_URL ||
+        '/hist';
+
     Promise.all([
       fetch(`${base}/analyses?status=running`).then(r => r.json()),
       fetch(`${base}/analyses?status=completed`).then(r => r.json()),
@@ -55,8 +68,10 @@ export default function Analyses() {
           result: d.result as PipelineRunResult | undefined,
         };
       };
-      setRunning(runningData.map(map));
-      setDone(doneData.map(map));
+      const r = runningData.map(map);
+      const c = doneData.map(map).sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
+      setRunning(r);
+      setDone(c);
     })
     .catch(e => console.error('load analyses', e));
   };
@@ -101,7 +116,7 @@ export default function Analyses() {
             <TableRow>
               <TableCell>Name der PDF</TableCell>
               <TableCell>Prompts</TableCell>
-              {finished && <TableCell>Summary</TableCell>}
+              {finished && <TableCell>Score</TableCell>}
               {finished && <TableCell>Route</TableCell>}
               {finished && <TableCell>Final</TableCell>}
               {finished && <TableCell align="right">Ergebnis</TableCell>}
@@ -109,7 +124,12 @@ export default function Analyses() {
           </TableHead>
           <TableBody>
             {items.map(e => (
-                <TableRow key={e.id}>
+                <TableRow
+                    key={e.id}
+                    hover
+                    onClick={() => finished && setSelected(e)}
+                    sx={{ cursor: finished ? 'pointer' : 'default' }}
+                >
                   <TableCell>{`PDF ${e.pdfId}`}</TableCell>
                   <TableCell>
                     {e.prompts.map((p, i) => (
@@ -128,16 +148,9 @@ export default function Analyses() {
                   )}
                   {finished && (
                       <TableCell align="right">
-                        <Button
-                            variant="outlined"
-                            size="small"
-                            onClick={() => {
-                              // Navigation zur Detailseite; ggf. angepasst an euren Router
-                              window.open(`/history?pdfId=${e.pdfId}`, '_blank');
-                            }}
-                        >
-                          Details
-                        </Button>
+                        <IconButton size="small" onClick={(ev) => { ev.stopPropagation(); setSelected(e); }}>
+                          <VisibilityIcon fontSize="small" />
+                        </IconButton>
                       </TableCell>
                   )}
                 </TableRow>
@@ -156,11 +169,17 @@ export default function Analyses() {
 
   return (
       <Box>
-        <PageHeader title="Analysen" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Analysen' }]} actions={<Button variant="contained" onClick={load}>Reload</Button>} />
+        <PageHeader
+            title="Analysen"
+            breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Analysen' }]}
+            actions={<Button variant="contained" onClick={load}>Reload</Button>}
+        />
+
         <Tabs value={tab} onChange={(_,v)=>setTab(v)} sx={{ mb:2 }}>
           <Tab label={`Laufend (${running.length})`} />
           <Tab label={`Abgeschlossen (${done.length})`} />
         </Tabs>
+
         {tab === 0 ? (
             renderList(running, false)
         ) : (
@@ -173,6 +192,15 @@ export default function Analyses() {
               {renderList(filteredDone, true)}
             </Box>
         )}
+
+        {/* Details-Drawer */}
+        <Drawer anchor="right" open={!!selected} onClose={() => setSelected(null)}>
+          {selected?.result && (
+              <Box sx={{ width: { xs: 320, sm: 440, md: 560 }, p: 2 }}>
+                <RunDetails run={selected.result} pdfUrl={selected.pdfUrl ?? ''} />
+              </Box>
+          )}
+        </Drawer>
       </Box>
   );
 }

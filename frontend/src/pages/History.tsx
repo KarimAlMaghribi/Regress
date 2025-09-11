@@ -51,7 +51,7 @@ export default function History() {
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
 
-  // --- Initial REST Load (running + completed) ---
+  // Initial REST Load (running + completed)
   useEffect(() => {
     const load = async () => {
       try {
@@ -60,7 +60,6 @@ export default function History() {
           fetch(`${BASE_HIST}/analyses?status=completed`).then(r => r.json()),
         ]);
         const initial = [...rRunning, ...rCompleted].map(normalizeEntry);
-        // newest first
         initial.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
         setEntries(initial);
 
@@ -77,7 +76,7 @@ export default function History() {
     load();
   }, []);
 
-  // --- Live-Updates über WebSocket (weiterhin aktiv) ---
+  // Live-Updates über WebSocket
   useEffect(() => {
     const socket = new WebSocket(WS_URL);
     socket.addEventListener('error', e => console.error('history ws', e));
@@ -103,7 +102,6 @@ export default function History() {
             merged.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
             return merged;
           });
-          // Falls der Update-Eintrag dem pdfId-Param entspricht und wir noch nichts selektiert haben
           const pdfIdParam = new URLSearchParams(location.search).get('pdfId');
           if (pdfIdParam && String(one.pdfId) === pdfIdParam && !selected) {
             setSelected(one);

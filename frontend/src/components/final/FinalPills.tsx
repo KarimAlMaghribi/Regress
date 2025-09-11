@@ -4,6 +4,7 @@ import { fmtVal, confVariant, confColor, boolColor } from "./finalUtils";
 
 type KV<T = any> = Record<string, T>;
 
+/** Zeigt finale, konsolidierte Extraktionsfelder als Chips. */
 export function FinalExtractionPills({ extracted }: { extracted?: KV }) {
   if (!extracted || Object.keys(extracted).length === 0) return null;
   return (
@@ -25,6 +26,7 @@ export function FinalExtractionPills({ extracted }: { extracted?: KV }) {
   );
 }
 
+/** Zeigt finale Scoring-Entscheidungen als Chips (Ja/Nein). */
 export function FinalScoringPills({ scores }: { scores?: KV }) {
   if (!scores || Object.keys(scores).length === 0) return null;
   return (
@@ -43,6 +45,7 @@ export function FinalScoringPills({ scores }: { scores?: KV }) {
   );
 }
 
+/** Zeigt finale Decision-Routen als Chips (YES/NO o. benannte Route). */
 export function FinalDecisionPills({ decisions }: { decisions?: KV }) {
   if (!decisions || Object.keys(decisions).length === 0) return null;
   return (
@@ -61,7 +64,7 @@ export function FinalDecisionPills({ decisions }: { decisions?: KV }) {
   );
 }
 
-/** Kompakter Header: drei Reihen (Extraction/Scoring/Decision) */
+/** Kompakter Header für Run-Details: drei Reihen (Extraction/Scoring/Decision). */
 export function FinalHeader({
                               extracted,
                               scores,
@@ -87,7 +90,7 @@ export function FinalHeader({
   );
 }
 
-/** Mini-Komponente für die "Final"-Spalte in /analyses */
+/** Mini-Komponente für die „Final“-Tabellenspalte in /analyses. */
 export function FinalSnapshotCell({ result }: { result?: any }) {
   const ex = Object.values(result?.extracted ?? {}) as any[];
   const low = ex.some((v: any) => (v?.confidence ?? 1) < 0.6);

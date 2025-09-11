@@ -40,7 +40,7 @@ function groupByPid<T extends { prompt_id: number }>(arr: T[]) {
   }, {});
 }
 
-/** Extraction */
+/** Extraction-Accordion mit Final-Header + Evidenz-Tabelle */
 export function ExtractionPromptAccordion({
                                             finalMap,
                                             items,
@@ -105,7 +105,7 @@ export function ExtractionPromptAccordion({
   );
 }
 
-/** Scoring */
+/** Scoring-Accordion */
 export function ScoringPromptAccordion({
                                          finalMap,
                                          items,
@@ -165,7 +165,7 @@ export function ScoringPromptAccordion({
   );
 }
 
-/** Decision */
+/** Decision-Accordion */
 export function DecisionPromptAccordion({
                                           finalMap,
                                           items,
