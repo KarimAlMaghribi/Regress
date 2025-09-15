@@ -13,49 +13,39 @@ import RunDetails from '../components/RunDetails';
 import { FinalSnapshotCell } from '../components/final/FinalPills';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 
-declare global {
-  interface Window { __ENV__?: any }
-}
+declare global { interface Window { __ENV__?: any } }
 
 interface PromptCfg { text: string }
-
 interface Entry {
-  id: number; // analysis id
+  id: number;           // analysis id (History)
   pdfId: number;
   pdfUrl?: string;
   prompts: PromptCfg[];
   status: string;
   timestamp: string;
-  result?: PipelineRunResult | any; // tolerate snake/camel / partial
+  result?: PipelineRunResult | any;
 }
 
-/** Reihenfolge-Präferenzen für prominente Final-Felder (sofern vorhanden) */
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
+const LS_PREFIX = "run-view:";
 
-/** Hilfsfunktion: Ergebnis-Shape für die Detailseite harmonisieren */
+/* -------- helpers -------- */
+
+function getPipelineApiBase(): string {
+  const w = (window as any);
+  return w.__ENV__?.PIPELINE_API_URL || import.meta.env?.VITE_PIPELINE_API_URL || '/pl';
+}
+
 function normalizeRunShape(run: any | undefined | null): any {
   if (!run || typeof run !== 'object') return run;
   const n: any = { ...run };
-
-  // overall_score vs overallScore
-  if (n.overall_score === undefined && typeof n.overallScore === 'number') {
-    n.overall_score = n.overallScore;
-  }
-  // finals: final_scores/final_decisions → scores/decisions
-  if (!n.scores && n.final_scores && typeof n.final_scores === 'object') {
-    n.scores = n.final_scores;
-  }
-  if (!n.decisions && n.final_decisions && typeof n.final_decisions === 'object') {
-    n.decisions = n.final_decisions;
-  }
-  // stelle sicher, dass leere Maps als {} (nicht null) vorliegen
+  if (n.overall_score === undefined && typeof n.overallScore === 'number') n.overall_score = n.overallScore;
+  if (!n.scores && n.final_scores && typeof n.final_scores === 'object') n.scores = n.final_scores;
+  if (!n.decisions && n.final_decisions && typeof n.final_decisions === 'object') n.decisions = n.final_decisions;
   if (n.extracted == null) n.extracted = {};
   if (n.scores == null) n.scores = {};
   if (n.decisions == null) n.decisions = {};
-  // log optional array
-  if (!Array.isArray(n.log) && n.log != null) {
-    n.log = Array.isArray(n.log) ? n.log : [];
-  }
+  if (!Array.isArray(n.log) && n.log != null) n.log = [];
   return n;
 }
 
@@ -64,47 +54,132 @@ function getFinalExtractedKeys(e: Entry): string[] {
   return Object.keys(ex);
 }
 
-function pickValueAndConf(obj: any, key: string): { value?: any; conf?: number } {
-  const rec = obj?.[key];
-  if (!rec) return {};
-  return { value: rec.value, conf: typeof rec.confidence === 'number' ? rec.confidence : undefined };
-}
-
-/** Ermittelt eine geordnete Liste an Final-Feldern, die wir als Spalten zeigen (max 4) */
 function computeFinalKeyOrder(items: Entry[], maxCols = 4): string[] {
   const freq = new Map<string, number>();
-  for (const it of items) {
-    for (const k of getFinalExtractedKeys(it)) {
-      freq.set(k, (freq.get(k) ?? 0) + 1);
-    }
-  }
+  for (const it of items) for (const k of getFinalExtractedKeys(it)) freq.set(k, (freq.get(k) ?? 0) + 1);
   const presentPreferred = PREFERRED_KEYS.filter(k => freq.has(k));
   const others = Array.from(freq.entries())
   .filter(([k]) => !presentPreferred.includes(k))
   .sort((a, b) => b[1] - a[1])
   .map(([k]) => k);
-
   return [...presentPreferred, ...others].slice(0, maxCols);
 }
 
-/* NEW: neuer-Tab Öffner – speichert erst in localStorage (normiert), dann öffnet die Seite */
-const LS_PREFIX = "run-view:";
-function openDetailsInNewTab(entry: Entry) {
-  const key = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  // run normalisieren (snake_case-Finals & overall_score sicherstellen)
-  const normalized = normalizeRunShape(entry.result) ?? null;
-  const payload = { run: normalized, pdfUrl: entry.pdfUrl ?? "" };
+/* -------- NEW: Backend-Auflösung -------- */
 
+/** Versucht eine run_id über mehrere Endpunkte zu ermitteln */
+async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<string | undefined> {
+  const direct = normalized?.run_id ?? normalized?.id ?? normalized?.runId;
+  if (typeof direct === 'string') return direct;
+
+  const api = getPipelineApiBase();
+  const pdfId = normalized?.pdf_id ?? entry.pdfId;
+  const pipelineId = normalized?.pipeline_id ?? normalized?.pipelineId;
+  if (!pdfId || !pipelineId) return undefined;
+
+  const candidates = [
+    // häufige Varianten – nimm die, die es bei dir gibt
+    `${api}/runs/latest?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}`,
+    `${api}/runs?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}&limit=1`,
+    `${api}/runs/last?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}`
+  ];
+
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!r.ok) continue;
+      const json = await r.json();
+      if (json && typeof json === 'object') {
+        if (typeof json.run_id === 'string') return json.run_id;
+        if (typeof json.id === 'string') return json.id;
+        if (Array.isArray(json) && json[0]) {
+          const first = json[0];
+          if (typeof first?.run_id === 'string') return first.run_id;
+          if (typeof first?.id === 'string') return first.id;
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return undefined;
+}
+
+/** Holt direkt das (vermutlich) konsolidierte DTO über pdf_id + pipeline_id */
+async function fetchConsolidatedRun(normalized: any, entry: Entry): Promise<any | undefined> {
+  const api = getPipelineApiBase();
+  const pdfId = normalized?.pdf_id ?? entry.pdfId;
+  const pipelineId = normalized?.pipeline_id ?? normalized?.pipelineId;
+  if (!pdfId || !pipelineId) return undefined;
+
+  const candidates = [
+    `${api}/runs/full?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}&limit=1`,
+    `${api}/runs?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}&limit=1`
+  ];
+
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!r.ok) continue;
+      const json = await r.json();
+      // akzeptiere sowohl {…run…} als auch Array
+      if (json && typeof json === 'object') {
+        if (json.extracted || json.scores || json.decisions) return normalizeRunShape(json);
+        if (Array.isArray(json) && json.length > 0) {
+          const first = json[0];
+          if (first && typeof first === 'object') return normalizeRunShape(first);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+  return undefined;
+}
+
+/* -------- Öffner: Details in neuem Tab -------- */
+
+async function openDetailsInNewTab(entry: Entry) {
+  const key = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  const normalized = normalizeRunShape(entry.result) ?? null;
+
+  // initial speichern (damit die Seite sofort rendert)
+  let payload = { run: normalized, pdfUrl: entry.pdfUrl ?? "" };
   try {
     localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
   } catch (e) {
     console.warn("Konnte localStorage nicht schreiben:", e);
   }
 
-  const runId = (normalized && typeof normalized === 'object') ? (normalized.id ?? normalized.run_id) : undefined;
-  const q = runId ? `?run_id=${runId}` : "";
+  // 1) Versuche run_id zu bekommen (bevorzugt)
+  let runId: string | undefined;
+  try { runId = await resolveRunIdIfMissing(normalized, entry); } catch {}
+
+  // 2) Falls keine run_id & keine Finals: versuche direkt konsolidiertes DTO zu ziehen und in LS zu ersetzen
+  const hasFinals = !!(normalized && typeof normalized === 'object'
+      && Object.keys(normalized.extracted ?? {}).length + Object.keys(normalized.scores ?? {}).length + Object.keys(normalized.decisions ?? {}).length > 0);
+
+  if (!runId && !hasFinals) {
+    try {
+      const finalRun = await fetchConsolidatedRun(normalized, entry);
+      if (finalRun && (Object.keys(finalRun.extracted ?? {}).length > 0
+          || Object.keys(finalRun.scores ?? {}).length > 0
+          || Object.keys(finalRun.decisions ?? {}).length > 0)) {
+        payload = { run: finalRun, pdfUrl: entry.pdfUrl ?? "" };
+        localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
+        // falls die API eine id/run_id liefert, nimm sie für Query-Param
+        runId = finalRun.run_id ?? finalRun.id ?? runId;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const q = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
   window.open(`/run-view/${key}${q}`, "_blank", "noopener,noreferrer");
 }
+
+/* -------- Page Component -------- */
 
 export default function Analyses() {
   const [tab, setTab] = useState(0);
@@ -113,7 +188,6 @@ export default function Analyses() {
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
 
-  // Drawer bleibt als Quick-View verfügbar (optional)
   const [selected, setSelected] = useState<Entry | null>(null);
   const [onlyLowConf, setOnlyLowConf] = useState(false);
 
@@ -129,22 +203,21 @@ export default function Analyses() {
     ])
     .then(([runningData, doneData]: [any[], any[]]) => {
       const map = (d: any): Entry => {
-        // prompts parsen
         let prompts: PromptCfg[] = [];
         try {
           const arr = JSON.parse(d.prompt ?? '');
-          if (Array.isArray(arr)) {
-            prompts = arr.map((p: any) => ({ text: p.text ?? String(p) }));
-          } else if (typeof arr === 'string') {
-            prompts = [{ text: arr }];
-          }
-        } catch {
-          if (d.prompt) prompts = [{ text: d.prompt }];
-        }
+          if (Array.isArray(arr)) prompts = arr.map((p: any) => ({ text: p.text ?? String(p) }));
+          else if (typeof arr === 'string') prompts = [{ text: arr }];
+        } catch { if (d.prompt) prompts = [{ text: d.prompt }]; }
 
-        // Ergebnis normalisieren (snake_case Finals & overall_score sicherstellen)
         const rawResult = d.result ?? d.run ?? null;
         const normalized = normalizeRunShape(rawResult);
+
+        // Falls History bereits run_id liefert: im Result ablegen (hilft dem opener)
+        const withRunId = normalized ? { ...normalized } : normalized;
+        if (withRunId && !withRunId.run_id && (d.run_id || d.runId)) {
+          withRunId.run_id = d.run_id ?? d.runId;
+        }
 
         return {
           id: d.id,
@@ -153,7 +226,7 @@ export default function Analyses() {
           prompts,
           status: d.status ?? '',
           timestamp: d.timestamp ?? d.created_at ?? '',
-          result: normalized,
+          result: withRunId,
         };
       };
 
@@ -167,7 +240,6 @@ export default function Analyses() {
 
   useEffect(load, []);
 
-  // Filter: Zeit
   const filteredDoneByDate = useMemo(() => {
     return done.filter(e => {
       const ts = dayjs(e.timestamp);
@@ -177,17 +249,14 @@ export default function Analyses() {
     });
   }, [done, start, end]);
 
-  // Filter: nur unsichere (mind. ein Final-Field < 0.6)
   const filteredDone = useMemo(() => {
     if (!onlyLowConf) return filteredDoneByDate;
     return filteredDoneByDate.filter(e => {
       const ex = (normalizeRunShape(e.result))?.extracted || {};
-      const anyLow = Object.values(ex).some((v: any) => (v?.confidence ?? 1) < 0.6);
-      return anyLow;
+      return Object.values(ex).some((v: any) => (v?.confidence ?? 1) < 0.6);
     });
   }, [filteredDoneByDate, onlyLowConf]);
 
-  // Dynamische Final-Feldspalten (max 4)
   const finalCols = useMemo(() => computeFinalKeyOrder(filteredDone, 4), [filteredDone]);
 
   const exportExcel = () => {
@@ -195,16 +264,12 @@ export default function Analyses() {
       const run = normalizeRunShape(e.result);
       const ex = run?.extracted ?? {};
       const dec = run?.decisions ?? {};
-      const flatEx = Object.fromEntries(
-          Object.entries(ex).map(([k, v]: any) => [`final.${k}`, v?.value ?? ''])
-      );
-      const flatDec = Object.fromEntries(
-          Object.entries(dec).map(([k, v]: any) => [`decision.${k}`, `${v.route ?? ''}${v.confidence != null ? ` (${(v.confidence).toFixed(2)})` : ''}`])
-      );
+      const flatEx = Object.fromEntries(Object.entries(ex).map(([k, v]: any) => [`final.${k}`, v?.value ?? '']));
+      const flatDec = Object.fromEntries(Object.entries(dec).map(([k, v]: any) => [`decision.${k}`, `${v.route ?? ''}${v.confidence != null ? ` (${(v.confidence).toFixed(2)})` : ''}`]));
       return {
         pdf: `PDF ${e.pdfId}`,
         prompt: e.prompts.map(p => p.text).join(' | '),
-        overall_score: run?.overall_score ?? '', // snake_case
+        overall_score: run?.overall_score ?? '',
         ...flatEx,
         ...flatDec,
       };
@@ -224,12 +289,7 @@ export default function Analyses() {
               <TableCell>Prompts</TableCell>
               {finished && <TableCell>Score</TableCell>}
               {finished && <TableCell>Route</TableCell>}
-
-              {/* Dynamische Final-Feldspalten */}
-              {finished && finalCols.map(col => (
-                  <TableCell key={`col-${col}`}>{col}</TableCell>
-              ))}
-
+              {finished && finalCols.map(col => (<TableCell key={`col-${col}`}>{col}</TableCell>))}
               {finished && <TableCell>Final</TableCell>}
               {finished && <TableCell align="right">Details</TableCell>}
             </TableRow>
@@ -242,7 +302,7 @@ export default function Analyses() {
                   <TableRow
                       key={e.id}
                       hover
-                      onClick={() => finished && openDetailsInNewTab(e)}   // NEW: neuer Tab
+                      onClick={() => { if (finished) void openDetailsInNewTab(e); }}
                       sx={{ cursor: finished ? 'pointer' : 'default' }}
                   >
                     <TableCell>{`PDF ${e.pdfId}`}</TableCell>
@@ -258,22 +318,18 @@ export default function Analyses() {
                     </TableCell>
 
                     {finished && (
-                        <TableCell>
-                          {typeof run?.overall_score === 'number' ? run.overall_score.toFixed(2) : ''}
-                        </TableCell>
+                        <TableCell>{typeof run?.overall_score === 'number' ? run.overall_score.toFixed(2) : ''}</TableCell>
                     )}
                     {finished && (
                         <TableCell>
-                          {/* bevorzugt finale decisions, sonst Log-Route */}
                           {Object.values(run?.decisions ?? {}).length > 0
                               ? Object.values(run.decisions as any).map((d: any, i: number) =>
                                   <Chip key={`dec-${i}`} size="small" label={`${d.route ?? '—'}`} sx={{ mr: .5 }} />)
-                              : (run?.log ?? []).map((l: any, i: number) => l.route ?? 'root').join(' › ')
+                              : (run?.log ?? []).map((l: any) => l.route ?? 'root').join(' › ')
                           }
                         </TableCell>
                     )}
 
-                    {/* Dynamische Final-Feldspalten: Wert + Confidence */}
                     {finished && finalCols.map(col => {
                       const val = (ex as any)?.[col]?.value;
                       const conf = (ex as any)?.[col]?.confidence;
@@ -295,19 +351,11 @@ export default function Analyses() {
                       );
                     })}
 
-                    {finished && (
-                        <TableCell>
-                          <FinalSnapshotCell result={run} />
-                        </TableCell>
-                    )}
+                    {finished && <TableCell><FinalSnapshotCell result={run} /></TableCell>}
 
                     {finished && (
                         <TableCell align="right">
-                          <IconButton
-                              size="small"
-                              onClick={(ev) => { ev.stopPropagation(); openDetailsInNewTab(e); }}  // NEW: neuer Tab
-                              title="Details"
-                          >
+                          <IconButton size="small" onClick={(ev) => { ev.stopPropagation(); void openDetailsInNewTab(e); }} title="Details">
                             <VisibilityIcon fontSize="small" />
                           </IconButton>
                         </TableCell>
@@ -357,7 +405,7 @@ export default function Analyses() {
             </Box>
         )}
 
-        {/* Drawer (optional Quick-Preview) */}
+        {/* optional Quick-Preview */}
         <Drawer anchor="right" open={!!selected} onClose={() => setSelected(null)}>
           {selected?.result && (
               <Box sx={{ width: { xs: 320, sm: 460, md: 640 }, p: 2 }}>
