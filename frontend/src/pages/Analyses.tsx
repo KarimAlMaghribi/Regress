@@ -26,14 +26,41 @@ interface Entry {
   prompts: PromptCfg[];
   status: string;
   timestamp: string;
-  result?: PipelineRunResult;
+  result?: PipelineRunResult | any; // tolerate snake/camel / partial
 }
 
 /** Reihenfolge-Präferenzen für prominente Final-Felder (sofern vorhanden) */
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
 
+/** Hilfsfunktion: Ergebnis-Shape für die Detailseite harmonisieren */
+function normalizeRunShape(run: any | undefined | null): any {
+  if (!run || typeof run !== 'object') return run;
+  const n: any = { ...run };
+
+  // overall_score vs overallScore
+  if (n.overall_score === undefined && typeof n.overallScore === 'number') {
+    n.overall_score = n.overallScore;
+  }
+  // finals: final_scores/final_decisions → scores/decisions
+  if (!n.scores && n.final_scores && typeof n.final_scores === 'object') {
+    n.scores = n.final_scores;
+  }
+  if (!n.decisions && n.final_decisions && typeof n.final_decisions === 'object') {
+    n.decisions = n.final_decisions;
+  }
+  // stelle sicher, dass leere Maps als {} (nicht null) vorliegen
+  if (n.extracted == null) n.extracted = {};
+  if (n.scores == null) n.scores = {};
+  if (n.decisions == null) n.decisions = {};
+  // log optional array
+  if (!Array.isArray(n.log) && n.log != null) {
+    n.log = Array.isArray(n.log) ? n.log : [];
+  }
+  return n;
+}
+
 function getFinalExtractedKeys(e: Entry): string[] {
-  const ex = (e.result as any)?.extracted || {};
+  const ex = (normalizeRunShape(e.result))?.extracted || {};
   return Object.keys(ex);
 }
 
@@ -60,17 +87,21 @@ function computeFinalKeyOrder(items: Entry[], maxCols = 4): string[] {
   return [...presentPreferred, ...others].slice(0, maxCols);
 }
 
-/* NEW: neuer-Tab Öffner – speichert erst in localStorage, dann öffnet die Seite */
+/* NEW: neuer-Tab Öffner – speichert erst in localStorage (normiert), dann öffnet die Seite */
 const LS_PREFIX = "run-view:";
 function openDetailsInNewTab(entry: Entry) {
   const key = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  const payload = { run: entry.result ?? null, pdfUrl: entry.pdfUrl ?? "" };
+  // run normalisieren (snake_case-Finals & overall_score sicherstellen)
+  const normalized = normalizeRunShape(entry.result) ?? null;
+  const payload = { run: normalized, pdfUrl: entry.pdfUrl ?? "" };
+
   try {
     localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
   } catch (e) {
     console.warn("Konnte localStorage nicht schreiben:", e);
   }
-  const runId = (entry.result as any)?.id; // optional – falls vorhanden
+
+  const runId = (normalized && typeof normalized === 'object') ? (normalized.id ?? normalized.run_id) : undefined;
   const q = runId ? `?run_id=${runId}` : "";
   window.open(`/run-view/${key}${q}`, "_blank", "noopener,noreferrer");
 }
@@ -98,6 +129,7 @@ export default function Analyses() {
     ])
     .then(([runningData, doneData]: [any[], any[]]) => {
       const map = (d: any): Entry => {
+        // prompts parsen
         let prompts: PromptCfg[] = [];
         try {
           const arr = JSON.parse(d.prompt ?? '');
@@ -109,6 +141,11 @@ export default function Analyses() {
         } catch {
           if (d.prompt) prompts = [{ text: d.prompt }];
         }
+
+        // Ergebnis normalisieren (snake_case Finals & overall_score sicherstellen)
+        const rawResult = d.result ?? d.run ?? null;
+        const normalized = normalizeRunShape(rawResult);
+
         return {
           id: d.id,
           pdfId: d.pdf_id ?? d.pdfId ?? d.file_id ?? 0,
@@ -116,9 +153,10 @@ export default function Analyses() {
           prompts,
           status: d.status ?? '',
           timestamp: d.timestamp ?? d.created_at ?? '',
-          result: d.result as PipelineRunResult | undefined,
+          result: normalized,
         };
       };
+
       const r = runningData.map(map);
       const c = doneData.map(map).sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
       setRunning(r);
@@ -143,7 +181,7 @@ export default function Analyses() {
   const filteredDone = useMemo(() => {
     if (!onlyLowConf) return filteredDoneByDate;
     return filteredDoneByDate.filter(e => {
-      const ex = (e.result as any)?.extracted || {};
+      const ex = (normalizeRunShape(e.result))?.extracted || {};
       const anyLow = Object.values(ex).some((v: any) => (v?.confidence ?? 1) < 0.6);
       return anyLow;
     });
@@ -154,18 +192,19 @@ export default function Analyses() {
 
   const exportExcel = () => {
     const rows = filteredDone.map(e => {
-      const ex = (e.result as any)?.extracted ?? {};
-      const dec = (e.result as any)?.decisions ?? {};
+      const run = normalizeRunShape(e.result);
+      const ex = run?.extracted ?? {};
+      const dec = run?.decisions ?? {};
       const flatEx = Object.fromEntries(
           Object.entries(ex).map(([k, v]: any) => [`final.${k}`, v?.value ?? ''])
       );
       const flatDec = Object.fromEntries(
-          Object.entries(dec).map(([k, v]: any) => [`decision.${k}`, `${v.route} (${(v.confidence ?? 0).toFixed(2)})`])
+          Object.entries(dec).map(([k, v]: any) => [`decision.${k}`, `${v.route ?? ''}${v.confidence != null ? ` (${(v.confidence).toFixed(2)})` : ''}`])
       );
       return {
         pdf: `PDF ${e.pdfId}`,
         prompt: e.prompts.map(p => p.text).join(' | '),
-        overallScore: (e.result as any)?.overallScore ?? '',
+        overall_score: run?.overall_score ?? '', // snake_case
         ...flatEx,
         ...flatDec,
       };
@@ -197,7 +236,8 @@ export default function Analyses() {
           </TableHead>
           <TableBody>
             {items.map(e => {
-              const ex = (e.result as any)?.extracted || {};
+              const run = normalizeRunShape(e.result);
+              const ex = run?.extracted || {};
               return (
                   <TableRow
                       key={e.id}
@@ -210,13 +250,28 @@ export default function Analyses() {
                       {e.prompts.map((p, i) => (
                           <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
                       ))}
-                      {finished && (e.result as any)?.log?.filter((l: any) => l.prompt_type === 'DecisionPrompt').map((d: any) => (
-                          <Chip key={d.seq_no} label={`${d.seq_no}: ${d.decision_key}`} size="small" sx={{ ml: 0.5 }} />
+                      {finished && (run?.log ?? [])
+                      .filter((l: any) => l?.prompt_type === 'DecisionPrompt')
+                      .map((d: any, idx: number) => (
+                          <Chip key={`${d.seq_no ?? idx}`} label={`${d.seq_no ?? idx}: ${d.decision_key ?? ''}`} size="small" sx={{ ml: 0.5 }} />
                       ))}
                     </TableCell>
 
-                    {finished && <TableCell>{(e.result as any)?.overallScore?.toFixed(2) ?? ''}</TableCell>}
-                    {finished && <TableCell>{(e.result as any)?.log?.map((l: any) => l.route ?? 'root').join(' › ')}</TableCell>}
+                    {finished && (
+                        <TableCell>
+                          {typeof run?.overall_score === 'number' ? run.overall_score.toFixed(2) : ''}
+                        </TableCell>
+                    )}
+                    {finished && (
+                        <TableCell>
+                          {/* bevorzugt finale decisions, sonst Log-Route */}
+                          {Object.values(run?.decisions ?? {}).length > 0
+                              ? Object.values(run.decisions as any).map((d: any, i: number) =>
+                                  <Chip key={`dec-${i}`} size="small" label={`${d.route ?? '—'}`} sx={{ mr: .5 }} />)
+                              : (run?.log ?? []).map((l: any, i: number) => l.route ?? 'root').join(' › ')
+                          }
+                        </TableCell>
+                    )}
 
                     {/* Dynamische Final-Feldspalten: Wert + Confidence */}
                     {finished && finalCols.map(col => {
@@ -242,7 +297,7 @@ export default function Analyses() {
 
                     {finished && (
                         <TableCell>
-                          <FinalSnapshotCell result={e.result} />
+                          <FinalSnapshotCell result={run} />
                         </TableCell>
                     )}
 
@@ -302,11 +357,11 @@ export default function Analyses() {
             </Box>
         )}
 
-        {/* Drawer (optional Quick-Preview) – kann bleiben oder entfernt werden */}
+        {/* Drawer (optional Quick-Preview) */}
         <Drawer anchor="right" open={!!selected} onClose={() => setSelected(null)}>
           {selected?.result && (
               <Box sx={{ width: { xs: 320, sm: 460, md: 640 }, p: 2 }}>
-                <RunDetails run={selected.result} pdfUrl={selected.pdfUrl ?? ''} />
+                <RunDetails run={normalizeRunShape(selected.result)} pdfUrl={selected.pdfUrl ?? ''} />
               </Box>
           )}
         </Drawer>
