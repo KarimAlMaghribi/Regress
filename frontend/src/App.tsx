@@ -38,7 +38,7 @@ function AnimatedRoutes() {
     <AnimatePresence mode="wait">
       <Routes location={location} key={location.pathname}>
         <Route path="/" element={<PageFade><Dashboard /></PageFade>} />
-        <Route path="/runs/:id" element={<PageFade><RunDetailsPage /> </PageFade>} />
+        <Route path="/run-view/:key" element={<PageFade><RunDetailsPage /></PageFade>} />
         <Route path="/upload" element={<PageFade><Upload /></PageFade>} />
         <Route path="/prompts" element={<PageFade><Prompts /></PageFade>} />
         <Route path="/pipeline" element={<PageFade><PipelineList /></PageFade>} />

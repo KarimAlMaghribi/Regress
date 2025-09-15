@@ -30,6 +30,18 @@ interface Entry {
   result?: PipelineRunResult;
 }
 
+const LS_PREFIX = "run-view:";
+function openDetailsInNewTab(entry: any) {
+  const key = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const payload = { run: entry.result, pdfUrl: entry.pdfUrl ?? "" };
+  try {
+    localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
+  } catch {
+  }
+  window.open(`/run-view/${key}`, "_blank", "noopener,noreferrer");
+}
+
+
 /** Reihenfolge-Präferenzen für prominente Final-Felder (sofern vorhanden) */
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
 
@@ -240,7 +252,7 @@ export default function Analyses() {
                         <TableCell align="right">
                           <IconButton
                               size="small"
-                              onClick={(ev) => { ev.stopPropagation(); navigate(`/runs/${e.id}`); }}
+                              onClick={(ev) => { ev.stopPropagation(); openDetailsInNewTab(e); }}
                               title="Details"
                           >
                             <VisibilityIcon fontSize="small" />
