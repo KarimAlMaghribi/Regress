@@ -12,7 +12,6 @@ import { PipelineRunResult } from '../types/pipeline';
 import RunDetails from '../components/RunDetails';
 import { FinalSnapshotCell } from '../components/final/FinalPills';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import { useNavigate } from 'react-router-dom';
 
 declare global {
   interface Window { __ENV__?: any }
@@ -30,61 +29,60 @@ interface Entry {
   result?: PipelineRunResult;
 }
 
-const LS_PREFIX = "run-view:";
-function openDetailsInNewTab(entry: any) {
-  const key = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  const payload = { run: entry.result, pdfUrl: entry.pdfUrl ?? "" };
-  try {
-    localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
-  } catch {
-  }
-  window.open(`/run-view/${key}`, "_blank", "noopener,noreferrer");
-}
-
-
 /** Reihenfolge-Präferenzen für prominente Final-Felder (sofern vorhanden) */
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
 
 function getFinalExtractedKeys(e: Entry): string[] {
-
   const ex = (e.result as any)?.extracted || {};
   return Object.keys(ex);
 }
-function pickValueAndConf(obj: any, key: string): { value?: any; conf?: number } {
 
+function pickValueAndConf(obj: any, key: string): { value?: any; conf?: number } {
   const rec = obj?.[key];
   if (!rec) return {};
   return { value: rec.value, conf: typeof rec.confidence === 'number' ? rec.confidence : undefined };
 }
+
 /** Ermittelt eine geordnete Liste an Final-Feldern, die wir als Spalten zeigen (max 4) */
 function computeFinalKeyOrder(items: Entry[], maxCols = 4): string[] {
-
   const freq = new Map<string, number>();
   for (const it of items) {
     for (const k of getFinalExtractedKeys(it)) {
       freq.set(k, (freq.get(k) ?? 0) + 1);
     }
   }
-  // zuerst nach PREFERRED_KEYS, danach nach Häufigkeit
   const presentPreferred = PREFERRED_KEYS.filter(k => freq.has(k));
   const others = Array.from(freq.entries())
   .filter(([k]) => !presentPreferred.includes(k))
   .sort((a, b) => b[1] - a[1])
   .map(([k]) => k);
-  const ordered = [...presentPreferred, ...others].slice(0, maxCols);
 
-  return ordered;
+  return [...presentPreferred, ...others].slice(0, maxCols);
 }
-export default function Analyses() {
-  const navigate = useNavigate();
 
+/* NEW: neuer-Tab Öffner – speichert erst in localStorage, dann öffnet die Seite */
+const LS_PREFIX = "run-view:";
+function openDetailsInNewTab(entry: Entry) {
+  const key = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  const payload = { run: entry.result ?? null, pdfUrl: entry.pdfUrl ?? "" };
+  try {
+    localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
+  } catch (e) {
+    console.warn("Konnte localStorage nicht schreiben:", e);
+  }
+  const runId = (entry.result as any)?.id; // optional – falls vorhanden
+  const q = runId ? `?run_id=${runId}` : "";
+  window.open(`/run-view/${key}${q}`, "_blank", "noopener,noreferrer");
+}
+
+export default function Analyses() {
   const [tab, setTab] = useState(0);
   const [running, setRunning] = useState<Entry[]>([]);
   const [done, setDone] = useState<Entry[]>([]);
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
 
-  // NEW
+  // Drawer bleibt als Quick-View verfügbar (optional)
   const [selected, setSelected] = useState<Entry | null>(null);
   const [onlyLowConf, setOnlyLowConf] = useState(false);
 
@@ -167,7 +165,7 @@ export default function Analyses() {
       return {
         pdf: `PDF ${e.pdfId}`,
         prompt: e.prompts.map(p => p.text).join(' | '),
-        overallScore: e.result?.overallScore ?? '',
+        overallScore: (e.result as any)?.overallScore ?? '',
         ...flatEx,
         ...flatDec,
       };
@@ -204,7 +202,7 @@ export default function Analyses() {
                   <TableRow
                       key={e.id}
                       hover
-                      onClick={() => finished && setSelected(e)}
+                      onClick={() => finished && openDetailsInNewTab(e)}   // NEW: neuer Tab
                       sx={{ cursor: finished ? 'pointer' : 'default' }}
                   >
                     <TableCell>{`PDF ${e.pdfId}`}</TableCell>
@@ -212,13 +210,13 @@ export default function Analyses() {
                       {e.prompts.map((p, i) => (
                           <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
                       ))}
-                      {finished && e.result?.log?.filter(l => l.prompt_type === 'DecisionPrompt').map(d => (
+                      {finished && (e.result as any)?.log?.filter((l: any) => l.prompt_type === 'DecisionPrompt').map((d: any) => (
                           <Chip key={d.seq_no} label={`${d.seq_no}: ${d.decision_key}`} size="small" sx={{ ml: 0.5 }} />
                       ))}
                     </TableCell>
 
-                    {finished && <TableCell>{e.result?.overallScore?.toFixed(2) ?? ''}</TableCell>}
-                    {finished && <TableCell>{e.result?.log?.map(l => l.route ?? 'root').join(' › ')}</TableCell>}
+                    {finished && <TableCell>{(e.result as any)?.overallScore?.toFixed(2) ?? ''}</TableCell>}
+                    {finished && <TableCell>{(e.result as any)?.log?.map((l: any) => l.route ?? 'root').join(' › ')}</TableCell>}
 
                     {/* Dynamische Final-Feldspalten: Wert + Confidence */}
                     {finished && finalCols.map(col => {
@@ -252,7 +250,7 @@ export default function Analyses() {
                         <TableCell align="right">
                           <IconButton
                               size="small"
-                              onClick={(ev) => { ev.stopPropagation(); openDetailsInNewTab(e); }}
+                              onClick={(ev) => { ev.stopPropagation(); openDetailsInNewTab(e); }}  // NEW: neuer Tab
                               title="Details"
                           >
                             <VisibilityIcon fontSize="small" />
@@ -264,7 +262,7 @@ export default function Analyses() {
             })}
             {items.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={finished ? (6 + finalCols.length) : 2} align="center">
+                  <TableCell colSpan={6 + finalCols.length} align="center">
                     <Typography>Keine Einträge</Typography>
                   </TableCell>
                 </TableRow>
@@ -304,7 +302,7 @@ export default function Analyses() {
             </Box>
         )}
 
-        {/* Details-Drawer */}
+        {/* Drawer (optional Quick-Preview) – kann bleiben oder entfernt werden */}
         <Drawer anchor="right" open={!!selected} onClose={() => setSelected(null)}>
           {selected?.result && (
               <Box sx={{ width: { xs: 320, sm: 460, md: 640 }, p: 2 }}>
