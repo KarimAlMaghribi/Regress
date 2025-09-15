@@ -11,7 +11,7 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
-// Falls es den Typ bei dir gibt – ansonsten einfach auf 'any' lassen:
+// Optional: anpassen/entfernen falls Typen fehlen
 import type { PipelineRunResult } from "../types/pipeline";
 
 type TextPosition = { page?: number; bbox?: number[]; quote?: string | null };
@@ -24,114 +24,140 @@ type PromptResult = {
   value?: any | null;
   boolean?: boolean | null;
   route?: string | null;
-  weight?: number | null;       // Batch-Confidence/Gewichtung (vom Backend)
-  source?: TextPosition | null; // Evidence-Position
-  openai_raw?: string;
-  json_key?: string | null;
-  error?: string | null;
-};
-
-type ScoringResult = {
-  prompt_id: number;
-  prompt_text?: string;
-  result: boolean;
-  source?: TextPosition;
-  explanation?: string;
   weight?: number | null;
+  source?: TextPosition | null;
+  json_key?: string | null;
+  explanation?: string | null;
   error?: string | null;
 };
 
 const CONF_WARN = 0.6;
 const LS_PREFIX = "run-view:";
 
-/* ===================== Utilities / Diagnose ===================== */
-
-function getAPIBase(): string {
-  const w = (window as any);
-  return w.__ENV__?.PIPELINE_API_URL || (import.meta as any)?.env?.VITE_PIPELINE_API_URL || "/pl";
-}
-
+/* ----------------- Logging helpers ----------------- */
 function dlog(label: string, payload?: any) {
-  // zentrale Log-Funktion – leicht filterbar
   // eslint-disable-next-line no-console
   console.log(`[RunView] ${label}`, payload ?? "");
 }
-
+function keysOf(obj: any) { return obj && typeof obj === "object" ? Object.keys(obj) : []; }
 function summarizeArray(arr: any[] | undefined | null, pick?: (x: any) => any) {
   if (!Array.isArray(arr)) return { len: 0 };
   const len = arr.length;
   const head = arr.slice(0, 3).map(x => (pick ? pick(x) : x));
   return { len, head };
 }
-
 function countWeightPresence(arr: any[] | undefined | null) {
   if (!Array.isArray(arr)) return { present: 0, absent: 0 };
   let present = 0, absent = 0;
   for (const r of arr) {
-    if (r && typeof r.weight === "number") present++;
-    else absent++;
+    if (typeof r?.weight === "number") present++; else absent++;
   }
   return { present, absent };
 }
+function clamp01(n: number) { return Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0)); }
 
-function keysOf(obj: any) {
-  return obj && typeof obj === "object" ? Object.keys(obj) : [];
+/* ----------------- Final map auto-detection ----------------- */
+function looksLikeExtractionMap(obj: any) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+  const vals = Object.values(obj);
+  if (!vals.length) return false;
+  // typisch: value + confidence (+ page/quote)
+  const v = vals[0] as any;
+  return ("confidence" in (v ?? {})) && ("value" in (v ?? {}) || "page" in (v ?? {}) || "quote" in (v ?? {}));
+}
+function looksLikeScoringMap(obj: any) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+  const vals = Object.values(obj);
+  if (!vals.length) return false;
+  const v = vals[0] as any;
+  return (("result" in (v ?? {})) && ("confidence" in (v ?? {}))) || ("votes_true" in (v ?? {}) || "votes_false" in (v ?? {}));
+}
+function looksLikeDecisionMap(obj: any) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+  const vals = Object.values(obj);
+  if (!vals.length) return false;
+  const v = vals[0] as any;
+  return ("route" in (v ?? {})) && ("confidence" in (v ?? {}) || "answer" in (v ?? {}));
+}
+function pickFirst(matchers: Array<[string, any]>, guard: (x:any)=>boolean) {
+  for (const [name, val] of matchers) {
+    if (guard(val)) return { key: name, map: val };
+  }
+  return { key: undefined as string | undefined, map: undefined as any };
+}
+function detectFinalMaps(run: any) {
+  const candExtract = [
+    ["extracted", run?.extracted],
+    ["final_extracted", run?.final_extracted],
+    ["finalExtraction", run?.finalExtraction],
+    ["normalized", run?.normalized],
+    ["canonical", run?.canonical],
+    ["canonical_fields", run?.canonical_fields],
+  ] as const;
+  const candScores = [
+    ["scores", run?.scores],
+    ["final_scores", run?.final_scores],
+    ["finalScoring", run?.finalScoring],
+  ] as const;
+  const candDecisions = [
+    ["decisions", run?.decisions],
+    ["final_decisions", run?.final_decisions],
+    ["finalDecision", run?.finalDecision],
+  ] as const;
+
+  const ex = pickFirst(candExtract as any, looksLikeExtractionMap);
+  const sc = pickFirst(candScores as any, looksLikeScoringMap);
+  const dc = pickFirst(candDecisions as any, looksLikeDecisionMap);
+
+  dlog("Final maps detection", {
+    extractedChosenKey: ex.key, extractedCount: ex.map ? Object.keys(ex.map).length : 0,
+    scoresChosenKey: sc.key, scoresCount: sc.map ? Object.keys(sc.map).length : 0,
+    decisionsChosenKey: dc.key, decisionsCount: dc.map ? Object.keys(dc.map).length : 0,
+  });
+
+  return {
+    extractedEff: ex.map ?? {},
+    scoresEff: sc.map ?? {},
+    decisionsEff: dc.map ?? {},
+    keys: { extracted: ex.key, scores: sc.key, decisions: dc.key }
+  };
 }
 
-function clamp01(n: number) {
-  if (typeof n !== "number" || !isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
+/* ----------------- API base ----------------- */
+function getAPIBase(): string {
+  const w = (window as any);
+  return w.__ENV__?.PIPELINE_API_URL || (import.meta as any)?.env?.VITE_PIPELINE_API_URL || "/pl";
 }
-
-function groupByPid<T extends { prompt_id: number }>(arr: T[] = []): Record<number, T[]> {
-  return arr.reduce<Record<number, T[]>>((acc, cur) => {
-    (acc[cur.prompt_id] ||= []).push(cur);
-    return acc;
-  }, {});
-}
-
-function formatValue(val: any) {
-  if (val == null) return "—";
-  if (typeof val === "number") return Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(val);
-  if (typeof val === "object") return JSON.stringify(val);
-  return String(val);
-}
-
-/* ===================== Component ===================== */
 
 export default function RunDetailsPage() {
   const { key } = useParams<{ key: string }>();
   const [sp] = useSearchParams();
   const runId = sp.get("run_id") || undefined;
 
-  const [data, setData] = useState<PipelineRunResult | null>(null);
+  const [data, setData] = useState<PipelineRunResult | any | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // ---- Loaders ----
   const loadFromLocalStorage = React.useCallback(() => {
     if (!key) return false;
     const raw = localStorage.getItem(`${LS_PREFIX}${key}`);
     if (!raw) return false;
     try {
       const parsed = JSON.parse(raw);
-      // Erwartete Struktur: { run: PipelineRunResult, pdfUrl?: string }
       if (parsed?.run) {
-        setData(parsed.run as PipelineRunResult);
+        setData(parsed.run);
+        if (typeof window !== "undefined") (window as any).__run = parsed.run;
         dlog("Loaded from localStorage", {
           lsKey: `${LS_PREFIX}${key}`,
-          topKeys: keysOf(parsed.run),
+          runTopKeys: keysOf(parsed.run),
           pdfUrl: parsed?.pdfUrl ?? null,
         });
-        // Sofortige Diagnose der Struktur
-        printRunDiagnostics(parsed.run as PipelineRunResult, "localStorage");
+        printRunDiagnostics(parsed.run, "localStorage");
         return true;
       } else {
-        dlog("LocalStorage entry does not have 'run' prop", parsed);
+        dlog("LocalStorage entry missing 'run' property", parsed);
       }
-    } catch (e) {
-      dlog("LocalStorage parse error", String(e));
-    }
+    } catch (e) { dlog("LocalStorage parse error", String(e)); }
     return false;
   }, [key]);
 
@@ -142,15 +168,14 @@ export default function RunDetailsPage() {
       const API = getAPIBase();
       dlog("Fetching run by id", { API, runId });
       const res = await fetch(`${API}/runs/${runId}`, { headers: { Accept: "application/json" } });
+      const bodyText = await res.clone().text();
       const ct = res.headers.get("content-type") || "";
-      const textCopy = await res.clone().text(); // copy for debugging if parse fails
-      if (!ct.includes("application/json")) {
-        throw new Error(`Expected JSON, got ${ct}\nBody: ${textCopy.slice(0, 300)}…`);
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${textCopy.slice(0, 300)}…`);
-      const json = (await res.json()) as PipelineRunResult;
+      if (!ct.includes("application/json")) throw new Error(`Expected JSON, got ${ct}\nBody: ${bodyText.slice(0,300)}…`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${bodyText.slice(0,300)}…`);
+      const json = JSON.parse(bodyText);
       setData(json);
-      dlog("Fetched by API", { topKeys: keysOf(json) });
+      if (typeof window !== "undefined") (window as any).__run = json;
+      dlog("Fetched by API", { runTopKeys: keysOf(json) });
       printRunDiagnostics(json, "api");
       return true;
     } catch (e: any) {
@@ -164,18 +189,12 @@ export default function RunDetailsPage() {
     setLoading(true);
     const ok = loadFromLocalStorage();
     if (!ok) {
-      if (runId) {
-        fetchRunById().finally(() => setLoading(false));
-      } else {
-        setErr("Keine Daten gefunden (weder localStorage noch run_id). Bitte über die Liste erneut öffnen.");
-        setLoading(false);
-      }
-    } else {
-      setLoading(false);
-    }
+      if (runId) fetchRunById().finally(() => setLoading(false));
+      else { setErr("Keine Daten gefunden (weder localStorage noch run_id)."); setLoading(false); }
+    } else setLoading(false);
   }, [loadFromLocalStorage, fetchRunById, runId]);
 
-  const pdfUrl = React.useMemo(() => {
+  const pdfUrl = useMemo(() => {
     if (!key) return "";
     try {
       const raw = localStorage.getItem(`${LS_PREFIX}${key}`);
@@ -199,14 +218,23 @@ export default function RunDetailsPage() {
         <Container maxWidth="xl" sx={{ py: 3 }}>
           <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>
           <Typography variant="body2" color="text.secondary">
-            Tipp: Öffne die Details aus der Liste erneut – oder rufe diese Seite mit <code>?run_id=&lt;UUID&gt;</code> auf.
+            Tipp: Seite aus der Liste erneut öffnen oder mit <code>?run_id=&lt;UUID&gt;</code>.
           </Typography>
         </Container>
     );
   }
   if (!data) return null;
 
-  // ---------- Render ----------
+  // --- Auto-Detect final maps ---
+  const { extractedEff, scoresEff, decisionsEff, keys: chosenKeys } = useMemo(() => detectFinalMaps(data), [data]);
+
+  useEffect(() => {
+    dlog("Chosen final map keys", chosenKeys);
+    dlog("FinalExtractionCard", { count: Object.keys(extractedEff ?? {}).length, sample: Object.entries(extractedEff ?? {}).slice(0,3) });
+    dlog("FinalScoringCard",    { count: Object.keys(scoresEff ?? {}).length,    sample: Object.entries(scoresEff ?? {}).slice(0,3) });
+    dlog("FinalDecisionCard",   { count: Object.keys(decisionsEff ?? {}).length, sample: Object.entries(decisionsEff ?? {}).slice(0,3) });
+  }, [extractedEff, scoresEff, decisionsEff, chosenKeys]);
+
   return (
       <Container maxWidth="xl" sx={{ py: 3 }}>
         {/* Header */}
@@ -232,14 +260,14 @@ export default function RunDetailsPage() {
         <Grid container spacing={2}>
           {/* Final Results */}
           <Grid item xs={12} md={8}>
-            <FinalExtractionCard extracted={data.extracted} pdfUrl={pdfUrl} />
-            <FinalScoringCard scores={(data as any).scores} pdfUrl={pdfUrl} />
-            <FinalDecisionCard decisions={(data as any).decisions} pdfUrl={pdfUrl} />
+            <FinalExtractionCard extracted={extractedEff} pdfUrl={pdfUrl} />
+            <FinalScoringCard scores={scoresEff} pdfUrl={pdfUrl} />
+            <FinalDecisionCard decisions={decisionsEff} pdfUrl={pdfUrl} />
           </Grid>
 
           {/* Hinweise / Meta */}
           <Grid item xs={12} md={4}>
-            <SummaryCard data={data} />
+            <SummaryCard data={data} extractedEff={extractedEff} scoresEff={scoresEff} decisionsEff={decisionsEff} />
             <HintsCard data={data} />
           </Grid>
 
@@ -252,29 +280,28 @@ export default function RunDetailsPage() {
   );
 }
 
-/* ===================== Summary + Hints ===================== */
+/* ----------------- Summary + Hints ----------------- */
 
-function SummaryCard({ data }: { data: PipelineRunResult }) {
-  const finalsExtraction = Object.values((data.extracted ?? {}) as any);
-  const finalsScoring = Object.values(((data as any).scores ?? {}) as any);
-  const finalsDecision = Object.values(((data as any).decisions ?? {}) as any);
+function SummaryCard({
+                       data, extractedEff, scoresEff, decisionsEff
+                     }: { data: any, extractedEff: any, scoresEff: any, decisionsEff: any }) {
+  const finalsExtraction = Object.values(extractedEff ?? {});
+  const finalsScoring = Object.values(scoresEff ?? {});
+  const finalsDecision = Object.values(decisionsEff ?? {});
 
   const warnExtract = finalsExtraction.filter((x: any) => (x?.confidence ?? 1) < CONF_WARN).length;
   const warnScore = finalsScoring.filter((x: any) => (x?.confidence ?? 1) < CONF_WARN).length;
   const warnDec = finalsDecision.filter((x: any) => (x?.confidence ?? 1) < CONF_WARN).length;
 
-  // Diagnose: Warum alles 0/—?
-  React.useEffect(() => {
+  useEffect(() => {
     dlog("SummaryCard finals", {
-      extracted_keys: Object.keys(data.extracted ?? {}),
-      scores_keys: Object.keys((data as any).scores ?? {}),
-      decisions_keys: Object.keys((data as any).decisions ?? {}),
       overall_score: data.overall_score,
-      warnExtract,
-      warnScore,
-      warnDec,
+      extracted_count: finalsExtraction.length,
+      scores_count: finalsScoring.length,
+      decisions_count: finalsDecision.length,
+      warnExtract, warnScore, warnDec
     });
-  }, [data, warnExtract, warnScore, warnDec]);
+  }, [data, finalsExtraction.length, finalsScoring.length, finalsDecision.length, warnExtract, warnScore, warnDec]);
 
   return (
       <Card variant="outlined" sx={{ mb: 2 }}>
@@ -307,12 +334,12 @@ function SummaryCard({ data }: { data: PipelineRunResult }) {
   );
 }
 
-function HintsCard({ data }: { data: PipelineRunResult }) {
+function HintsCard({ data }: { data: any }) {
   const lowExtraction = Object.values((data.extracted ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
-  const lowScoring   = Object.values(((data as any).scores ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
-  const lowDecision  = Object.values(((data as any).decisions ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
+  const lowScoring   = Object.values((data.scores ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
+  const lowDecision  = Object.values((data.decisions ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
 
-  React.useEffect(() => {
+  useEffect(() => {
     dlog("HintsCard thresholds", { CONF_WARN, lowExtraction, lowScoring, lowDecision });
   }, [lowExtraction, lowScoring, lowDecision]);
 
@@ -324,12 +351,12 @@ function HintsCard({ data }: { data: PipelineRunResult }) {
             <Typography variant="body2">
               {(lowExtraction || lowScoring || lowDecision)
                   ? "⚠️ Einige finale Ergebnisse liegen unter der Konfidenzschwelle."
-                  : "Alle finalen Ergebnisse liegen über der Konfidenzschwelle."}
+                  : "Alle finalen Ergebnisse liegen über der Konfidenzschwelle (oder Finals fehlen)."}
             </Typography>
             <Stack direction="row" alignItems="center" gap={1}>
               <InfoOutlinedIcon fontSize="small" color="action" />
               <Typography variant="caption" color="text.secondary">
-                Tipp: In den Tabellen auf „Seite X“ klicken, um zur Evidenz im PDF zu springen.
+                Tipp: Chips „Seite X“ springen direkt zur Fundstelle im PDF (neuer Tab).
               </Typography>
             </Stack>
           </Stack>
@@ -338,18 +365,11 @@ function HintsCard({ data }: { data: PipelineRunResult }) {
   );
 }
 
-/* ===================== Final Cards ===================== */
+/* ----------------- Final Cards ----------------- */
 
-function FinalExtractionCard({ extracted, pdfUrl }: { extracted?: PipelineRunResult["extracted"], pdfUrl: string }) {
+function FinalExtractionCard({ extracted, pdfUrl }: { extracted?: Record<string, any>, pdfUrl: string }) {
   const entries = useMemo(() => Object.entries(extracted ?? {}), [extracted]);
-
-  useEffect(() => {
-    dlog("FinalExtractionCard", {
-      count: entries.length,
-      sample: entries.slice(0, 3).map(([k, v]) => ({ k, v })),
-    });
-  }, [entries]);
-
+  useEffect(() => { dlog("FinalExtractionCard", { count: entries.length, sample: entries.slice(0,3) }); }, [entries]);
   if (!entries.length) return null;
   return (
       <Card variant="outlined" sx={{ mb: 2 }}>
@@ -375,9 +395,7 @@ function FinalExtractionCard({ extracted, pdfUrl }: { extracted?: PipelineRunRes
                       <TableCell><Chip size="small" label={key} /></TableCell>
                       <TableCell>{formatValue(v?.value)}</TableCell>
                       <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
-                      <TableCell>
-                        {page ? <EvidenceChip page={page} pdfUrl={pdfUrl} bbox={bbox} quote={quote} /> : "—"}
-                      </TableCell>
+                      <TableCell>{page ? <EvidenceChip page={page} pdfUrl={pdfUrl} bbox={bbox} quote={quote} /> : "—"}</TableCell>
                       <TableCell>
                         {quote
                             ? <Tooltip title={quote}><Typography noWrap sx={{ maxWidth: 360 }}>{quote}</Typography></Tooltip>
@@ -395,16 +413,8 @@ function FinalExtractionCard({ extracted, pdfUrl }: { extracted?: PipelineRunRes
 
 function FinalScoringCard({ scores, pdfUrl }: { scores?: Record<string, any>, pdfUrl: string }) {
   const entries = useMemo(() => Object.entries(scores ?? {}), [scores]);
-
-  useEffect(() => {
-    dlog("FinalScoringCard", {
-      count: entries.length,
-      sample: entries.slice(0, 3).map(([k, v]) => ({ k, v })),
-    });
-  }, [entries]);
-
+  useEffect(() => { dlog("FinalScoringCard", { count: entries.length, sample: entries.slice(0,3) }); }, [entries]);
   if (!entries.length) return null;
-
   return (
       <Card variant="outlined" sx={{ mb: 2 }}>
         <CardHeader title="Scoring (final)" subheader="Ja/Nein-Ergebnis (aggregiert) mit Evidenz" />
@@ -426,19 +436,15 @@ function FinalScoringCard({ scores, pdfUrl }: { scores?: Record<string, any>, pd
                 return (
                     <TableRow key={key}>
                       <TableCell><Chip size="small" label={key} /></TableCell>
-                      <TableCell>
-                        <Chip size="small" color={v?.result ? "success" : "error"} label={v?.result ? "Ja" : "Nein"} />
-                      </TableCell>
+                      <TableCell><Chip size="small" color={v?.result ? "success" : "error"} label={v?.result ? "Ja" : "Nein"} /></TableCell>
                       <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
                       <TableCell>{(v?.votes_true ?? 0)} / {(v?.votes_false ?? 0)}</TableCell>
                       <TableCell>{v?.explanation ?? "—"}</TableCell>
                       <TableCell>
                         <Stack direction="row" gap={0.5} flexWrap="wrap">
-                          {support.length
-                              ? support.map((s, i) => (
-                                  <EvidenceChip key={i} page={s.page!} pdfUrl={pdfUrl} bbox={s.bbox} quote={s.quote ?? undefined} />
-                              ))
-                              : "—"}
+                          {support.length ? support.map((s, i) => (
+                              <EvidenceChip key={i} page={s.page!} pdfUrl={pdfUrl} bbox={s.bbox} quote={s.quote ?? undefined} />
+                          )) : "—"}
                         </Stack>
                       </TableCell>
                     </TableRow>
@@ -453,16 +459,8 @@ function FinalScoringCard({ scores, pdfUrl }: { scores?: Record<string, any>, pd
 
 function FinalDecisionCard({ decisions, pdfUrl }: { decisions?: Record<string, any>, pdfUrl: string }) {
   const entries = useMemo(() => Object.entries(decisions ?? {}), [decisions]);
-
-  useEffect(() => {
-    dlog("FinalDecisionCard", {
-      count: entries.length,
-      sample: entries.slice(0, 3).map(([k, v]) => ({ k, v })),
-    });
-  }, [entries]);
-
+  useEffect(() => { dlog("FinalDecisionCard", { count: entries.length, sample: entries.slice(0,3) }); }, [entries]);
   if (!entries.length) return null;
-
   return (
       <Card variant="outlined" sx={{ mb: 2 }}>
         <CardHeader title="Decision (final)" subheader="Routen-/Ja/Nein-Entscheidung (aggregiert) mit Evidenz" />
@@ -487,9 +485,9 @@ function FinalDecisionCard({ decisions, pdfUrl }: { decisions?: Record<string, a
                       <TableCell><Chip size="small" label={key} /></TableCell>
                       <TableCell><Chip size="small" label={v?.route} /></TableCell>
                       <TableCell>
-                        {typeof v?.answer === "boolean"
-                            ? <Chip size="small" color={v?.answer ? "success" : "error"} label={v?.answer ? "Ja" : "Nein"} />
-                            : "—"}
+                        {typeof v?.answer === "boolean" ? (
+                            <Chip size="small" color={v.answer ? "success" : "error"} label={v.answer ? "Ja" : "Nein"} />
+                        ) : "—"}
                       </TableCell>
                       <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
                       <TableCell>
@@ -499,11 +497,9 @@ function FinalDecisionCard({ decisions, pdfUrl }: { decisions?: Record<string, a
                       <TableCell>{v?.explanation ?? "—"}</TableCell>
                       <TableCell>
                         <Stack direction="row" gap={0.5} flexWrap="wrap">
-                          {support.length
-                              ? support.map((s, i) => (
-                                  <EvidenceChip key={i} page={s.page!} pdfUrl={pdfUrl} bbox={s.bbox} quote={s.quote ?? undefined} />
-                              ))
-                              : "—"}
+                          {support.length ? support.map((s, i) => (
+                              <EvidenceChip key={i} page={s.page!} pdfUrl={pdfUrl} bbox={s.bbox} quote={s.quote ?? undefined} />
+                          )) : "—"}
                         </Stack>
                       </TableCell>
                     </TableRow>
@@ -516,14 +512,17 @@ function FinalDecisionCard({ decisions, pdfUrl }: { decisions?: Record<string, a
   );
 }
 
-/* ===================== Drilldown ===================== */
+/* ----------------- Drilldown ----------------- */
 
-function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: string }) {
-  const extractByPid = useMemo(() => groupByPid((data.extraction as any[]) ?? []), [data.extraction]);
-  const scoringByPid = useMemo(() => groupByPid((data.scoring as any[]) ?? []), [data.scoring]);
-  const decisionByPid = useMemo(() => groupByPid((data.decision as any[]) ?? []), [data.decision]);
+function PromptDrilldown({ data, pdfUrl }: { data: any, pdfUrl: string }) {
+  const extraction = (data.extraction as any[]) ?? [];
+  const scoring = (data.scoring as any[]) ?? [];
+  const decision = (data.decision as any[]) ?? [];
 
-  // Erste Diagnose direkt beim Gruppieren
+  const extractByPid = useMemo(() => groupByPid(extraction), [extraction]);
+  const scoringByPid = useMemo(() => groupByPid(scoring), [scoring]);
+  const decisionByPid = useMemo(() => groupByPid(decision), [decision]);
+
   useEffect(() => {
     dlog("Drilldown: groups", {
       extraction_pids: Object.keys(extractByPid),
@@ -539,16 +538,13 @@ function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: st
       decision: countWeightPresence(dc),
     });
     dlog("Drilldown: sample extraction", summarizeArray(ex, r => ({
-      pid: r.prompt_id, value: r.value, weight: r.weight, error: r.error,
-      page: r?.source?.page, route: r?.route
+      pid: r?.prompt_id, value: r?.value, weight: r?.weight, page: r?.source?.page, err: r?.error
     })));
     dlog("Drilldown: sample scoring", summarizeArray(sc, r => ({
-      pid: r.prompt_id, result: r.result, weight: r.weight, explanation: r.explanation,
-      page: r?.source?.page
+      pid: r?.prompt_id, result: r?.result, weight: r?.weight, page: r?.source?.page, err: r?.error
     })));
     dlog("Drilldown: sample decision", summarizeArray(dc, r => ({
-      pid: r.prompt_id, route: r.route, bool: r.boolean, weight: r.weight,
-      page: r?.source?.page, err: r.error
+      pid: r?.prompt_id, route: r?.route, bool: r?.boolean, weight: r?.weight, page: r?.source?.page, err: r?.error
     })));
   }, [extractByPid, scoringByPid, decisionByPid]);
 
@@ -556,27 +552,21 @@ function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: st
   const [onlyErr, setOnlyErr] = useState(false);
   const qlc = q.trim().toLowerCase();
   const match = (txt?: string | null) => (txt ?? "").toLowerCase().includes(qlc);
-
-  const filterPR = <T extends PromptResult | ScoringResult>(arr: T[]) => {
-    return arr.filter((r: any) => {
-      if (onlyErr && !r?.error) return false;
-      if (!qlc) return true;
-      const parts: string[] = [];
-      if (r.prompt_text) parts.push(r.prompt_text);
-      if (typeof (r as any).value !== "object") parts.push(String((r as any).value ?? ""));
-      if ((r as any).route) parts.push(String((r as any).route));
-      if ((r as any).explanation) parts.push(String((r as any).explanation));
-      if (r.source?.quote) parts.push(String(r.source.quote));
-      return parts.some(p => match(p));
-    });
-  };
+  const filterPR = <T extends PromptResult>(arr: T[]) => arr.filter((r: any) => {
+    if (onlyErr && !r?.error) return false;
+    if (!qlc) return true;
+    const parts: string[] = [];
+    if (r.prompt_text) parts.push(r.prompt_text);
+    if (typeof r.value !== "object") parts.push(String(r.value ?? ""));
+    if (r.route) parts.push(String(r.route));
+    if (r.explanation) parts.push(String(r.explanation));
+    if (r.source?.quote) parts.push(String(r.source.quote));
+    return parts.some(p => match(p));
+  });
 
   return (
       <Card variant="outlined">
-        <CardHeader
-            title="Evidenz pro Prompt"
-            subheader="Batch-Ergebnisse nach Prompt gruppiert (inkl. Batch-Confidence, Seite, Zitat, BBox)"
-        />
+        <CardHeader title="Evidenz pro Prompt" subheader="Batch-Ergebnisse (inkl. Seite/Zitat/BBox, Batch-Confidence falls vorhanden)" />
         <CardContent>
           <Stack direction={{ xs: "column", sm: "row" }} gap={1} sx={{ mb: 2 }}>
             <TextField size="small" label="Suche in Evidenzen" value={q} onChange={e => setQ(e.target.value)} sx={{ width: { xs: "100%", sm: 360 } }} />
@@ -608,29 +598,14 @@ function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: st
                       <TableBody>
                         {list.map((r, i) => (
                             <TableRow key={i} hover>
-                              <TableCell>
-                                {r.source?.page
-                                    ? <EvidenceChip page={r.source.page!} pdfUrl={pdfUrl} bbox={r.source?.bbox ?? undefined} quote={r.source?.quote ?? undefined} />
-                                    : "—"}
-                              </TableCell>
-                              <TableCell>
-                                {r.source?.quote
-                                    ? <Tooltip title={r.source.quote}><Typography noWrap sx={{ maxWidth: 360 }}>{r.source.quote}</Typography></Tooltip>
-                                    : "—"}
-                              </TableCell>
+                              <TableCell>{r.source?.page ? <EvidenceChip page={r.source.page!} pdfUrl={pdfUrl} bbox={r.source?.bbox ?? undefined} quote={r.source?.quote ?? undefined} /> : "—"}</TableCell>
+                              <TableCell>{r.source?.quote ? <Tooltip title={r.source.quote}><Typography noWrap sx={{ maxWidth: 360 }}>{r.source.quote}</Typography></Tooltip> : "—"}</TableCell>
                               <TableCell>{formatValue(r.value)}</TableCell>
                               <TableCell>
-                                <ConfidenceBar value={typeof r.weight === "number" ? r.weight : null} />
-                                {typeof r.weight !== "number" && (
-                                    <Typography variant="caption" color="text.secondary">— (keine weight im DTO)</Typography>
-                                )}
+                                {typeof r.weight === "number" ? <ConfidenceBar value={r.weight} /> : <Typography variant="body2">—</Typography>}
                               </TableCell>
                               <TableCell>{r.json_key ?? "—"}</TableCell>
-                              <TableCell>
-                                {Array.isArray(r.source?.bbox)
-                                    ? <Tooltip title={String(r.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip>
-                                    : "—"}
-                              </TableCell>
+                              <TableCell>{Array.isArray(r.source?.bbox) ? <Tooltip title={String(r.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip> : "—"}</TableCell>
                               <TableCell>{r.error ?? ""}</TableCell>
                             </TableRow>
                         ))}
@@ -640,10 +615,9 @@ function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: st
                 </Accordion>
             );
           })}
-
           {/* Scoring */}
           {Object.entries(scoringByPid).map(([pid, items]) => {
-            const list = filterPR(items as any as ScoringResult[]);
+            const list = filterPR(items as PromptResult[]);
             if (!list.length) return null;
             return (
                 <Accordion key={`sc-${pid}`}>
@@ -665,24 +639,11 @@ function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: st
                       <TableBody>
                         {list.map((s: any, i: number) => (
                             <TableRow key={i} hover>
-                              <TableCell>
-                                {s.source?.page
-                                    ? <EvidenceChip page={s.source.page!} pdfUrl={pdfUrl} bbox={s.source?.bbox ?? undefined} quote={s.source?.quote ?? undefined} />
-                                    : "—"}
-                              </TableCell>
+                              <TableCell>{s.source?.page ? <EvidenceChip page={s.source.page!} pdfUrl={pdfUrl} bbox={s.source?.bbox ?? undefined} quote={s.source?.quote ?? undefined} /> : "—"}</TableCell>
                               <TableCell>{s.result ? "Ja" : "Nein"}</TableCell>
                               <TableCell>{s.explanation || "—"}</TableCell>
-                              <TableCell>
-                                <ConfidenceBar value={typeof s.weight === "number" ? s.weight : null} />
-                                {typeof s.weight !== "number" && (
-                                    <Typography variant="caption" color="text.secondary">— (keine weight im DTO)</Typography>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                {Array.isArray(s.source?.bbox)
-                                    ? <Tooltip title={String(s.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip>
-                                    : "—"}
-                              </TableCell>
+                              <TableCell>{typeof s.weight === "number" ? <ConfidenceBar value={s.weight} /> : <Typography variant="body2">—</Typography>}</TableCell>
+                              <TableCell>{Array.isArray(s.source?.bbox) ? <Tooltip title={String(s.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip> : "—"}</TableCell>
                               <TableCell>{(s as any).error ?? ""}</TableCell>
                             </TableRow>
                         ))}
@@ -692,7 +653,6 @@ function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: st
                 </Accordion>
             );
           })}
-
           {/* Decision */}
           {Object.entries(decisionByPid).map(([pid, items]) => {
             const list = filterPR(items as PromptResult[]);
@@ -718,25 +678,12 @@ function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: st
                       <TableBody>
                         {list.map((r, i) => (
                             <TableRow key={i} hover>
-                              <TableCell>
-                                {r.source?.page
-                                    ? <EvidenceChip page={r.source.page!} pdfUrl={pdfUrl} bbox={r.source?.bbox ?? undefined} quote={r.source?.quote ?? undefined} />
-                                    : "—"}
-                              </TableCell>
+                              <TableCell>{r.source?.page ? <EvidenceChip page={r.source.page!} pdfUrl={pdfUrl} bbox={r.source?.bbox ?? undefined} quote={r.source?.quote ?? undefined} /> : "—"}</TableCell>
                               <TableCell>{r.route ?? "—"}</TableCell>
                               <TableCell>{typeof r.boolean === "boolean" ? (r.boolean ? "Ja" : "Nein") : "—"}</TableCell>
-                              <TableCell>{(r.value && typeof r.value === "object" && (r.value as any).explanation) || "—"}</TableCell>
-                              <TableCell>
-                                <ConfidenceBar value={typeof r.weight === "number" ? r.weight : null} />
-                                {typeof r.weight !== "number" && (
-                                    <Typography variant="caption" color="text.secondary">— (keine weight im DTO)</Typography>
-                                )}
-                              </TableCell>
-                              <TableCell>
-                                {Array.isArray(r.source?.bbox)
-                                    ? <Tooltip title={String(r.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip>
-                                    : "—"}
-                              </TableCell>
+                              <TableCell>{(r as any)?.explanation ?? (typeof r.value === "object" ? (r as any).value?.explanation : "—")}</TableCell>
+                              <TableCell>{typeof r.weight === "number" ? <ConfidenceBar value={r.weight} /> : <Typography variant="body2">—</Typography>}</TableCell>
+                              <TableCell>{Array.isArray(r.source?.bbox) ? <Tooltip title={String(r.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip> : "—"}</TableCell>
                               <TableCell>{r.error ?? ""}</TableCell>
                             </TableRow>
                         ))}
@@ -751,8 +698,7 @@ function PromptDrilldown({ data, pdfUrl }: { data: PipelineRunResult, pdfUrl: st
   );
 }
 
-/* ===================== Small UI helpers ===================== */
-
+/* ----------------- Small helpers ----------------- */
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
       <Stack direction="row" spacing={1} alignItems="center">
@@ -770,7 +716,6 @@ function EvidenceChip({ page, pdfUrl, bbox, quote }: { page: number; pdfUrl: str
             size="small"
             label={`Seite ${page}`}
             onClick={() => {
-              if (!pdfUrl) dlog("PDF URL fehlt – kann nicht springen");
               const url = pdfUrl ? `${pdfUrl}#page=${page}` : undefined;
               dlog("Jump to PDF", { url, page, bbox, hasPdfUrl: !!pdfUrl });
               if (url) window.open(url, "_blank", "noopener,noreferrer");
@@ -782,9 +727,7 @@ function EvidenceChip({ page, pdfUrl, bbox, quote }: { page: number; pdfUrl: str
 }
 
 function ConfidenceBar({ value }: { value?: number | null }) {
-  if (value == null || Number.isNaN(value)) {
-    return <Typography variant="body2">—</Typography>;
-  }
+  if (value == null || Number.isNaN(value)) return <Typography variant="body2">—</Typography>;
   const v = clamp01(value);
   return (
       <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 160 }}>
@@ -798,10 +741,22 @@ function ConfidenceBar({ value }: { value?: number | null }) {
   );
 }
 
-/* ===================== Diagnostics ===================== */
+function groupByPid<T extends { prompt_id: number }>(arr: T[]): Record<number, T[]> {
+  return (arr ?? []).reduce<Record<number, T[]>>((acc, cur) => {
+    (acc[cur.prompt_id] ||= []).push(cur);
+    return acc;
+  }, {});
+}
 
+function formatValue(val: any) {
+  if (val == null) return "—";
+  if (typeof val === "number") return Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(val);
+  if (typeof val === "object") return JSON.stringify(val);
+  return String(val);
+}
+
+/* ----------------- Deep diagnostics ----------------- */
 function printRunDiagnostics(run: any, source: "localStorage" | "api") {
-  // Top-Level
   dlog(`RUN (${source}) top-level`, {
     keys: keysOf(run),
     pdf_id: run?.pdf_id,
@@ -809,13 +764,11 @@ function printRunDiagnostics(run: any, source: "localStorage" | "api") {
     overall_score: run?.overall_score,
   });
 
-  // Finals
-  const exKeys = keysOf(run?.extracted ?? {});
-  const scKeys = keysOf(run?.scores ?? {});
-  const dcKeys = keysOf(run?.decisions ?? {});
-  dlog("Finals present", { extracted_keys: exKeys, scores_keys: scKeys, decisions_keys: dcKeys });
+  const exKeys = keysOf(run?.extracted);
+  const scKeys = keysOf(run?.scores);
+  const dcKeys = keysOf(run?.decisions);
+  dlog("Finals present (exact keys)", { extracted_keys: exKeys, scores_keys: scKeys, decisions_keys: dcKeys });
 
-  // Arrays
   const exArr = run?.extraction ?? [];
   const scArr = run?.scoring ?? [];
   const dcArr = run?.decision ?? [];
@@ -826,18 +779,15 @@ function printRunDiagnostics(run: any, source: "localStorage" | "api") {
     decision: summarizeArray(dcArr, (r: any) => ({ pid: r?.prompt_id, route: r?.route, bool: r?.boolean, weight: r?.weight, page: r?.source?.page, err: r?.error })),
   });
 
-  // Batch-Weight-Verfügbarkeit
   dlog("Weight presence", {
     extraction: countWeightPresence(exArr),
     scoring: countWeightPresence(scArr),
     decision: countWeightPresence(dcArr),
   });
 
-  // Hinweise, warum Finale leer sein könnten
-  if (exKeys.length === 0 && scKeys.length === 0 && dcKeys.length === 0) {
-    dlog("WARN: Keine finalen Maps vorhanden", {
-      hint: "Lädst du evtl. ein nicht-konsolidiertes Objekt? Prüfe Konsolidierung/DTO-Ausspielung.",
-      note: "Wenn extraction/scoring/decision nur Fehler enthalten oder keine validen Kandidaten haben, bleiben Finals leer.",
+  if (!exKeys.length && !scKeys.length && !dcKeys.length) {
+    dlog("WARN: Keine finalen Maps gefunden", {
+      tip: "DTO könnte vor Konsolidierung stammen ODER Feldnamen weichen ab (z.B. final_extracted, canonical_fields). Auto-Detection läuft.",
     });
   }
 }
