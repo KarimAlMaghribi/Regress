@@ -84,6 +84,7 @@ async fn app_main() -> anyhow::Result<()> {
         warn!(%e, "CREATE EXTENSION pgcrypto failed (continuing)");
     }
 
+    // Basis-Tabellen (idempotent)
     if let Err(e) = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipeline_runs (
             id UUID PRIMARY KEY,
@@ -123,6 +124,7 @@ async fn app_main() -> anyhow::Result<()> {
         return Err(e.into());
     }
 
+    // Kafka-Client
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "pipeline-runner")
         .set("bootstrap.servers", &broker)
@@ -190,8 +192,7 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
-                let cfg: PipelineConfig = match serde_json::from_value::<PipelineConfig>(config_json)
-                {
+                let cfg: PipelineConfig = match serde_json::from_value::<PipelineConfig>(config_json) {
                     Ok(c) => c,
                     Err(e) => {
                         warn!(%e, "invalid pipeline config json");
@@ -199,6 +200,7 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
+                // Textseiten laden
                 let pages: Vec<(i32, String)> = match sqlx::query(
                     r#"
                     SELECT page_no, text
@@ -243,10 +245,12 @@ async fn app_main() -> anyhow::Result<()> {
                     continue;
                 }
 
+                // Ausführen
                 match runner::execute_with_pages(&cfg, &pages, &batch_cfg).await {
                     Ok(outcome) => {
                         let overall = runner::compute_overall_score(&outcome.scoring);
 
+                        // Roh-Extraktion in eine einfache Map (json_key -> value) überführen
                         let mut extracted: std::collections::HashMap<String, serde_json::Value> =
                             std::collections::HashMap::new();
                         for p in &outcome.extraction {
@@ -255,9 +259,13 @@ async fn app_main() -> anyhow::Result<()> {
                             }
                         }
 
+                        // Steps protokollieren
                         let mut seq: i32 = 1;
                         for rs in &outcome.log {
-                            if let Err(e) = sqlx::query("INSERT INTO pipeline_run_steps (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, result) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
+                            if let Err(e) = sqlx::query(
+                                "INSERT INTO pipeline_run_steps (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, result)
+                                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                            )
                                 .bind(run_id)
                                 .bind(seq)
                                 .bind(&rs.step_id)
@@ -274,6 +282,7 @@ async fn app_main() -> anyhow::Result<()> {
                             seq += 1;
                         }
 
+                        // Abschluss in DB (finished_at, overall_score, extracted)
                         if let Err(e) = sqlx::query(
                             "UPDATE pipeline_runs SET finished_at = now(), overall_score = $2, extracted = $3 WHERE id = $1",
                         )
@@ -286,6 +295,7 @@ async fn app_main() -> anyhow::Result<()> {
                             warn!(%e, %run_id, "failed to finalize pipeline_run row");
                         }
 
+                        // Kafka-Payload: Rohdaten + run_id (damit API konsolidieren & zuordnen kann)
                         let result = PipelineRunResult {
                             pdf_id: evt.pdf_id,
                             pipeline_id: evt.pipeline_id,
@@ -297,13 +307,19 @@ async fn app_main() -> anyhow::Result<()> {
                             log: outcome.log,
                         };
 
-                        if let Ok(payload) = serde_json::to_string(&result) {
-                            let _ = producer
-                                .send(
-                                    FutureRecord::to("pipeline-result").payload(&payload).key(&()),
-                                    Duration::from_secs(0),
-                                )
-                                .await;
+                        // run_id anhängen (Top-Level), damit die API exakt updaten kann
+                        if let Ok(mut result_json) = serde_json::to_value(&result) {
+                            result_json["run_id"] = serde_json::json!(run_id.to_string());
+                            if let Ok(payload) = serde_json::to_string(&result_json) {
+                                let _ = producer
+                                    .send(
+                                        FutureRecord::to("pipeline-result")
+                                            .payload(&payload)
+                                            .key(&run_id.to_string()),
+                                        Duration::from_secs(0),
+                                    )
+                                    .await;
+                            }
                         }
                     }
                     Err(e) => {
