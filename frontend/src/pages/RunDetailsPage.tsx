@@ -11,10 +11,10 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
-// Optional: Typen anpassen/wegnehmen falls bei dir anders
+// Optional: bei dir ggf. "any" statt Import
 import type { PipelineRunResult } from "../types/pipeline";
 
-/** ----------------- Types ----------------- */
+/* ===== Types ===== */
 type TextPosition = { page?: number; bbox?: number[]; quote?: string | null };
 type PromptType = "ExtractionPrompt" | "ScoringPrompt" | "DecisionPrompt";
 
@@ -25,7 +25,7 @@ type PromptResult = {
   value?: any | null;
   boolean?: boolean | null;
   route?: string | null;
-  weight?: number | null;       // Batch-Confidence (vom Backend)
+  weight?: number | null;       // Batch-Confidence (Backend)
   source?: TextPosition | null; // Evidence
   json_key?: string | null;
   explanation?: string | null;
@@ -35,7 +35,7 @@ type PromptResult = {
 const CONF_WARN = 0.6;
 const LS_PREFIX = "run-view:";
 
-/** ----------------- Logging helpers ----------------- */
+/* ===== Logging helpers ===== */
 function dlog(label: string, payload?: any) {
   // eslint-disable-next-line no-console
   console.log(`[RunView] ${label}`, payload ?? "");
@@ -55,19 +55,18 @@ function countWeightPresence(arr: any[] | undefined | null) {
 }
 function clamp01(n: number) { return Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0)); }
 
-/** ----------------- API base ----------------- */
+/* ===== API base ===== */
 function getAPIBase(): string {
   const w = (window as any);
   return w.__ENV__?.PIPELINE_API_URL || (import.meta as any)?.env?.VITE_PIPELINE_API_URL || "/pl";
 }
 
-/** ----------------- Final map auto-detection (robust) ----------------- */
+/* ===== Final-map heuristics ===== */
 function looksLikeExtractionMap(obj: any) {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
   const vals = Object.values(obj);
   if (!vals.length) return false;
   const v = vals[0] as any;
-  // toleranter: akzeptiere confidence|score|conf
   const hasConf = ("confidence" in (v ?? {})) || ("score" in (v ?? {})) || ("conf" in (v ?? {}));
   const hasFieldish = ("value" in (v ?? {})) || ("page" in (v ?? {})) || ("quote" in (v ?? {}));
   return hasConf && hasFieldish;
@@ -88,56 +87,91 @@ function looksLikeDecisionMap(obj: any) {
   const hasConf = ("confidence" in (v ?? {})) || ("score" in (v ?? {})) || ("conf" in (v ?? {}));
   return ("route" in (v ?? {})) && (hasConf || "answer" in (v ?? {}));
 }
-function pickFirst(matchers: Array<[string, any]>, guard: (x:any)=>boolean) {
-  for (const [name, val] of matchers) {
-    try { if (guard(val)) return { key: name, map: val }; } catch { /* ignore */ }
+
+/* ===== Deep scan (rekursiv bis Tiefe 5) ===== */
+type Found = { path: string; obj: any };
+function deepFind(run: any, guard: (x:any)=>boolean, maxDepth = 5): Found | null {
+  const seen = new WeakSet<object>();
+  function rec(node: any, path: string[], depth: number): Found | null {
+    if (!node || typeof node !== "object" || Array.isArray(node)) return null;
+    if (seen.has(node)) return null;
+    seen.add(node);
+    try {
+      if (guard(node)) return { path: path.join("."), obj: node };
+    } catch { /* ignore */ }
+    if (depth >= maxDepth) return null;
+    for (const [k, v] of Object.entries(node)) {
+      if (v && typeof v === "object") {
+        const f = rec(v, [...path, k], depth + 1);
+        if (f) return f;
+      }
+    }
+    return null;
   }
-  return { key: undefined as string | undefined, map: undefined as any };
+  return rec(run, [], 0);
 }
+
 function detectFinalMaps(run: any) {
-  try {
-    const candExtract = [
+  const candidates = {
+    extracted: [
       ["extracted", run?.extracted],
       ["final_extracted", run?.final_extracted],
       ["finalExtraction", run?.finalExtraction],
       ["normalized", run?.normalized],
       ["canonical", run?.canonical],
       ["canonical_fields", run?.canonical_fields],
-    ] as const;
-    const candScores = [
+    ],
+    scores: [
       ["scores", run?.scores],
       ["final_scores", run?.final_scores],
       ["finalScoring", run?.finalScoring],
-    ] as const;
-    const candDecisions = [
+    ],
+    decisions: [
       ["decisions", run?.decisions],
       ["final_decisions", run?.final_decisions],
       ["finalDecision", run?.finalDecision],
-    ] as const;
+    ],
+  } as const;
 
-    const ex = pickFirst(candExtract as any, looksLikeExtractionMap);
-    const sc = pickFirst(candScores as any, looksLikeScoringMap);
-    const dc = pickFirst(candDecisions as any, looksLikeDecisionMap);
-
-    dlog("Final maps detection", {
-      extractedChosenKey: ex.key, extractedCount: ex.map ? Object.keys(ex.map).length : 0,
-      scoresChosenKey: sc.key, scoresCount: sc.map ? Object.keys(sc.map).length : 0,
-      decisionsChosenKey: dc.key, decisionsCount: dc.map ? Object.keys(dc.map).length : 0,
-    });
-
-    return {
-      extractedEff: ex.map ?? {},
-      scoresEff: sc.map ?? {},
-      decisionsEff: dc.map ?? {},
-      keys: { extracted: ex.key, scores: sc.key, decisions: dc.key },
-    };
-  } catch (e) {
-    dlog("Final maps detection ERROR", String(e));
-    return { extractedEff: {}, scoresEff: {}, decisionsEff: {}, keys: {} as any };
+  function pickAlias(list: readonly [string, any][], guard: (x:any)=>boolean) {
+    for (const [name, val] of list) {
+      try { if (guard(val)) return { key: name, map: val, via: "alias" }; } catch {}
+    }
+    return null;
   }
+
+  let ex = pickAlias(candidates.extracted, looksLikeExtractionMap);
+  let sc = pickAlias(candidates.scores, looksLikeScoringMap);
+  let dc = pickAlias(candidates.decisions, looksLikeDecisionMap);
+
+  if (!ex) {
+    const found = deepFind(run, looksLikeExtractionMap);
+    if (found) ex = { key: found.path, map: found.obj, via: "deep" as const };
+  }
+  if (!sc) {
+    const found = deepFind(run, looksLikeScoringMap);
+    if (found) sc = { key: found.path, map: found.obj, via: "deep" as const };
+  }
+  if (!dc) {
+    const found = deepFind(run, looksLikeDecisionMap);
+    if (found) dc = { key: found.path, map: found.obj, via: "deep" as const };
+  }
+
+  dlog("Final maps detection", {
+    extractedChosenKey: ex?.key, extractedCount: ex?.map ? Object.keys(ex.map).length : 0, extractedVia: ex?.via ?? null,
+    scoresChosenKey: sc?.key, scoresCount: sc?.map ? Object.keys(sc.map).length : 0, scoresVia: sc?.via ?? null,
+    decisionsChosenKey: dc?.key, decisionsCount: dc?.map ? Object.keys(dc.map).length : 0, decisionsVia: dc?.via ?? null,
+  });
+
+  return {
+    extractedEff: ex?.map ?? {},
+    scoresEff: sc?.map ?? {},
+    decisionsEff: dc?.map ?? {},
+    keys: { extracted: ex?.key, scores: sc?.key, decisions: dc?.key, via: { ex: ex?.via, sc: sc?.via, dc: dc?.via } }
+  };
 }
 
-/** ----------------- Component ----------------- */
+/* ===== Component ===== */
 export default function RunDetailsPage() {
   const { key } = useParams<{ key: string }>();
   const [sp] = useSearchParams();
@@ -147,7 +181,7 @@ export default function RunDetailsPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // Loader (immer gleich viele Hooks pro Render!)
+  // Loader (Hook-Order fix: alle Hooks vor Returns)
   const loadFromLocalStorage = React.useCallback(() => {
     if (!key) return false;
     const raw = localStorage.getItem(`${LS_PREFIX}${key}`);
@@ -204,7 +238,6 @@ export default function RunDetailsPage() {
     } else setLoading(false);
   }, [loadFromLocalStorage, fetchRunById, runId]);
 
-  // pdfUrl wird unabhängig von Datenzustand berechnet (keine Hooks hinter Returns!)
   const pdfUrl = useMemo(() => {
     if (!key) return "";
     try {
@@ -215,14 +248,14 @@ export default function RunDetailsPage() {
     } catch { return ""; }
   }, [key]);
 
-  // *** WICHTIG: Final-Map-Detection VOR JEGLICHEN RETURNS ***
+  // Final-Map-Detection (vor Returns; robust & deep)
   const { extractedEff, scoresEff, decisionsEff, keys: chosenKeys } = useMemo(
       () => detectFinalMaps(data),
       [data]
   );
   useEffect(() => { dlog("Chosen final map keys", chosenKeys); }, [chosenKeys]);
 
-  // ---------- early returns (keine Hooks mehr danach!) ----------
+  /* ----- Returns ----- */
   if (loading) {
     return (
         <Container maxWidth="xl" sx={{ py: 3 }}>
@@ -272,14 +305,14 @@ export default function RunDetailsPage() {
             <FinalExtractionCard extracted={extractedEff} pdfUrl={pdfUrl} />
             <FinalScoringCard scores={scoresEff} pdfUrl={pdfUrl} />
             <FinalDecisionCard decisions={decisionsEff} pdfUrl={pdfUrl} />
-            {/* Hinweis sichtbar machen, wenn Finals wirklich leer sind */}
-            {Object.keys(extractedEff ?? {}).length === 0
+            {(Object.keys(extractedEff ?? {}).length === 0
                 && Object.keys(scoresEff ?? {}).length === 0
-                && Object.keys(decisionsEff ?? {}).length === 0 && (
-                    <Alert severity="info" sx={{ mt: 2 }}>
-                      Keine finalen Ergebnisse im DTO gefunden (auch keine Aliase). Lädt der Client evtl. ein Objekt <em>vor</em> der Konsolidierung?
-                    </Alert>
-                )}
+                && Object.keys(decisionsEff ?? {}).length === 0) && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  Keine finalen Ergebnisse im DTO gefunden (auch nicht in verschachtelten Pfaden). Lädt der Client
+                  evtl. ein Objekt <em>vor</em> der Konsolidierung? Siehe Konsole <code>[RunView]</code> Logs.
+                </Alert>
+            )}
           </Grid>
 
           {/* Hinweise / Meta */}
@@ -302,7 +335,7 @@ export default function RunDetailsPage() {
   );
 }
 
-/** ----------------- Summary + Hints ----------------- */
+/* ===== Summary + Hints ===== */
 function SummaryCard({
                        data, extractedEff, scoresEff, decisionsEff
                      }: { data: any, extractedEff: any, scoresEff: any, decisionsEff: any }) {
@@ -316,7 +349,7 @@ function SummaryCard({
 
   useEffect(() => {
     dlog("SummaryCard finals", {
-      overall_score: data.overall_score,
+      overall_score: data?.overall_score ?? null,
       extracted_count: finalsExtraction.length,
       scores_count: finalsScoring.length,
       decisions_count: finalsDecision.length,
@@ -330,7 +363,7 @@ function SummaryCard({
         <CardContent>
           <Stack spacing={1}>
             <Row label="Final Score">
-              {typeof data.overall_score === "number"
+              {typeof data?.overall_score === "number"
                   ? <ConfidenceBar value={clamp01(data.overall_score)} />
                   : <Typography variant="body2">—</Typography>}
             </Row>
@@ -356,9 +389,9 @@ function SummaryCard({
 }
 
 function HintsCard({ data }: { data: any }) {
-  const lowExtraction = Object.values((data.extracted ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
-  const lowScoring   = Object.values((data.scores ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
-  const lowDecision  = Object.values((data.decisions ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
+  const lowExtraction = Object.values((data?.extracted ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
+  const lowScoring   = Object.values((data?.scores ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
+  const lowDecision  = Object.values((data?.decisions ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
 
   useEffect(() => {
     dlog("HintsCard thresholds", { CONF_WARN, lowExtraction, lowScoring, lowDecision });
@@ -386,7 +419,7 @@ function HintsCard({ data }: { data: any }) {
   );
 }
 
-/** ----------------- Final Cards ----------------- */
+/* ===== Final Cards ===== */
 function FinalExtractionCard({ extracted, pdfUrl }: { extracted?: Record<string, any>, pdfUrl: string }) {
   const entries = useMemo(() => Object.entries(extracted ?? {}), [extracted]);
   useEffect(() => { dlog("FinalExtractionCard", { count: entries.length, sample: entries.slice(0,3) }); }, [entries]);
@@ -521,11 +554,11 @@ function FinalDecisionCard({ decisions, pdfUrl }: { decisions?: Record<string, a
   );
 }
 
-/** ----------------- Drilldown ----------------- */
+/* ===== Drilldown ===== */
 function PromptDrilldown({ data, pdfUrl }: { data: any, pdfUrl: string }) {
-  const extraction = (data.extraction as any[]) ?? [];
-  const scoring = (data.scoring as any[]) ?? [];
-  const decision = (data.decision as any[]) ?? [];
+  const extraction = (data?.extraction as any[]) ?? [];
+  const scoring = (data?.scoring as any[]) ?? [];
+  const decision = (data?.decision as any[]) ?? [];
 
   const extractByPid = useMemo(() => groupByPid(extraction), [extraction]);
   const scoringByPid = useMemo(() => groupByPid(scoring), [scoring]);
@@ -704,7 +737,7 @@ function PromptDrilldown({ data, pdfUrl }: { data: any, pdfUrl: string }) {
   );
 }
 
-/** ----------------- Small helpers ----------------- */
+/* ===== Small helpers ===== */
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
       <Stack direction="row" spacing={1} alignItems="center">
@@ -761,7 +794,7 @@ function formatValue(val: any) {
   return String(val);
 }
 
-/** ----------------- Deep diagnostics ----------------- */
+/* ===== Deep diagnostics ===== */
 function printRunDiagnostics(run: any, source: "localStorage" | "api") {
   dlog(`RUN (${source}) top-level`, {
     keys: keysOf(run),
@@ -793,7 +826,7 @@ function printRunDiagnostics(run: any, source: "localStorage" | "api") {
 
   if (!exKeys.length && !scKeys.length && !dcKeys.length) {
     dlog("WARN: Keine finalen Maps gefunden", {
-      tip: "DTO stammt wahrscheinlich vor der Konsolidierung ODER Feldnamen weichen ab (z. B. final_extracted/canonical_fields). Auto-Detection prüft Aliase.",
+      tip: "DTO stammt wahrscheinlich vor der Konsolidierung ODER Feldnamen weichen ab (z. B. final_extracted/canonical_fields). Deep-Scan prüft verschachtelte Pfade.",
     });
   }
 }
