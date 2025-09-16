@@ -11,7 +11,6 @@ import RefreshIcon from "@mui/icons-material/Refresh";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
-// Optional: bei dir ggf. "any" statt Import
 import type { PipelineRunResult } from "../types/pipeline";
 
 /* ===== Types ===== */
@@ -25,8 +24,8 @@ type PromptResult = {
   value?: any | null;
   boolean?: boolean | null;
   route?: string | null;
-  weight?: number | null;       // Batch-Confidence (Backend)
-  source?: TextPosition | null; // Evidence
+  weight?: number | null;
+  source?: TextPosition | null;
   json_key?: string | null;
   explanation?: string | null;
   error?: string | null;
@@ -36,10 +35,7 @@ const CONF_WARN = 0.6;
 const LS_PREFIX = "run-view:";
 
 /* ===== Logging helpers ===== */
-function dlog(label: string, payload?: any) {
-  // eslint-disable-next-line no-console
-  console.log(`[RunView] ${label}`, payload ?? "");
-}
+function dlog(label: string, payload?: any) { console.log(`[RunView] ${label}`, payload ?? ""); }
 function keysOf(obj: any) { return obj && typeof obj === "object" ? Object.keys(obj) : []; }
 function summarizeArray(arr: any[] | undefined | null, pick?: (x: any) => any) {
   if (!Array.isArray(arr)) return { len: 0, head: [] as any[] };
@@ -61,7 +57,7 @@ function getAPIBase(): string {
   return w.__ENV__?.PIPELINE_API_URL || (import.meta as any)?.env?.VITE_PIPELINE_API_URL || "/pl";
 }
 
-/* ===== Final-map heuristics ===== */
+/* ===== Final-map heuristics & deep scan ===== */
 function looksLikeExtractionMap(obj: any) {
   if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
   const vals = Object.values(obj);
@@ -88,7 +84,6 @@ function looksLikeDecisionMap(obj: any) {
   return ("route" in (v ?? {})) && (hasConf || "answer" in (v ?? {}));
 }
 
-/* ===== Deep scan (rekursiv bis Tiefe 5) ===== */
 type Found = { path: string; obj: any };
 function deepFind(run: any, guard: (x:any)=>boolean, maxDepth = 5): Found | null {
   const seen = new WeakSet<object>();
@@ -96,9 +91,7 @@ function deepFind(run: any, guard: (x:any)=>boolean, maxDepth = 5): Found | null
     if (!node || typeof node !== "object" || Array.isArray(node)) return null;
     if (seen.has(node)) return null;
     seen.add(node);
-    try {
-      if (guard(node)) return { path: path.join("."), obj: node };
-    } catch { /* ignore */ }
+    try { if (guard(node)) return { path: path.join("."), obj: node }; } catch {}
     if (depth >= maxDepth) return null;
     for (const [k, v] of Object.entries(node)) {
       if (v && typeof v === "object") {
@@ -181,7 +174,6 @@ export default function RunDetailsPage() {
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // Loader (Hook-Order fix: alle Hooks vor Returns)
   const loadFromLocalStorage = React.useCallback(() => {
     if (!key) return false;
     const raw = localStorage.getItem(`${LS_PREFIX}${key}`);
@@ -248,14 +240,12 @@ export default function RunDetailsPage() {
     } catch { return ""; }
   }, [key]);
 
-  // Final-Map-Detection (vor Returns; robust & deep)
   const { extractedEff, scoresEff, decisionsEff, keys: chosenKeys } = useMemo(
       () => detectFinalMaps(data),
       [data]
   );
   useEffect(() => { dlog("Chosen final map keys", chosenKeys); }, [chosenKeys]);
 
-  /* ----- Returns ----- */
   if (loading) {
     return (
         <Container maxWidth="xl" sx={{ py: 3 }}>
@@ -279,7 +269,6 @@ export default function RunDetailsPage() {
 
   return (
       <Container maxWidth="xl" sx={{ py: 3 }}>
-        {/* Header */}
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
           <Box>
             <Typography variant="h5">Run-Details</Typography>
@@ -300,7 +289,6 @@ export default function RunDetailsPage() {
         </Stack>
 
         <Grid container spacing={2}>
-          {/* Final Results */}
           <Grid item xs={12} md={8}>
             <FinalExtractionCard extracted={extractedEff} pdfUrl={pdfUrl} />
             <FinalScoringCard scores={scoresEff} pdfUrl={pdfUrl} />
@@ -315,7 +303,6 @@ export default function RunDetailsPage() {
             )}
           </Grid>
 
-          {/* Hinweise / Meta */}
           <Grid item xs={12} md={4}>
             <SummaryCard
                 data={data}
@@ -326,7 +313,6 @@ export default function RunDetailsPage() {
             <HintsCard data={data} />
           </Grid>
 
-          {/* Drilldown */}
           <Grid item xs={12}>
             <PromptDrilldown data={data} pdfUrl={pdfUrl} />
           </Grid>

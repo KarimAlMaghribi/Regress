@@ -78,7 +78,6 @@ async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<str
   if (!pdfId || !pipelineId) return undefined;
 
   const candidates = [
-    // häufige Varianten – nimm die, die es bei dir gibt
     `${api}/runs/latest?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}`,
     `${api}/runs?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}&limit=1`,
     `${api}/runs/last?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}`
@@ -98,9 +97,7 @@ async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<str
           if (typeof first?.id === 'string') return first.id;
         }
       }
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }
   return undefined;
 }
@@ -122,7 +119,6 @@ async function fetchConsolidatedRun(normalized: any, entry: Entry): Promise<any 
       const r = await fetch(url, { headers: { Accept: 'application/json' } });
       if (!r.ok) continue;
       const json = await r.json();
-      // akzeptiere sowohl {…run…} als auch Array
       if (json && typeof json === 'object') {
         if (json.extracted || json.scores || json.decisions) return normalizeRunShape(json);
         if (Array.isArray(json) && json.length > 0) {
@@ -130,9 +126,7 @@ async function fetchConsolidatedRun(normalized: any, entry: Entry): Promise<any 
           if (first && typeof first === 'object') return normalizeRunShape(first);
         }
       }
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }
   return undefined;
 }
@@ -170,9 +164,7 @@ async function openDetailsInNewTab(entry: Entry) {
         // falls die API eine id/run_id liefert, nimm sie für Query-Param
         runId = finalRun.run_id ?? finalRun.id ?? runId;
       }
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }
 
   const q = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
