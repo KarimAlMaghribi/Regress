@@ -4,7 +4,7 @@ use rdkafka::{
     ClientConfig, Message,
 };
 use serde_json::{json, Value};
-use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, ScoringResult, TextPosition};
+use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TextPosition};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::time::Duration;
 use tokio::task::LocalSet;
@@ -44,7 +44,9 @@ async fn app_main() -> anyhow::Result<()> {
         .or_else(|_| std::env::var("BROKER"))
         .unwrap_or_else(|_| "kafka:9092".into());
 
-    if let Err(e) = shared::kafka::ensure_topics(&broker, &["pipeline-run", "pipeline-result"]).await {
+    if let Err(e) =
+        shared::kafka::ensure_topics(&broker, &["pipeline-run", "pipeline-result"]).await
+    {
         warn!(%e, "failed to ensure kafka topics (continuing)");
     }
 
@@ -55,11 +57,11 @@ async fn app_main() -> anyhow::Result<()> {
     }
 
     let batch_cfg = runner::BatchCfg {
-        page_batch_size:      env_parse("PIPELINE_PAGE_BATCH_SIZE", 5usize),
-        max_parallel:         env_parse("PIPELINE_MAX_PARALLEL", 3usize),
-        max_chars:            env_parse("PIPELINE_MAX_CHARS", 20_000usize),
-        openai_timeout_ms:    env_parse("PIPELINE_OPENAI_TIMEOUT_MS", 25_000u64),
-        openai_retries:       env_parse("PIPELINE_OPENAI_RETRIES", 2usize),
+        page_batch_size: env_parse("PIPELINE_PAGE_BATCH_SIZE", 5usize),
+        max_parallel: env_parse("PIPELINE_MAX_PARALLEL", 3usize),
+        max_chars: env_parse("PIPELINE_MAX_CHARS", 20_000usize),
+        openai_timeout_ms: env_parse("PIPELINE_OPENAI_TIMEOUT_MS", 25_000u64),
+        openai_retries: env_parse("PIPELINE_OPENAI_RETRIES", 2usize),
     };
     info!(
         "batch_cfg={{page_batch_size:{}, max_parallel:{}, max_chars:{}, timeout_ms:{}, retries:{}}}",
@@ -78,7 +80,9 @@ async fn app_main() -> anyhow::Result<()> {
         })?;
 
     // Basis-Tabellen idempotent sicherstellen
-    let _ = sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto;").execute(&pool).await;
+    let _ = sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+        .execute(&pool)
+        .await;
 
     let _ = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipeline_runs (
@@ -90,7 +94,9 @@ async fn app_main() -> anyhow::Result<()> {
             status TEXT DEFAULT 'running',
             overall_score REAL
         )",
-    ).execute(&pool).await;
+    )
+    .execute(&pool)
+    .await;
 
     let _ = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipeline_run_steps (
@@ -110,14 +116,24 @@ async fn app_main() -> anyhow::Result<()> {
             created_at TIMESTAMPTZ DEFAULT now(),
             PRIMARY KEY (run_id, seq_no)
         )",
-    ).execute(&pool).await;
+    )
+    .execute(&pool)
+    .await;
 
     // neue Spalten nachziehen (idempotent)
     let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS is_final  BOOLEAN NOT NULL DEFAULT FALSE").execute(&pool).await;
-    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS final_key TEXT").execute(&pool).await;
-    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS confidence REAL").execute(&pool).await;
-    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS answer BOOLEAN").execute(&pool).await;
-    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS page INT").execute(&pool).await;
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS final_key TEXT")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS confidence REAL")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS answer BOOLEAN")
+        .execute(&pool)
+        .await;
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS page INT")
+        .execute(&pool)
+        .await;
 
     let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_prs_run_final_type ON pipeline_run_steps (run_id, is_final, prompt_type)").execute(&pool).await;
     let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_prs_run_final_key  ON pipeline_run_steps (run_id, final_key) WHERE is_final = TRUE").execute(&pool).await;
@@ -189,13 +205,14 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
-                let cfg: PipelineConfig = match serde_json::from_value::<PipelineConfig>(config_json) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        warn!(%e, "invalid pipeline config json");
-                        continue;
-                    }
-                };
+                let cfg: PipelineConfig =
+                    match serde_json::from_value::<PipelineConfig>(config_json) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            warn!(%e, "invalid pipeline config json");
+                            continue;
+                        }
+                    };
 
                 // Textseiten laden
                 let pages: Vec<(i32, String)> = match sqlx::query(
@@ -206,9 +223,9 @@ async fn app_main() -> anyhow::Result<()> {
                     ORDER BY page_no
                     "#,
                 )
-                    .bind(evt.pdf_id)
-                    .fetch_all(&pool)
-                    .await
+                .bind(evt.pdf_id)
+                .fetch_all(&pool)
+                .await
                 {
                     Ok(rows) => rows
                         .into_iter()
@@ -225,7 +242,12 @@ async fn app_main() -> anyhow::Result<()> {
                 };
 
                 let total_chars: usize = pages.iter().map(|(_, t)| t.len()).sum();
-                info!(id = evt.pdf_id, pages = pages.len(), total_chars, "loaded pages from db");
+                info!(
+                    id = evt.pdf_id,
+                    pages = pages.len(),
+                    total_chars,
+                    "loaded pages from db"
+                );
 
                 // Run anlegen
                 let run_id = Uuid::new_v4();
@@ -276,13 +298,21 @@ async fn app_main() -> anyhow::Result<()> {
                             by_pid.entry(r.prompt_id as i32).or_default().push(r);
                         }
                         for (pid, rows) in by_pid {
-                            if rows.is_empty() { continue; }
-                            let chosen = rows.iter().find(|r| r.value.is_some()).unwrap_or(&rows[0]);
-                            let key = chosen.json_key.clone().unwrap_or_else(|| format!("field_{}", pid));
+                            if rows.is_empty() {
+                                continue;
+                            }
+                            let chosen =
+                                rows.iter().find(|r| r.value.is_some()).unwrap_or(&rows[0]);
+                            let key = chosen
+                                .json_key
+                                .clone()
+                                .unwrap_or_else(|| format!("field_{}", pid));
 
                             // Quelle sicher extrahieren
                             let (page_opt, quote_opt, bbox_opt) = match &chosen.source {
-                                Some(TextPosition { page, bbox, quote }) => (Some(*page as i32), quote.clone(), Some(*bbox)),
+                                Some(TextPosition { page, bbox, quote }) => {
+                                    (Some(*page as i32), quote.clone(), Some(*bbox))
+                                }
                                 None => (None, None, None),
                             };
                             let conf = chosen.weight.unwrap_or(0.0);
@@ -316,33 +346,182 @@ async fn app_main() -> anyhow::Result<()> {
                             seq += 1;
                         }
 
+                        let mut overall_inputs: Vec<(bool, f32)> = Vec::new();
+
                         // 2b) Final-Scoring je prompt_id
                         {
                             use std::collections::BTreeMap;
-                            let mut sc_by_pid: BTreeMap<i32, Vec<&ScoringResult>> = BTreeMap::new();
-                            for s in &outcome.scoring { sc_by_pid.entry(s.prompt_id).or_default().push(s); }
-                            for (pid, rows) in sc_by_pid {
-                                if rows.is_empty() { continue; }
-                                let t = rows.iter().filter(|r| r.result).count() as i64;
-                                let f = rows.len() as i64 - t;
-                                let total = (t + f).max(1);
-                                let result_bool = t >= f;
-                                let confidence = (std::cmp::max(t, f) as f32) / (total as f32);
-                                let explanation = rows.iter().find_map(|r| {
-                                    let e = r.explanation.trim();
-                                    if e.is_empty() { None } else { Some(e.to_string()) }
-                                });
-                                let support: Vec<serde_json::Value> = rows.iter()
-                                    .filter_map(|r| serde_json::to_value(&r.source).ok())
-                                    .take(3)
-                                    .collect();
+
+                            #[derive(Default)]
+                            struct ScoreAgg {
+                                votes_true: i64,
+                                votes_false: i64,
+                                support_true: Vec<serde_json::Value>,
+                                support_false: Vec<serde_json::Value>,
+                                explanations_true: Vec<String>,
+                                explanations_false: Vec<String>,
+                            }
+
+                            let mut sc_by_pid: BTreeMap<i32, ScoreAgg> = BTreeMap::new();
+
+                            for step in &outcome.log {
+                                if step.prompt_type != shared::dto::PromptType::ScoringPrompt {
+                                    continue;
+                                }
+                                let Ok(pid) = i32::try_from(step.prompt_id) else {
+                                    continue;
+                                };
+                                let agg = sc_by_pid.entry(pid).or_default();
+
+                                let scores = step
+                                    .result
+                                    .get("scores")
+                                    .and_then(|v| v.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+
+                                if scores.is_empty() {
+                                    if let Some(cons) = step.result.get("consolidated") {
+                                        let res = cons
+                                            .get("result")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false);
+                                        if res {
+                                            agg.votes_true += 1;
+                                        } else {
+                                            agg.votes_false += 1;
+                                        }
+                                        if let Some(src) = cons.get("source") {
+                                            if res {
+                                                agg.support_true.push(src.clone());
+                                            } else {
+                                                agg.support_false.push(src.clone());
+                                            }
+                                        }
+                                        if let Some(expl) =
+                                            cons.get("explanation").and_then(|v| v.as_str())
+                                        {
+                                            let trimmed = expl.trim();
+                                            if !trimmed.is_empty() {
+                                                if res {
+                                                    agg.explanations_true.push(trimmed.to_string());
+                                                } else {
+                                                    agg.explanations_false
+                                                        .push(trimmed.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+
+                                for score in scores {
+                                    let res = score
+                                        .get("result")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
+                                    if res {
+                                        agg.votes_true += 1;
+                                    } else {
+                                        agg.votes_false += 1;
+                                    }
+
+                                    if let Some(src) = score.get("source") {
+                                        if res {
+                                            agg.support_true.push(src.clone());
+                                        } else {
+                                            agg.support_false.push(src.clone());
+                                        }
+                                    }
+                                    if let Some(expl) =
+                                        score.get("explanation").and_then(|v| v.as_str())
+                                    {
+                                        let trimmed = expl.trim();
+                                        if !trimmed.is_empty() {
+                                            if res {
+                                                agg.explanations_true.push(trimmed.to_string());
+                                            } else {
+                                                agg.explanations_false.push(trimmed.to_string());
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            for r in &outcome.scoring {
+                                let pid = r.prompt_id as i32;
+                                let agg = sc_by_pid.entry(pid).or_default();
+                                if agg.votes_true + agg.votes_false > 0 {
+                                    continue;
+                                }
+                                if r.result {
+                                    agg.votes_true += 1;
+                                } else {
+                                    agg.votes_false += 1;
+                                }
+                                if let Ok(src) = serde_json::to_value(&r.source) {
+                                    if r.result {
+                                        agg.support_true.push(src);
+                                    } else {
+                                        agg.support_false.push(src);
+                                    }
+                                }
+                                let trimmed = r.explanation.trim();
+                                if !trimmed.is_empty() {
+                                    if r.result {
+                                        agg.explanations_true.push(trimmed.to_string());
+                                    } else {
+                                        agg.explanations_false.push(trimmed.to_string());
+                                    }
+                                }
+                            }
+
+                            for (pid, agg) in sc_by_pid {
+                                let ScoreAgg {
+                                    votes_true,
+                                    votes_false,
+                                    support_true,
+                                    support_false,
+                                    explanations_true,
+                                    explanations_false,
+                                } = agg;
+
+                                let total_votes = votes_true + votes_false;
+                                if total_votes <= 0 {
+                                    continue;
+                                }
+
+                                let result_bool = votes_true >= votes_false;
+                                let majority_votes =
+                                    if result_bool { votes_true } else { votes_false };
+                                let mut confidence = (majority_votes as f32) / (total_votes as f32);
+                                if !confidence.is_finite() {
+                                    confidence = 0.0;
+                                }
+                                confidence = confidence.clamp(0.0, 1.0);
+
+                                let explanation = if result_bool {
+                                    explanations_true.into_iter().find(|s| !s.trim().is_empty())
+                                } else {
+                                    explanations_false
+                                        .into_iter()
+                                        .find(|s| !s.trim().is_empty())
+                                };
+
+                                let support_values = if result_bool {
+                                    support_true
+                                } else {
+                                    support_false
+                                };
+                                let support: Vec<serde_json::Value> =
+                                    support_values.into_iter().take(3).collect();
 
                                 let key = format!("score_{}", pid);
                                 let result_json = serde_json::json!({
                                     "result": result_bool,
                                     "confidence": confidence,
-                                    "votes_true": t,
-                                    "votes_false": f,
+                                    "votes_true": votes_true,
+                                    "votes_false": votes_false,
                                     "explanation": explanation,
                                     "support": support
                                 });
@@ -365,49 +544,226 @@ async fn app_main() -> anyhow::Result<()> {
                                     warn!(%e, %run_id, seq, final_key=%key, "failed to insert final scoring");
                                 }
                                 seq += 1;
+                                overall_inputs.push((result_bool, confidence));
                             }
                         }
 
                         // 2c) Final-Decision je prompt_id
                         {
-                            use std::collections::{BTreeMap, HashMap};
-                            let mut dc_by_pid: BTreeMap<i32, Vec<&PromptResult>> = BTreeMap::new();
-                            for d in &outcome.decision { dc_by_pid.entry(d.prompt_id).or_default().push(d); }
-                            for (pid, rows) in dc_by_pid {
-                                if rows.is_empty() { continue; }
-                                let mut freq: HashMap<String, i64> = HashMap::new();
-                                for r in &rows {
-                                    let route = r.route.clone().unwrap_or_else(|| "UNKNOWN".into()).to_ascii_uppercase();
-                                    *freq.entry(route).or_default() += 1;
-                                }
-                                let total = rows.len() as i64;
-                                let (best_route, best_cnt) = freq.into_iter().max_by_key(|(_,c)| *c).unwrap_or((String::from("UNKNOWN"), 0));
-                                let confidence = (best_cnt as f32) / (total.max(1) as f32);
-                                let votes_yes = rows.iter().filter(|r| r.boolean.unwrap_or(false)).count() as i64;
-                                let votes_no  = rows.iter().filter(|r| !r.boolean.unwrap_or(false)).count() as i64;
-                                let answer = match best_route.as_str() {
+                            use std::collections::BTreeMap;
+
+                            #[derive(Default)]
+                            struct DecisionAgg {
+                                route_votes: BTreeMap<String, i64>,
+                                yes_votes: i64,
+                                no_votes: i64,
+                                support_by_route: BTreeMap<String, Vec<serde_json::Value>>,
+                                explanations_by_route: BTreeMap<String, Vec<String>>,
+                            }
+
+                            fn normalize_route(route: &str) -> String {
+                                route.trim().to_ascii_uppercase()
+                            }
+
+                            fn route_to_bool(route: &str) -> Option<bool> {
+                                match route {
                                     "YES" | "TRUE" | "JA" | "Y" | "1" => Some(true),
-                                    "NO"  | "FALSE"| "NEIN"| "N" | "0" => Some(false),
+                                    "NO" | "FALSE" | "NEIN" | "N" | "0" => Some(false),
                                     _ => None,
+                                }
+                            }
+
+                            let mut dc_by_pid: BTreeMap<i32, DecisionAgg> = BTreeMap::new();
+
+                            for step in &outcome.log {
+                                if step.prompt_type != shared::dto::PromptType::DecisionPrompt {
+                                    continue;
+                                }
+                                let Ok(pid) = i32::try_from(step.prompt_id) else {
+                                    continue;
                                 };
-                                let explanation = rows.iter().find_map(|r| {
-                                    r.value.as_ref()
+                                let agg = dc_by_pid.entry(pid).or_default();
+
+                                let votes = step
+                                    .result
+                                    .get("votes")
+                                    .and_then(|v| v.as_array())
+                                    .cloned()
+                                    .unwrap_or_default();
+
+                                if votes.is_empty() {
+                                    if let Some(cons) = step.result.get("consolidated") {
+                                        let route = cons
+                                            .get("route")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("UNKNOWN");
+                                        let norm = normalize_route(route);
+                                        *agg.route_votes.entry(norm.clone()).or_default() += 1;
+                                        if let Some(src) = cons.get("source") {
+                                            agg.support_by_route
+                                                .entry(norm.clone())
+                                                .or_default()
+                                                .push(src.clone());
+                                        }
+                                        if let Some(b) =
+                                            cons.get("boolean").and_then(|v| v.as_bool())
+                                        {
+                                            if b {
+                                                agg.yes_votes += 1;
+                                            } else {
+                                                agg.no_votes += 1;
+                                            }
+                                        } else if let Some(ans) = route_to_bool(&norm) {
+                                            if ans {
+                                                agg.yes_votes += 1;
+                                            } else {
+                                                agg.no_votes += 1;
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
+
+                                for vote in votes {
+                                    let route = vote
+                                        .get("route")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("UNKNOWN");
+                                    let norm = normalize_route(route);
+                                    *agg.route_votes.entry(norm.clone()).or_default() += 1;
+
+                                    if let Some(src) = vote.get("source") {
+                                        agg.support_by_route
+                                            .entry(norm.clone())
+                                            .or_default()
+                                            .push(src.clone());
+                                    }
+
+                                    if let Some(val) = vote
+                                        .get("value")
                                         .and_then(|v| v.get("explanation"))
                                         .and_then(|x| x.as_str())
-                                        .map(|s| s.to_string())
-                                });
-                                let support: Vec<serde_json::Value> = rows.iter()
-                                    .filter_map(|r| r.source.as_ref().and_then(|s| serde_json::to_value(s).ok()))
-                                    .take(3)
-                                    .collect();
+                                    {
+                                        let trimmed = val.trim();
+                                        if !trimmed.is_empty() {
+                                            agg.explanations_by_route
+                                                .entry(norm.clone())
+                                                .or_default()
+                                                .push(trimmed.to_string());
+                                        }
+                                    }
+
+                                    if let Some(b) = vote.get("boolean").and_then(|v| v.as_bool()) {
+                                        if b {
+                                            agg.yes_votes += 1;
+                                        } else {
+                                            agg.no_votes += 1;
+                                        }
+                                    } else if let Some(ans) = route_to_bool(&norm) {
+                                        if ans {
+                                            agg.yes_votes += 1;
+                                        } else {
+                                            agg.no_votes += 1;
+                                        }
+                                    }
+                                }
+                            }
+                            for r in &outcome.decision {
+                                let pid = r.prompt_id as i32;
+                                let agg = dc_by_pid.entry(pid).or_default();
+                                let current_votes: i64 = agg.route_votes.values().sum();
+                                if current_votes > 0 {
+                                    continue;
+                                }
+
+                                let route = r.route.clone().unwrap_or_else(|| "UNKNOWN".into());
+                                let norm = normalize_route(&route);
+                                *agg.route_votes.entry(norm.clone()).or_default() += 1;
+
+                                if let Some(src) =
+                                    r.source.as_ref().and_then(|s| serde_json::to_value(s).ok())
+                                {
+                                    agg.support_by_route
+                                        .entry(norm.clone())
+                                        .or_default()
+                                        .push(src);
+                                }
+
+                                if let Some(val) = r
+                                    .value
+                                    .as_ref()
+                                    .and_then(|v| v.get("explanation"))
+                                    .and_then(|x| x.as_str())
+                                {
+                                    let trimmed = val.trim();
+                                    if !trimmed.is_empty() {
+                                        agg.explanations_by_route
+                                            .entry(norm.clone())
+                                            .or_default()
+                                            .push(trimmed.to_string());
+                                    }
+                                }
+
+                                if let Some(b) = r.boolean {
+                                    if b {
+                                        agg.yes_votes += 1;
+                                    } else {
+                                        agg.no_votes += 1;
+                                    }
+                                } else if let Some(ans) = route_to_bool(&norm) {
+                                    if ans {
+                                        agg.yes_votes += 1;
+                                    } else {
+                                        agg.no_votes += 1;
+                                    }
+                                }
+                            }
+
+                            for (pid, agg) in dc_by_pid {
+                                let DecisionAgg {
+                                    route_votes,
+                                    yes_votes,
+                                    no_votes,
+                                    support_by_route,
+                                    explanations_by_route,
+                                } = agg;
+
+                                let total_votes: i64 = route_votes.values().sum();
+                                if total_votes <= 0 {
+                                    continue;
+                                }
+
+                                let (best_route, best_cnt) = route_votes
+                                    .iter()
+                                    .max_by(|a, b| a.1.cmp(b.1))
+                                    .map(|(route, cnt)| (route.clone(), *cnt))
+                                    .unwrap_or_else(|| (String::from("UNKNOWN"), 0));
+
+                                let mut confidence = (best_cnt as f32) / (total_votes as f32);
+                                if !confidence.is_finite() {
+                                    confidence = 0.0;
+                                }
+                                confidence = confidence.clamp(0.0, 1.0);
+
+                                let answer = route_to_bool(&best_route);
+
+                                let explanation =
+                                    explanations_by_route.get(&best_route).and_then(|vals| {
+                                        vals.iter().find(|s| !s.trim().is_empty()).cloned()
+                                    });
+
+                                let support: Vec<serde_json::Value> = support_by_route
+                                    .get(&best_route)
+                                    .map(|vec| vec.iter().take(3).cloned().collect())
+                                    .unwrap_or_default();
 
                                 let key = format!("decision_{}", pid);
                                 let result_json = serde_json::json!({
                                     "route": best_route,
                                     "answer": answer,
                                     "confidence": confidence,
-                                    "votes_yes": votes_yes,
-                                    "votes_no": votes_no,
+                                    "votes_yes": yes_votes,
+                                    "votes_no": no_votes,
                                     "explanation": explanation,
                                     "support": support
                                 });
@@ -434,18 +790,17 @@ async fn app_main() -> anyhow::Result<()> {
                                 seq += 1;
                             }
                         }
-
                         // 3) Overall Score (nur Zahl auf Run-Ebene)
-                        let overall = runner::compute_overall_score(&outcome.scoring);
+                        let overall = runner::compute_overall_score(&overall_inputs);
                         if let Err(e) = sqlx::query(
                             "UPDATE pipeline_runs
                                SET finished_at = now(), status='finished', overall_score = $2
-                             WHERE id = $1"
+                             WHERE id = $1",
                         )
-                            .bind(run_id)
-                            .bind(overall)
-                            .execute(&pool)
-                            .await
+                        .bind(run_id)
+                        .bind(overall)
+                        .execute(&pool)
+                        .await
                         {
                             warn!(%e, %run_id, "failed to finalize pipeline_run row");
                         }
@@ -468,7 +823,9 @@ async fn app_main() -> anyhow::Result<()> {
                             if let Ok(payload) = serde_json::to_string(&result_json) {
                                 let _ = producer
                                     .send(
-                                        FutureRecord::to("pipeline-result").payload(&payload).key(&run_id.to_string()),
+                                        FutureRecord::to("pipeline-result")
+                                            .payload(&payload)
+                                            .key(&run_id.to_string()),
                                         Duration::from_secs(0),
                                     )
                                     .await;
