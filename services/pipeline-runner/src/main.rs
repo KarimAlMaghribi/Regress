@@ -4,7 +4,7 @@ use rdkafka::{
     ClientConfig, Message,
 };
 use serde_json::{json, Value};
-use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TextPosition};
+use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, ScoringResult, TextPosition};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::time::Duration;
 use tokio::task::LocalSet;
@@ -269,7 +269,7 @@ async fn app_main() -> anyhow::Result<()> {
                             seq += 1;
                         }
 
-                        // 2) Minimal: Final-Extraction je prompt_id
+                        // 2) Final-Extraction je prompt_id
                         use std::collections::BTreeMap;
                         let mut by_pid: BTreeMap<i32, Vec<&PromptResult>> = BTreeMap::new();
                         for r in &outcome.extraction {
@@ -311,9 +311,128 @@ async fn app_main() -> anyhow::Result<()> {
                                 .execute(&pool)
                                 .await
                             {
-                                warn!(%e, %run_id, seq, final_key=%key, "failed to insert minimal final extraction");
+                                warn!(%e, %run_id, seq, final_key=%key, "failed to insert final extraction");
                             }
                             seq += 1;
+                        }
+
+                        // 2b) Final-Scoring je prompt_id
+                        {
+                            use std::collections::BTreeMap;
+                            let mut sc_by_pid: BTreeMap<i32, Vec<&ScoringResult>> = BTreeMap::new();
+                            for s in &outcome.scoring { sc_by_pid.entry(s.prompt_id).or_default().push(s); }
+                            for (pid, rows) in sc_by_pid {
+                                if rows.is_empty() { continue; }
+                                let t = rows.iter().filter(|r| r.result).count() as i64;
+                                let f = rows.len() as i64 - t;
+                                let total = (t + f).max(1);
+                                let result_bool = t >= f;
+                                let confidence = (std::cmp::max(t, f) as f32) / (total as f32);
+                                let explanation = rows.iter().find_map(|r| {
+                                    let e = r.explanation.trim();
+                                    if e.is_empty() { None } else { Some(e.to_string()) }
+                                });
+                                let support: Vec<serde_json::Value> = rows.iter()
+                                    .filter_map(|r| serde_json::to_value(&r.source).ok())
+                                    .take(3)
+                                    .collect();
+
+                                let key = format!("score_{}", pid);
+                                let result_json = serde_json::json!({
+                                    "result": result_bool,
+                                    "confidence": confidence,
+                                    "votes_true": t,
+                                    "votes_false": f,
+                                    "explanation": explanation,
+                                    "support": support
+                                });
+
+                                if let Err(e) = sqlx::query(
+                                    "INSERT INTO pipeline_run_steps
+                                       (run_id, seq_no, step_id, prompt_id, prompt_type, is_final, final_key, result, confidence)
+                                     VALUES ($1,$2,$3,$4,'ScoringPrompt',true,$5,$6,$7)"
+                                )
+                                    .bind(run_id)
+                                    .bind(seq)
+                                    .bind("final-scoring")
+                                    .bind(pid)
+                                    .bind(&key)
+                                    .bind(&result_json)
+                                    .bind(confidence)
+                                    .execute(&pool)
+                                    .await
+                                {
+                                    warn!(%e, %run_id, seq, final_key=%key, "failed to insert final scoring");
+                                }
+                                seq += 1;
+                            }
+                        }
+
+                        // 2c) Final-Decision je prompt_id
+                        {
+                            use std::collections::{BTreeMap, HashMap};
+                            let mut dc_by_pid: BTreeMap<i32, Vec<&PromptResult>> = BTreeMap::new();
+                            for d in &outcome.decision { dc_by_pid.entry(d.prompt_id).or_default().push(d); }
+                            for (pid, rows) in dc_by_pid {
+                                if rows.is_empty() { continue; }
+                                let mut freq: HashMap<String, i64> = HashMap::new();
+                                for r in &rows {
+                                    let route = r.route.clone().unwrap_or_else(|| "UNKNOWN".into()).to_ascii_uppercase();
+                                    *freq.entry(route).or_default() += 1;
+                                }
+                                let total = rows.len() as i64;
+                                let (best_route, best_cnt) = freq.into_iter().max_by_key(|(_,c)| *c).unwrap_or((String::from("UNKNOWN"), 0));
+                                let confidence = (best_cnt as f32) / (total.max(1) as f32);
+                                let votes_yes = rows.iter().filter(|r| r.boolean.unwrap_or(false)).count() as i64;
+                                let votes_no  = rows.iter().filter(|r| !r.boolean.unwrap_or(false)).count() as i64;
+                                let answer = match best_route.as_str() {
+                                    "YES" | "TRUE" | "JA" | "Y" | "1" => Some(true),
+                                    "NO"  | "FALSE"| "NEIN"| "N" | "0" => Some(false),
+                                    _ => None,
+                                };
+                                let explanation = rows.iter().find_map(|r| {
+                                    r.value.as_ref()
+                                        .and_then(|v| v.get("explanation"))
+                                        .and_then(|x| x.as_str())
+                                        .map(|s| s.to_string())
+                                });
+                                let support: Vec<serde_json::Value> = rows.iter()
+                                    .filter_map(|r| r.source.as_ref().and_then(|s| serde_json::to_value(s).ok()))
+                                    .take(3)
+                                    .collect();
+
+                                let key = format!("decision_{}", pid);
+                                let result_json = serde_json::json!({
+                                    "route": best_route,
+                                    "answer": answer,
+                                    "confidence": confidence,
+                                    "votes_yes": votes_yes,
+                                    "votes_no": votes_no,
+                                    "explanation": explanation,
+                                    "support": support
+                                });
+
+                                if let Err(e) = sqlx::query(
+                                    "INSERT INTO pipeline_run_steps
+                                       (run_id, seq_no, step_id, prompt_id, prompt_type, is_final, final_key, result, confidence, answer, route)
+                                     VALUES ($1,$2,$3,$4,'DecisionPrompt',true,$5,$6,$7,$8,$9)"
+                                )
+                                    .bind(run_id)
+                                    .bind(seq)
+                                    .bind("final-decision")
+                                    .bind(pid)
+                                    .bind(&key)
+                                    .bind(&result_json)
+                                    .bind(confidence)
+                                    .bind(answer)
+                                    .bind(result_json.get("route").and_then(|x| x.as_str()).unwrap_or("UNKNOWN"))
+                                    .execute(&pool)
+                                    .await
+                                {
+                                    warn!(%e, %run_id, seq, final_key=%key, "failed to insert final decision");
+                                }
+                                seq += 1;
+                            }
                         }
 
                         // 3) Overall Score (nur Zahl auf Run-Ebene)
@@ -331,7 +450,7 @@ async fn app_main() -> anyhow::Result<()> {
                             warn!(%e, %run_id, "failed to finalize pipeline_run row");
                         }
 
-                        // 4) Event fürs UI/Monitoring – mit run_id
+                        // 4) Event für UI/Monitoring – mit run_id
                         let result = PipelineRunResult {
                             run_id: Some(run_id),
                             pdf_id: evt.pdf_id,

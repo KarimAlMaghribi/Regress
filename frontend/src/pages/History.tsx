@@ -26,19 +26,32 @@ interface HistoryEntry {
   id: number; // unique analysis id
   pdfId: number;
   timestamp: string;
-  result?: PipelineRunResult | null;
+  result?: PipelineRunResult | any | null;
   pdfUrl: string;
   prompt?: string | null;
   status?: string;
 }
 
+/** snake/camel normalisieren (nur was wir brauchen) */
+function normalizeRun(run: any | undefined | null) {
+  if (!run || typeof run !== 'object') return run;
+  const n: any = { ...run };
+  if (n.overall_score === undefined && typeof n.overallScore === 'number') n.overall_score = n.overallScore;
+  if (!n.scores && n.final_scores && typeof n.final_scores === 'object') n.scores = n.final_scores;
+  if (!n.decisions && n.final_decisions && typeof n.final_decisions === 'object') n.decisions = n.final_decisions;
+  if (n.extracted == null) n.extracted = {};
+  if (n.scores == null) n.scores = {};
+  if (n.decisions == null) n.decisions = {};
+  return n;
+}
+
 function normalizeEntry(e: any): HistoryEntry {
   return {
     id: e.id ?? Date.now() + Math.random(),
-    pdfId: e.pdf_id ?? e.pdfId ?? e.pdfId,
-    pdfUrl: e.pdfUrl ?? e.pdf_url,
-    timestamp: e.timestamp,
-    result: e.result ?? undefined,
+    pdfId: e.pdf_id ?? e.pdfId ?? e.file_id ?? 0,
+    pdfUrl: e.pdfUrl ?? e.pdf_url ?? '',
+    timestamp: e.timestamp ?? e.created_at ?? new Date().toISOString(),
+    result: normalizeRun(e.result ?? e.run ?? undefined),
     prompt: e.prompt ?? null,
     status: e.status,
   };
@@ -175,20 +188,26 @@ export default function History() {
       field: 'overall',
       headerName: 'Score',
       flex: 0.6,
-      valueGetter: p => p.row.result?.overallScore?.toFixed(2) ?? '—',
+      valueGetter: p => {
+        const r = normalizeRun(p.row.result);
+        return typeof r?.overall_score === 'number' ? r.overall_score.toFixed(2) : '—';
+      },
     },
     {
       field: 'route',
       headerName: 'Route',
       flex: 1.2,
-      valueGetter: p => p.row.result?.log?.map((l: any) => l.route ?? 'root').join(' › ') || '',
+      valueGetter: p => {
+        const r = normalizeRun(p.row.result);
+        return (r?.log ?? []).map((l: any) => l.route ?? 'root').join(' › ') || '';
+      },
     },
     {
       field: 'final',
       headerName: 'Final',
       flex: 1.6,
       sortable: false,
-      renderCell: params => <FinalSnapshotCell result={params.row.result} />,
+      renderCell: params => <FinalSnapshotCell result={normalizeRun(params.row.result)} />,
     },
     {
       field: 'actions',
@@ -245,7 +264,7 @@ export default function History() {
                 <Typography variant="body2" gutterBottom>
                   {dayjs(selected.timestamp).format('LLL')}
                 </Typography>
-                <RunDetails run={selected.result} pdfUrl={selected.pdfUrl} />
+                <RunDetails run={normalizeRun(selected.result)} pdfUrl={selected.pdfUrl} />
               </Box>
           )}
         </Drawer>
