@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use strum_macros::{Display, EnumString};
+use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumString, Display, Serialize, Deserialize)]
 #[strum(serialize_all = "PascalCase")]
@@ -75,10 +76,14 @@ pub struct RunStep {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PipelineRunResult {
+    pub run_id: Option<Uuid>,
+
     pub pdf_id: i32,
     pub pipeline_id: uuid::Uuid,
     pub overall_score: Option<f32>,
+
     pub extracted: std::collections::HashMap<String, serde_json::Value>,
+
     pub extraction: Vec<PromptResult>,
     pub scoring: Vec<ScoringResult>,
     pub decision: Vec<PromptResult>,

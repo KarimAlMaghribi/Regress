@@ -46,6 +46,8 @@ pub struct CanonicalField {
     pub confidence: f32,
     pub page: Option<u32>,
     pub quote: Option<String>,
+    /// NEU: für präzises Highlighting in der UI (falls vorhanden)
+    pub bbox: Option<[f32; 4]>,
 }
 
 #[derive(Serialize, Clone)]
@@ -115,7 +117,6 @@ fn consolidate_string(cands: &[(&PromptResult, JsonValue)], cfg: &ConsCfg) -> Op
 
     let mut buckets: HashMap<String, Bucket> = HashMap::new();
     for (r, v) in cands {
-        // langlebiger Buffer für Nicht-String-Values
         let mut raw_buf = String::new();
         let raw: &str = match v {
             JsonValue::String(s) => s.as_str(),
@@ -221,15 +222,16 @@ fn select_extraction_winner<'a>(buckets: HashMap<String, Bucket<'a>>, cfg: &Cons
     }
 
     if let Some(b) = best {
-        let (r, value) = (&b.sample.0, &b.sample.1);
-        let (page, quote) = match r.source.as_ref() {
-            Some(TextPosition { page, quote, .. }) => (Some(*page as u32), quote.clone()),
-            _ => (None, None),
+        let r = b.sample.0;
+        let value = b.sample.1.clone();
+        let (page, quote, bbox) = match r.source.as_ref() {
+            Some(TextPosition { page, quote, bbox }) => (Some(*page as u32), quote.clone(), Some(*bbox)),
+            _ => (None, None, None),
         };
         return Some(CanonicalField {
-            value: value.clone(),
+            value,
             confidence: best_score.clamp(0.0, 1.0),
-            page, quote,
+            page, quote, bbox,
         });
     }
     None
@@ -276,7 +278,7 @@ pub fn consolidate_scoring_weighted(
     let total_votes = votes_true + votes_false;
     if total_votes == 0 { return None; }
 
-    let (result, conf, support, explanation) = if score_true >= score_false {
+    let (result, conf, support, _explanation) = if score_true >= score_false {
         let sum = (score_true + score_false).max(1e-6);
         items_true.sort_by(|a,b| b.strength.total_cmp(&a.strength));
         (true, (score_true / sum).clamp(0.0, 1.0), items_true, None::<String>)

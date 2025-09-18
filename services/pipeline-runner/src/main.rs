@@ -3,8 +3,8 @@ use rdkafka::{
     producer::{FutureProducer, FutureRecord},
     ClientConfig, Message,
 };
-use serde_json::Value;
-use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult};
+use serde_json::{json, Value};
+use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TextPosition};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::time::Duration;
 use tokio::task::LocalSet;
@@ -77,33 +77,22 @@ async fn app_main() -> anyhow::Result<()> {
             e
         })?;
 
-    if let Err(e) = sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
-        .execute(&pool)
-        .await
-    {
-        warn!(%e, "CREATE EXTENSION pgcrypto failed (continuing)");
-    }
+    // Basis-Tabellen idempotent sicherstellen
+    let _ = sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto;").execute(&pool).await;
 
-    // Basis-Tabellen (idempotent)
-    if let Err(e) = sqlx::query(
+    let _ = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipeline_runs (
             id UUID PRIMARY KEY,
             pipeline_id UUID NOT NULL,
             pdf_id INT NOT NULL,
             started_at TIMESTAMPTZ DEFAULT now(),
             finished_at TIMESTAMPTZ,
-            overall_score REAL,
-            extracted JSONB
+            status TEXT DEFAULT 'running',
+            overall_score REAL
         )",
-    )
-        .execute(&pool)
-        .await
-    {
-        error!(%e, "creating table pipeline_runs failed");
-        return Err(e.into());
-    }
+    ).execute(&pool).await;
 
-    if let Err(e) = sqlx::query(
+    let _ = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipeline_run_steps (
             run_id UUID REFERENCES pipeline_runs(id) ON DELETE CASCADE,
             seq_no INT,
@@ -113,16 +102,25 @@ async fn app_main() -> anyhow::Result<()> {
             decision_key TEXT,
             route TEXT,
             result JSONB,
+            is_final BOOLEAN DEFAULT FALSE,
+            final_key TEXT,
+            confidence REAL,
+            answer BOOLEAN,
+            page INT,
             created_at TIMESTAMPTZ DEFAULT now(),
             PRIMARY KEY (run_id, seq_no)
         )",
-    )
-        .execute(&pool)
-        .await
-    {
-        error!(%e, "creating table pipeline_run_steps failed");
-        return Err(e.into());
-    }
+    ).execute(&pool).await;
+
+    // neue Spalten nachziehen (idempotent)
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS is_final  BOOLEAN NOT NULL DEFAULT FALSE").execute(&pool).await;
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS final_key TEXT").execute(&pool).await;
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS confidence REAL").execute(&pool).await;
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS answer BOOLEAN").execute(&pool).await;
+    let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS page INT").execute(&pool).await;
+
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_prs_run_final_type ON pipeline_run_steps (run_id, is_final, prompt_type)").execute(&pool).await;
+    let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_prs_run_final_key  ON pipeline_run_steps (run_id, final_key) WHERE is_final = TRUE").execute(&pool).await;
 
     // Kafka-Client
     let consumer: StreamConsumer = ClientConfig::new()
@@ -133,7 +131,6 @@ async fn app_main() -> anyhow::Result<()> {
             error!(%e, "failed to create kafka consumer");
             e
         })?;
-
     consumer.subscribe(&["pipeline-run"]).map_err(|e| {
         error!(%e, "failed to subscribe to topic pipeline-run");
         e
@@ -230,10 +227,10 @@ async fn app_main() -> anyhow::Result<()> {
                 let total_chars: usize = pages.iter().map(|(_, t)| t.len()).sum();
                 info!(id = evt.pdf_id, pages = pages.len(), total_chars, "loaded pages from db");
 
-                // Run anlegen (UUID explizit vergeben)
+                // Run anlegen
                 let run_id = Uuid::new_v4();
                 if let Err(e) = sqlx::query(
-                    "INSERT INTO pipeline_runs (id, pipeline_id, pdf_id) VALUES ($1,$2,$3)",
+                    "INSERT INTO pipeline_runs (id, pipeline_id, pdf_id, status) VALUES ($1,$2,$3,'running')",
                 )
                     .bind(run_id)
                     .bind(evt.pipeline_id)
@@ -248,23 +245,13 @@ async fn app_main() -> anyhow::Result<()> {
                 // Ausführen
                 match runner::execute_with_pages(&cfg, &pages, &batch_cfg).await {
                     Ok(outcome) => {
-                        let overall = runner::compute_overall_score(&outcome.scoring);
-
-                        // Roh-Extraktion in eine einfache Map (json_key -> value) überführen
-                        let mut extracted: std::collections::HashMap<String, serde_json::Value> =
-                            std::collections::HashMap::new();
-                        for p in &outcome.extraction {
-                            if let (Some(k), Some(v)) = (p.json_key.clone(), p.value.clone()) {
-                                extracted.insert(k, v);
-                            }
-                        }
-
-                        // Steps protokollieren
+                        // 1) Batches als Steps loggen
                         let mut seq: i32 = 1;
                         for rs in &outcome.log {
                             if let Err(e) = sqlx::query(
-                                "INSERT INTO pipeline_run_steps (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, result)
-                                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+                                "INSERT INTO pipeline_run_steps
+                                   (run_id, seq_no, step_id, prompt_id, prompt_type, decision_key, route, result, is_final)
+                                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false)"
                             )
                                 .bind(run_id)
                                 .bind(seq)
@@ -282,40 +269,87 @@ async fn app_main() -> anyhow::Result<()> {
                             seq += 1;
                         }
 
-                        // Abschluss in DB (finished_at, overall_score, extracted)
+                        // 2) Minimal: Final-Extraction je prompt_id
+                        use std::collections::BTreeMap;
+                        let mut by_pid: BTreeMap<i32, Vec<&PromptResult>> = BTreeMap::new();
+                        for r in &outcome.extraction {
+                            by_pid.entry(r.prompt_id as i32).or_default().push(r);
+                        }
+                        for (pid, rows) in by_pid {
+                            if rows.is_empty() { continue; }
+                            let chosen = rows.iter().find(|r| r.value.is_some()).unwrap_or(&rows[0]);
+                            let key = chosen.json_key.clone().unwrap_or_else(|| format!("field_{}", pid));
+
+                            // Quelle sicher extrahieren
+                            let (page_opt, quote_opt, bbox_opt) = match &chosen.source {
+                                Some(TextPosition { page, bbox, quote }) => (Some(*page as i32), quote.clone(), Some(*bbox)),
+                                None => (None, None, None),
+                            };
+                            let conf = chosen.weight.unwrap_or(0.0);
+
+                            let result = json!({
+                                "value": chosen.value,
+                                "confidence": conf,
+                                "page": page_opt,
+                                "quote": quote_opt,
+                                "bbox": bbox_opt
+                            });
+
+                            if let Err(e) = sqlx::query(
+                                "INSERT INTO pipeline_run_steps
+                                   (run_id, seq_no, step_id, prompt_id, prompt_type, is_final, final_key, result, confidence, page)
+                                 VALUES ($1,$2,$3,$4,'ExtractionPrompt',true,$5,$6,$7,$8)"
+                            )
+                                .bind(run_id)
+                                .bind(seq)
+                                .bind("final-extraction")
+                                .bind(pid)
+                                .bind(&key)
+                                .bind(&result)
+                                .bind(conf as f32)
+                                .bind(page_opt)
+                                .execute(&pool)
+                                .await
+                            {
+                                warn!(%e, %run_id, seq, final_key=%key, "failed to insert minimal final extraction");
+                            }
+                            seq += 1;
+                        }
+
+                        // 3) Overall Score (nur Zahl auf Run-Ebene)
+                        let overall = runner::compute_overall_score(&outcome.scoring);
                         if let Err(e) = sqlx::query(
-                            "UPDATE pipeline_runs SET finished_at = now(), overall_score = $2, extracted = $3 WHERE id = $1",
+                            "UPDATE pipeline_runs
+                               SET finished_at = now(), status='finished', overall_score = $2
+                             WHERE id = $1"
                         )
                             .bind(run_id)
                             .bind(overall)
-                            .bind(serde_json::to_value(&extracted).unwrap_or(serde_json::json!({})))
                             .execute(&pool)
                             .await
                         {
                             warn!(%e, %run_id, "failed to finalize pipeline_run row");
                         }
 
-                        // Kafka-Payload: Rohdaten + run_id (damit API konsolidieren & zuordnen kann)
+                        // 4) Event fürs UI/Monitoring – mit run_id
                         let result = PipelineRunResult {
+                            run_id: Some(run_id),
                             pdf_id: evt.pdf_id,
                             pipeline_id: evt.pipeline_id,
                             overall_score: overall,
-                            extracted,
+                            extracted: std::collections::HashMap::new(), // Finals baut die API aus Steps
                             extraction: outcome.extraction,
                             scoring: outcome.scoring,
                             decision: outcome.decision,
                             log: outcome.log,
                         };
 
-                        // run_id anhängen (Top-Level), damit die API exakt updaten kann
                         if let Ok(mut result_json) = serde_json::to_value(&result) {
-                            result_json["run_id"] = serde_json::json!(run_id.to_string());
+                            result_json["run_id"] = json!(run_id.to_string());
                             if let Ok(payload) = serde_json::to_string(&result_json) {
                                 let _ = producer
                                     .send(
-                                        FutureRecord::to("pipeline-result")
-                                            .payload(&payload)
-                                            .key(&run_id.to_string()),
+                                        FutureRecord::to("pipeline-result").payload(&payload).key(&run_id.to_string()),
                                         Duration::from_secs(0),
                                     )
                                     .await;
@@ -324,6 +358,8 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                     Err(e) => {
                         error!(%e, %run_id, "pipeline execution failed");
+                        let _ = sqlx::query("UPDATE pipeline_runs SET status='failed', finished_at=now() WHERE id=$1")
+                            .bind(run_id).execute(&pool).await;
                     }
                 }
             }
