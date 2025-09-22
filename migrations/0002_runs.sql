@@ -1,20 +1,25 @@
--- Pipeline-Läufe (Instanz)
+DROP TABLE IF EXISTS analysis_history CASCADE;
+DROP TABLE IF EXISTS pipeline_step_attempts CASCADE;
+DROP TABLE IF EXISTS pipeline_run_steps CASCADE;
+DROP TABLE IF EXISTS pipeline_runs CASCADE;
+
+-- Pipeline-Läufe
 CREATE TABLE pipeline_runs (
                                id               UUID PRIMARY KEY,
-                               pipeline_id      UUID   NOT NULL REFERENCES pipelines(id),
-                               pdf_id           BIGINT NOT NULL REFERENCES pdf_files(id),
+                               pipeline_id      INT   NOT NULL REFERENCES pipelines(id),  -- <— INT passend zu pipelines.id
+                               pdf_id           BIGINT,
                                status           TEXT   NOT NULL CHECK (status IN ('queued','running','completed','failed','timeout','canceled')),
                                overall_score    NUMERIC(7,3),
-                               final_extraction JSONB,   -- Key→Value (für schnelle UI)
-                               final_scores     JSONB,   -- Key→Score
-                               final_decisions  JSONB,   -- Key→true/false
+                               final_extraction JSONB,
+                               final_scores     JSONB,
+                               final_decisions  JSONB,
                                started_at       TIMESTAMPTZ,
                                finished_at      TIMESTAMPTZ,
                                error            TEXT,
                                created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Step-Instanz im Run (+ finales Step-Ergebnis)
+-- Step-Instanz im Run
 CREATE TABLE pipeline_run_steps (
                                     id                 BIGSERIAL PRIMARY KEY,
                                     run_id             UUID NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
@@ -24,16 +29,16 @@ CREATE TABLE pipeline_run_steps (
                                     started_at         TIMESTAMPTZ,
                                     finished_at        TIMESTAMPTZ,
 
-                                    final_candidate_id BIGINT,            -- optional FK (bewusst ohne FK wegen Zyklus)
+                                    final_candidate_id BIGINT,
                                     final_confidence   NUMERIC(6,3),
                                     final_key          TEXT,
-                                    final_value        JSONB,             -- normalisierte Nutzlast (Text/Bool/Zahl/Objekt)
+                                    final_value        JSONB,
                                     error              TEXT,
 
                                     UNIQUE (run_id, pipeline_step_id)
 );
 
--- Alle Kandidaten/Versuche eines Steps
+-- Kandidaten/Versuche
 CREATE TABLE pipeline_step_attempts (
                                         id                    BIGSERIAL PRIMARY KEY,
                                         run_step_id           BIGINT NOT NULL REFERENCES pipeline_run_steps(id) ON DELETE CASCADE,
@@ -41,14 +46,14 @@ CREATE TABLE pipeline_step_attempts (
                                         candidate_key         TEXT,
                                         candidate_value       JSONB,
                                         candidate_confidence  NUMERIC(6,3),
-                                        source                TEXT,                -- 'llm'|'regex'|'ocr'|'rule'|...
+                                        source                TEXT,
                                         batch_no              INT,
                                         openai_raw            JSONB,
                                         created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
                                         is_final              BOOLEAN NOT NULL DEFAULT FALSE
 );
 
--- History/Events (für Live-UI/Debug)
+-- History/Events
 CREATE TABLE analysis_history (
                                   id          BIGSERIAL PRIMARY KEY,
                                   run_id      UUID NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
