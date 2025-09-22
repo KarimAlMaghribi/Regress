@@ -1,28 +1,24 @@
-# syntax=docker/dockerfile:1.7
-FROM node:20 AS builder
+# frontend/Dockerfile
+# syntax=docker/dockerfile:1.7-labs
+FROM node:20-bullseye AS deps
 WORKDIR /app
 
-COPY frontend/package.json frontend/package-lock.json ./
+# nur Manifest + Lock zuerst
+COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --no-audit --fund=false
+    node -v && npm -v && \
+    test -f package-lock.json && \
+    npm ci --no-audit --fund=false --prefer-offline --progress=false
 
-COPY frontend/ ./
+FROM deps AS build
+# Debug: zeig im CI-Log, welche Manifeste wirklich drin sind
+RUN echo "=== package.json (head) ===" && sed -n '1,60p' package.json && \
+    echo "=== package-lock present? ===" && ls -l package-lock.json
 
-ARG VITE_INGEST_URL=http://localhost:8081
-ARG VITE_HISTORY_WS=ws://localhost:8090
-ARG VITE_API_URL=http://localhost:8084
-ARG VITE_HISTORY_URL=http://localhost:8090
-ARG VITE_UPLOAD_API_URL=http://localhost:8095
-ENV VITE_INGEST_URL=$VITE_INGEST_URL \
-    VITE_HISTORY_WS=$VITE_HISTORY_WS \
-    VITE_API_URL=$VITE_API_URL \
-    VITE_HISTORY_URL=$VITE_HISTORY_URL \
-    VITE_UPLOAD_API_URL=$VITE_UPLOAD_API_URL
-
+COPY . .
 RUN npm run build
 
-FROM nginx:alpine AS runtime
-COPY --from=builder /app/dist /usr/share/nginx/html
-COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf
+FROM nginx:1.27-alpine
+COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 80
-CMD ["nginx", "-g", "daemon off;"]
+CMD ["nginx","-g","daemon off;"]

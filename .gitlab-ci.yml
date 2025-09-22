@@ -128,33 +128,42 @@ build_frontend:
   <<: *docker-build
   variables:
     IMAGE_NAME: "frontend"
+    BUILD_CONTEXT: "frontend"
     DOCKERFILE: "frontend/Dockerfile"
+    CACHE_DIR: ".buildx-cache-frontend"
     PUBLIC_HOST: "${PUBLIC_HOST:-helium.adesso.claims}"
     SCHEME: "${SCHEME:-http}"     # oder https
     WS_SCHEME: "${WS_SCHEME:-ws}" # oder wss
   script:
     - bash -lc 'set -euo pipefail;
+      mkdir -p "$CACHE_DIR";
       PUBLIC_HOST="${PUBLIC_HOST:-helium.adesso.claims}";
       SCHEME="${SCHEME:-http}";
       WS_SCHEME="${WS_SCHEME:-ws}";
-      docker buildx build --pull --push
-      --build-arg BUILDKIT_INLINE_CACHE=1
-      --cache-from=type=local,src="$CACHE_DIR"
-      --cache-to=type=local,dest="$CACHE_DIR-new",mode=max
-      --build-arg PUBLIC_HOST="$PUBLIC_HOST"
-      --build-arg VITE_INGEST_URL="$SCHEME://$PUBLIC_HOST:8080"
-      --build-arg VITE_HISTORY_URL="$SCHEME://$PUBLIC_HOST:8090"
-      --build-arg VITE_HISTORY_WS="$WS_SCHEME://$PUBLIC_HOST:8090"
-      --build-arg VITE_API_URL="$SCHEME://$PUBLIC_HOST:8084"
-      --build-arg VITE_UPLOAD_API_URL="$SCHEME://$PUBLIC_HOST:8081"
-      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${IMAGE_TAG}"
-      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}"
-      -f "$DOCKERFILE" .'
+      # Preflight: sicherstellen, dass wir das richtige Manifest+Lock nehmen
+      ls -l "$BUILD_CONTEXT/package.json" "$BUILD_CONTEXT/package-lock.json";
+      # Build: Kontext => frontend/, Dockerfile => frontend/Dockerfile
+      docker buildx build --pull --push --progress=plain \
+      --build-arg BUILDKIT_INLINE_CACHE=1 \
+      --cache-from=type=local,src="$CACHE_DIR" \
+      --cache-to=type=local,dest="$CACHE_DIR-new",mode=max \
+      --build-arg PUBLIC_HOST="$PUBLIC_HOST" \
+      --build-arg VITE_INGEST_URL="$SCHEME://$PUBLIC_HOST:8080" \
+      --build-arg VITE_HISTORY_URL="$SCHEME://$PUBLIC_HOST:8090" \
+      --build-arg VITE_HISTORY_WS="$WS_SCHEME://$PUBLIC_HOST:8090" \
+      --build-arg VITE_API_URL="$SCHEME://$PUBLIC_HOST:8084" \
+      --build-arg VITE_UPLOAD_API_URL="$SCHEME://$PUBLIC_HOST:8081" \
+      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${IMAGE_TAG}" \
+      -t "${REGISTRY_REPO}:${IMAGE_NAME}-${CI_COMMIT_SHORT_SHA}" \
+      -f "$DOCKERFILE" "$BUILD_CONTEXT"'
     - bash -lc 'rm -rf "$CACHE_DIR" && mv "$CACHE_DIR-new" "$CACHE_DIR"'
   rules:
     - if: '$FORCE_BUILD_ALL == "1"'
-    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
-    - changes: [ frontend/**/* ]
+    - changes:
+        - .gitlab-ci.yml
+        - docker-compose.prod.yml
+    - changes:
+        - frontend/**/*
 
 build_migrations_image:
   stage: build
