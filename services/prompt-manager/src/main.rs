@@ -5,11 +5,14 @@ use axum::{
     Json, Router,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait,
+    QueryFilter, Set,
 };
+use sea_orm::prelude::Decimal; // <- NUMERIC <-> Decimal
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use shared::dto::PromptType;
+use std::str::FromStr; // für Decimal::from_str
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info};
@@ -40,7 +43,7 @@ struct PromptData {
     text: String,
     #[serde(rename = "type")]
     prompt_type: PromptType,
-    // Nur Scoring/Decision → Some(...), sonst None
+    // API gibt f64 zurück (praktisch fürs Frontend)
     weight: Option<f64>,
     json_key: Option<String>,
     favorite: bool,
@@ -104,6 +107,14 @@ fn is_weighted(t: &PromptType) -> bool {
     matches!(t, PromptType::ScoringPrompt | PromptType::DecisionPrompt)
 }
 
+// Hilfsfunktionen: f64 <-> Decimal (NUMERIC)
+fn f64_to_decimal_opt(w: Option<f64>) -> Option<Decimal> {
+    w.and_then(|x| Decimal::from_str(&format!("{:.3}", x)).ok())
+}
+fn decimal_to_f64_opt(d: Option<Decimal>) -> Option<f64> {
+    d.and_then(|v| v.to_string().parse::<f64>().ok())
+}
+
 /* ---------------- Prompts ---------------- */
 
 async fn list_prompts(
@@ -121,7 +132,7 @@ async fn list_prompts(
             id: p.id,
             text: p.text,
             prompt_type: p.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-            weight: p.weight, // Option<f64>
+            weight: decimal_to_f64_opt(p.weight),
             json_key: p.json_key,
             favorite: p.favorite,
         })
@@ -151,8 +162,8 @@ async fn create_prompt(
         return Err(bad_request("weight must be > 0"));
     }
 
-    let weight = if is_weighted(&input.prompt_type) {
-        Some(input.weight.unwrap_or(1.0))
+    let weight_dec = if is_weighted(&input.prompt_type) {
+        f64_to_decimal_opt(Some(input.weight.unwrap_or(1.0)))
     } else {
         None
     };
@@ -165,7 +176,7 @@ async fn create_prompt(
     let mut model: PromptActiveModel = Default::default();
     model.text        = Set(input.text);
     model.prompt_type = Set(input.prompt_type.to_string());
-    model.weight      = Set(weight);
+    model.weight      = Set(weight_dec);
     model.json_key    = Set(json_key);
     model.favorite    = Set(input.favorite);
 
@@ -183,7 +194,7 @@ async fn create_prompt(
         id: res.id,
         text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-        weight: res.weight,
+        weight: decimal_to_f64_opt(res.weight),
         json_key: res.json_key,
         favorite: res.favorite,
     }))
@@ -205,8 +216,8 @@ async fn update_prompt(
         return Err(bad_request("weight must be > 0"));
     }
 
-    let weight = if is_weighted(&input.prompt_type) {
-        Some(input.weight.unwrap_or(1.0))
+    let weight_dec = if is_weighted(&input.prompt_type) {
+        f64_to_decimal_opt(Some(input.weight.unwrap_or(1.0)))
     } else {
         None
     };
@@ -219,7 +230,7 @@ async fn update_prompt(
     let mut active: PromptActiveModel = model.into();
     active.text        = Set(input.text);
     active.prompt_type = Set(input.prompt_type.to_string());
-    active.weight      = Set(weight);
+    active.weight      = Set(weight_dec);
     active.json_key    = Set(json_key);
     active.favorite    = Set(input.favorite);
 
@@ -240,7 +251,7 @@ async fn update_prompt(
         id: res.id,
         text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-        weight: res.weight,
+        weight: decimal_to_f64_opt(res.weight),
         json_key: res.json_key,
         favorite: res.favorite,
     }))
@@ -276,7 +287,7 @@ async fn set_favorite(
         id: res.id,
         text: res.text,
         prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-        weight: res.weight,
+        weight: decimal_to_f64_opt(res.weight),
         json_key: res.json_key,
         favorite: res.favorite,
     }))
@@ -460,7 +471,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
 
-    // ⚠️ Keine CREATE TABLEs mehr hier – Schema kommt aus deinen .sql-Dateien.
+    // Kein bootstrap-DDL hier – Schema kommt aus deinen .sql-Dateien
 
     let app = Router::new()
         .route("/health", get(health))

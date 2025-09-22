@@ -10,7 +10,8 @@ pub mod prompt {
         pub id: i32,
         pub text: String,
         pub prompt_type: String,
-        pub weight: Option<f64>,
+        // DB: NUMERIC -> SeaORM: Decimal
+        pub weight: Option<Decimal>,
         pub json_key: Option<String>,
         pub favorite: bool,
     }
@@ -57,6 +58,7 @@ pub mod group_prompt {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+// Re-exports (optional – entferne, wenn Warnungen stören)
 pub use prompt::{ActiveModel, Entity, Model};
 pub use group::{ActiveModel as GroupActiveModel, Entity as GroupEntity, Model as GroupModel};
 pub use group_prompt::{
