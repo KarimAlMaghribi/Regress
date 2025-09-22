@@ -5,8 +5,7 @@ use axum::{
     Json, Router,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait,
-    QueryFilter, Set, ConnectionTrait, // <- wichtig: ConnectionTrait importiert
+    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait, QueryFilter, Set,
 };
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
@@ -31,9 +30,9 @@ fn ensure_sslmode_disable(url: &str) -> String {
     else { format!("{url}?sslmode=disable") }
 }
 
-async fn health() -> &'static str {
-    "OK"
-}
+async fn health() -> &'static str { "OK" }
+
+/* ---------------- DTOs ---------------- */
 
 #[derive(Serialize)]
 struct PromptData {
@@ -41,7 +40,8 @@ struct PromptData {
     text: String,
     #[serde(rename = "type")]
     prompt_type: PromptType,
-    weight: f64,
+    // Nur Scoring/Decision → Some(...), sonst None
+    weight: Option<f64>,
     json_key: Option<String>,
     favorite: bool,
 }
@@ -49,8 +49,8 @@ struct PromptData {
 #[derive(Deserialize)]
 struct PromptInput {
     text: String,
-    #[serde(default = "default_weight")]
-    weight: f64,
+    // optional: bei Scoring/Decision -> default 1.0, sonst ignoriert
+    weight: Option<f64>,
     #[serde(default = "default_prompt_type", rename = "type")]
     prompt_type: PromptType,
     json_key: Option<String>,
@@ -92,13 +92,16 @@ struct PipelineInput {
 #[derive(Serialize, Debug)]
 struct ErrorResponse { error: String }
 
-fn default_weight() -> f64 { 1.0 }
 fn default_prompt_type() -> PromptType { PromptType::ExtractionPrompt }
 
 #[derive(Deserialize)]
 struct ListParams {
     #[serde(rename = "type")]
     r#type: Option<PromptType>,
+}
+
+fn is_weighted(t: &PromptType) -> bool {
+    matches!(t, PromptType::ScoringPrompt | PromptType::DecisionPrompt)
 }
 
 /* ---------------- Prompts ---------------- */
@@ -112,14 +115,17 @@ async fn list_prompts(
         query = query.filter(model::prompt::Column::PromptType.eq(t.to_string()));
     }
     let items = query.all(&*db).await.map_err(int_err)?;
-    let texts: Vec<PromptData> = items.into_iter().map(|p| PromptData {
-        id: p.id,
-        text: p.text,
-        prompt_type: p.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
-        weight: p.weight,
-        json_key: p.json_key,
-        favorite: p.favorite,
-    }).collect();
+    let texts: Vec<PromptData> = items
+        .into_iter()
+        .map(|p| PromptData {
+            id: p.id,
+            text: p.text,
+            prompt_type: p.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
+            weight: p.weight, // Option<f64>
+            json_key: p.json_key,
+            favorite: p.favorite,
+        })
+        .collect();
     Ok(Json(texts))
 }
 
@@ -141,16 +147,28 @@ async fn create_prompt(
     if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
         return Err(bad_request("json_key required"));
     }
-    if input.prompt_type == PromptType::ScoringPrompt && input.weight <= 0.0 {
+    if is_weighted(&input.prompt_type) && input.weight.unwrap_or(1.0) <= 0.0 {
         return Err(bad_request("weight must be > 0"));
     }
 
+    let weight = if is_weighted(&input.prompt_type) {
+        Some(input.weight.unwrap_or(1.0))
+    } else {
+        None
+    };
+    let json_key = if input.prompt_type == PromptType::ExtractionPrompt {
+        input.json_key.clone()
+    } else {
+        None
+    };
+
     let mut model: PromptActiveModel = Default::default();
-    model.text = Set(input.text);
+    model.text        = Set(input.text);
     model.prompt_type = Set(input.prompt_type.to_string());
-    model.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt { 1.0 } else { input.weight });
-    model.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt { input.json_key.clone() } else { None });
-    model.favorite = Set(input.favorite);
+    model.weight      = Set(weight);
+    model.json_key    = Set(json_key);
+    model.favorite    = Set(input.favorite);
+
     let res = model.insert(&*db).await.map_err(int_err)?;
 
     // Gruppen-Beziehungen anlegen
@@ -183,16 +201,28 @@ async fn update_prompt(
     if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
         return Err(bad_request("json_key required"));
     }
-    if input.prompt_type == PromptType::ScoringPrompt && input.weight <= 0.0 {
+    if is_weighted(&input.prompt_type) && input.weight.unwrap_or(1.0) <= 0.0 {
         return Err(bad_request("weight must be > 0"));
     }
 
+    let weight = if is_weighted(&input.prompt_type) {
+        Some(input.weight.unwrap_or(1.0))
+    } else {
+        None
+    };
+    let json_key = if input.prompt_type == PromptType::ExtractionPrompt {
+        input.json_key.clone()
+    } else {
+        None
+    };
+
     let mut active: PromptActiveModel = model.into();
-    active.text = Set(input.text);
+    active.text        = Set(input.text);
     active.prompt_type = Set(input.prompt_type.to_string());
-    active.weight = Set(if input.prompt_type == PromptType::ExtractionPrompt { 1.0 } else { input.weight });
-    active.json_key = Set(if input.prompt_type == PromptType::ExtractionPrompt { input.json_key.clone() } else { None });
-    active.favorite = Set(input.favorite);
+    active.weight      = Set(weight);
+    active.json_key    = Set(json_key);
+    active.favorite    = Set(input.favorite);
+
     let res = active.update(&*db).await.map_err(int_err)?;
 
     // Gruppenbeziehungen ersetzen
@@ -430,23 +460,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
 
-    // einfache Schema-Sicherung (idempotent)
-    db.execute(sea_orm::Statement::from_string(
-        db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS prompts (id SERIAL PRIMARY KEY, text TEXT NOT NULL, prompt_type TEXT NOT NULL DEFAULT 'ExtractionPrompt', weight DOUBLE PRECISION NOT NULL DEFAULT 1, json_key TEXT, favorite BOOLEAN NOT NULL DEFAULT FALSE)",
-    )).await?;
-    db.execute(sea_orm::Statement::from_string(
-        db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS prompt_groups (id SERIAL PRIMARY KEY, name TEXT NOT NULL, favorite BOOLEAN NOT NULL DEFAULT FALSE)",
-    )).await?;
-    db.execute(sea_orm::Statement::from_string(
-        db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS group_prompts (group_id INTEGER NOT NULL REFERENCES prompt_groups(id) ON DELETE CASCADE, prompt_id INTEGER NOT NULL REFERENCES prompts(id) ON DELETE CASCADE, PRIMARY KEY (group_id, prompt_id))",
-    )).await?;
-    db.execute(sea_orm::Statement::from_string(
-        db.get_database_backend(),
-        "CREATE TABLE IF NOT EXISTS pipelines (id SERIAL PRIMARY KEY, name TEXT NOT NULL, data JSONB NOT NULL)",
-    )).await?;
+    // ⚠️ Keine CREATE TABLEs mehr hier – Schema kommt aus deinen .sql-Dateien.
 
     let app = Router::new()
         .route("/health", get(health))
