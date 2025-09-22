@@ -5,14 +5,14 @@ use axum::{
     Json, Router,
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, Database, DatabaseConnection, EntityTrait,
-    QueryFilter, Set,
+    ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
+    QueryFilter, Set, Statement,
 };
-use sea_orm::prelude::Decimal; // <- NUMERIC <-> Decimal
+use sea_orm::prelude::Decimal;
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use shared::dto::PromptType;
-use std::str::FromStr; // für Decimal::from_str
+use std::str::FromStr;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info};
@@ -43,7 +43,7 @@ struct PromptData {
     text: String,
     #[serde(rename = "type")]
     prompt_type: PromptType,
-    // API gibt f64 zurück (praktisch fürs Frontend)
+    // Nur Scoring/Decision → Some(...), sonst None
     weight: Option<f64>,
     json_key: Option<String>,
     favorite: bool,
@@ -83,7 +83,7 @@ struct GroupInput {
 struct PipelineData {
     id: i32,
     name: String,
-    data: serde_json::Value,
+    data: serde_json::Value, // bleibt "data" in der API; falls DB config_json nutzt, bitte Model anpassen
 }
 
 #[derive(Deserialize)]
@@ -453,6 +453,51 @@ fn not_found() -> (StatusCode, Json<ErrorResponse>) {
     (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() }))
 }
 
+/* ---------------- Bootstrap: Prompts-Schema sicherstellen ---------------- */
+
+async fn ensure_prompt_schema(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
+    let be = db.get_database_backend();
+
+    // prompts (NUMERIC weight, Constraint nur wenn Tabelle neu entsteht)
+    db.execute(Statement::from_string(be, r#"
+        CREATE TABLE IF NOT EXISTS prompts (
+          id           SERIAL PRIMARY KEY,
+          text         TEXT NOT NULL,
+          prompt_type  TEXT NOT NULL CHECK (prompt_type IN
+                           ('ExtractionPrompt','ScoringPrompt','DecisionPrompt','FinalPrompt','MetaPrompt')),
+          weight       NUMERIC(6,3),
+          json_key     TEXT,
+          favorite     BOOLEAN NOT NULL DEFAULT FALSE,
+          CONSTRAINT weight_only_for_weighted
+            CHECK (
+              (prompt_type IN ('ScoringPrompt','DecisionPrompt') AND weight IS NOT NULL)
+              OR
+              (prompt_type NOT IN ('ScoringPrompt','DecisionPrompt') AND weight IS NULL)
+            )
+        )
+    "#.to_string())).await?;
+
+    // prompt_groups
+    db.execute(Statement::from_string(be, r#"
+        CREATE TABLE IF NOT EXISTS prompt_groups (
+          id        SERIAL PRIMARY KEY,
+          name      TEXT NOT NULL UNIQUE,
+          favorite  BOOLEAN NOT NULL DEFAULT FALSE
+        )
+    "#.to_string())).await?;
+
+    // group_prompts
+    db.execute(Statement::from_string(be, r#"
+        CREATE TABLE IF NOT EXISTS group_prompts (
+          group_id   INTEGER NOT NULL REFERENCES prompt_groups(id) ON DELETE CASCADE,
+          prompt_id  INTEGER NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
+          PRIMARY KEY (group_id, prompt_id)
+        )
+    "#.to_string())).await?;
+
+    Ok(())
+}
+
 /* ---------------- main ---------------- */
 
 #[tokio::main]
@@ -471,7 +516,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
 
-    // Kein bootstrap-DDL hier – Schema kommt aus deinen .sql-Dateien
+    // 👇 Fix: fehlende Tabellen idempotent anlegen
+    ensure_prompt_schema(&db).await?;
 
     let app = Router::new()
         .route("/health", get(health))
