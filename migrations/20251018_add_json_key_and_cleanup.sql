@@ -1,4 +1,0 @@
-ALTER TABLE prompts
-    ADD COLUMN IF NOT EXISTS json_key TEXT;
-ALTER TABLE prompts
-    ALTER COLUMN weight SET DEFAULT 1;

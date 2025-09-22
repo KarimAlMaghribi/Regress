@@ -1,266 +1,138 @@
 import * as React from "react";
-import { useEffect, useMemo, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
+import {useMemo} from "react";
+import {useParams, useSearchParams} from "react-router-dom";
 import {
-  Box, Card, CardContent, CardHeader, Chip, CircularProgress, Container,
-  Grid, IconButton, LinearProgress, Stack, Table, TableBody, TableCell,
-  TableHead, TableRow, Tooltip, Typography, Accordion, AccordionSummary,
-  AccordionDetails, Alert, TextField, FormControlLabel, Switch
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Alert,
+  Box,
+  Card,
+  CardContent,
+  CardHeader,
+  Chip,
+  CircularProgress,
+  Container,
+  Divider,
+  Grid,
+  IconButton,
+  LinearProgress,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Tooltip,
+  Typography,
 } from "@mui/material";
+import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
-import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
+import PlayArrowIcon from "@mui/icons-material/PlayArrow";
+import ArticleIcon from "@mui/icons-material/Article"; // Extraction
+import RuleIcon from "@mui/icons-material/Rule"; // Score
+import AltRouteIcon from "@mui/icons-material/AltRoute"; // Decision
+import AssessmentIcon from "@mui/icons-material/Assessment"; // Scoring header
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
-import type { PipelineRunResult } from "../types/pipeline";
 
-/* ===== Types ===== */
-type TextPosition = { page?: number; bbox?: number[]; quote?: string | null };
-type PromptType = "ExtractionPrompt" | "ScoringPrompt" | "DecisionPrompt";
+import {type RunDetail, type RunStep, useRunDetails} from "../hooks/useRunDetails";
 
-type PromptResult = {
-  prompt_id: number;
-  prompt_type: PromptType;
-  prompt_text: string;
-  value?: any | null;
-  boolean?: boolean | null;
-  route?: string | null;
-  weight?: number | null;
-  source?: TextPosition | null;
-  json_key?: string | null;
-  explanation?: string | null;
-  error?: string | null;
-};
+/** --------- helpers --------- */
+const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
+const fmtNum = (n: number) => Intl.NumberFormat(undefined, {maximumFractionDigits: 2}).format(n);
+const asBool = (v: unknown) => (typeof v === "boolean" ? v : (typeof v === "object" && v !== null ? (v as any).bool ?? (v as any).decision : undefined));
 
-const CONF_WARN = 0.6;
-const LS_PREFIX = "run-view:";
-
-/* ===== Logging helpers ===== */
-function dlog(label: string, payload?: any) { console.log(`[RunView] ${label}`, payload ?? ""); }
-function keysOf(obj: any) { return obj && typeof obj === "object" ? Object.keys(obj) : []; }
-function summarizeArray(arr: any[] | undefined | null, pick?: (x: any) => any) {
-  if (!Array.isArray(arr)) return { len: 0, head: [] as any[] };
-  const len = arr.length;
-  const head = arr.slice(0, 3).map(x => (pick ? pick(x) : x));
-  return { len, head };
-}
-function countWeightPresence(arr: any[] | undefined | null) {
-  if (!Array.isArray(arr)) return { present: 0, absent: 0 };
-  let present = 0, absent = 0;
-  for (const r of arr) (typeof r?.weight === "number") ? present++ : absent++;
-  return { present, absent };
-}
-function clamp01(n: number) { return Math.max(0, Math.min(1, Number.isFinite(n) ? n : 0)); }
-
-/* ===== API base ===== */
-function getAPIBase(): string {
-  const w = (window as any);
-  return w.__ENV__?.PIPELINE_API_URL || (import.meta as any)?.env?.VITE_PIPELINE_API_URL || "/pl";
-}
-
-/* ===== Final-map heuristics & deep scan ===== */
-function looksLikeExtractionMap(obj: any) {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  const vals = Object.values(obj);
-  if (!vals.length) return false;
-  const v = vals[0] as any;
-  const hasConf = ("confidence" in (v ?? {})) || ("score" in (v ?? {})) || ("conf" in (v ?? {}));
-  const hasFieldish = ("value" in (v ?? {})) || ("page" in (v ?? {})) || ("quote" in (v ?? {}));
-  return hasConf && hasFieldish;
-}
-function looksLikeScoringMap(obj: any) {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  const vals = Object.values(obj);
-  if (!vals.length) return false;
-  const v = vals[0] as any;
-  const hasConf = ("confidence" in (v ?? {})) || ("score" in (v ?? {})) || ("conf" in (v ?? {}));
-  return (("result" in (v ?? {})) && hasConf) || ("votes_true" in (v ?? {}) || "votes_false" in (v ?? {}));
-}
-function looksLikeDecisionMap(obj: any) {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  const vals = Object.values(obj);
-  if (!vals.length) return false;
-  const v = vals[0] as any;
-  const hasConf = ("confidence" in (v ?? {})) || ("score" in (v ?? {})) || ("conf" in (v ?? {}));
-  return ("route" in (v ?? {})) && (hasConf || "answer" in (v ?? {}));
-}
-
-type Found = { path: string; obj: any };
-function deepFind(run: any, guard: (x:any)=>boolean, maxDepth = 5): Found | null {
-  const seen = new WeakSet<object>();
-  function rec(node: any, path: string[], depth: number): Found | null {
-    if (!node || typeof node !== "object" || Array.isArray(node)) return null;
-    if (seen.has(node)) return null;
-    seen.add(node);
-    try { if (guard(node)) return { path: path.join("."), obj: node }; } catch {}
-    if (depth >= maxDepth) return null;
-    for (const [k, v] of Object.entries(node)) {
-      if (v && typeof v === "object") {
-        const f = rec(v, [...path, k], depth + 1);
-        if (f) return f;
-      }
-    }
-    return null;
-  }
-  return rec(run, [], 0);
-}
-
-function detectFinalMaps(run: any) {
-  const candidates = {
-    extracted: [
-      ["extracted", run?.extracted],
-      ["final_extracted", run?.final_extracted],
-      ["finalExtraction", run?.finalExtraction],
-      ["normalized", run?.normalized],
-      ["canonical", run?.canonical],
-      ["canonical_fields", run?.canonical_fields],
-    ],
-    scores: [
-      ["scores", run?.scores],
-      ["final_scores", run?.final_scores],
-      ["finalScoring", run?.finalScoring],
-    ],
-    decisions: [
-      ["decisions", run?.decisions],
-      ["final_decisions", run?.final_decisions],
-      ["finalDecision", run?.finalDecision],
-    ],
-  } as const;
-
-  function pickAlias(list: readonly [string, any][], guard: (x:any)=>boolean) {
-    for (const [name, val] of list) {
-      try { if (guard(val)) return { key: name, map: val, via: "alias" }; } catch {}
-    }
-    return null;
-  }
-
-  let ex = pickAlias(candidates.extracted, looksLikeExtractionMap);
-  let sc = pickAlias(candidates.scores, looksLikeScoringMap);
-  let dc = pickAlias(candidates.decisions, looksLikeDecisionMap);
-
-  if (!ex) {
-    const found = deepFind(run, looksLikeExtractionMap);
-    if (found) ex = { key: found.path, map: found.obj, via: "deep" as const };
-  }
-  if (!sc) {
-    const found = deepFind(run, looksLikeScoringMap);
-    if (found) sc = { key: found.path, map: found.obj, via: "deep" as const };
-  }
-  if (!dc) {
-    const found = deepFind(run, looksLikeDecisionMap);
-    if (found) dc = { key: found.path, map: found.obj, via: "deep" as const };
-  }
-
-  dlog("Final maps detection", {
-    extractedChosenKey: ex?.key, extractedCount: ex?.map ? Object.keys(ex.map).length : 0, extractedVia: ex?.via ?? null,
-    scoresChosenKey: sc?.key, scoresCount: sc?.map ? Object.keys(sc.map).length : 0, scoresVia: sc?.via ?? null,
-    decisionsChosenKey: dc?.key, decisionsCount: dc?.map ? Object.keys(dc.map).length : 0, decisionsVia: dc?.via ?? null,
-  });
-
-  return {
-    extractedEff: ex?.map ?? {},
-    scoresEff: sc?.map ?? {},
-    decisionsEff: dc?.map ?? {},
-    keys: { extracted: ex?.key, scores: sc?.key, decisions: dc?.key, via: { ex: ex?.via, sc: sc?.via, dc: dc?.via } }
+function StatusChip({status}: { status?: string }) {
+  const map: Record<string, {
+    color: "default" | "success" | "error" | "warning" | "info";
+    icon: React.ReactNode;
+    label: string
+  }> = {
+    queued: {color: "info", icon: <HourglassEmptyIcon fontSize="small"/>, label: "Wartend"},
+    running: {color: "warning", icon: <PlayArrowIcon fontSize="small"/>, label: "Laufend"},
+    finalized: {color: "success", icon: <CheckCircleOutlineIcon fontSize="small"/>, label: "Final"},
+    completed: {
+      color: "success",
+      icon: <CheckCircleOutlineIcon fontSize="small"/>,
+      label: "Abgeschlossen"
+    },
+    failed: {color: "error", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Fehler"},
+    timeout: {color: "error", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Timeout"},
+    canceled: {color: "default", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Abgebrochen"},
   };
+  const c = status ? map[status] : undefined;
+  return <Chip size="small" color={c?.color ?? "default"} icon={c?.icon}
+               label={c?.label ?? (status ?? "–")}/>;
 }
 
-/* ===== Component ===== */
-export default function RunDetailsPage() {
-  const { key } = useParams<{ key: string }>();
-  const [sp] = useSearchParams();
-  const runId = sp.get("run_id") || undefined;
+function StepTypeIcon({t}: { t: RunStep["step_type"] }) {
+  if (t === "Extraction") return <ArticleIcon sx={{color: "primary.main"}} fontSize="small"/>;
+  if (t === "Score") return <RuleIcon sx={{color: "success.main"}} fontSize="small"/>;
+  if (t === "Decision") return <AltRouteIcon sx={{color: "warning.main"}} fontSize="small"/>;
+  return <InfoOutlinedIcon color="disabled" fontSize="small"/>;
+}
 
-  const [data, setData] = useState<PipelineRunResult | any | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
-  const [err, setErr] = useState<string | null>(null);
-
-  const loadFromLocalStorage = React.useCallback(() => {
-    if (!key) return false;
-    const raw = localStorage.getItem(`${LS_PREFIX}${key}`);
-    if (!raw) return false;
-    try {
-      const parsed = JSON.parse(raw);
-      if (parsed?.run) {
-        setData(parsed.run);
-        (window as any).__run = parsed.run;
-        dlog("Loaded from localStorage", {
-          lsKey: `${LS_PREFIX}${key}`,
-          runTopKeys: keysOf(parsed.run),
-          pdfUrl: parsed?.pdfUrl ?? null,
-        });
-        printRunDiagnostics(parsed.run, "localStorage");
-        return true;
-      } else {
-        dlog("LocalStorage entry missing 'run' property", parsed);
-      }
-    } catch (e) { dlog("LocalStorage parse error", String(e)); }
-    return false;
-  }, [key]);
-
-  const fetchRunById = React.useCallback(async () => {
-    if (!runId) return false;
-    setErr(null);
-    try {
-      const API = getAPIBase();
-      dlog("Fetching run by id", { API, runId });
-      const res = await fetch(`${API}/runs/${runId}`, { headers: { Accept: "application/json" } });
-      const bodyText = await res.clone().text();
-      const ct = res.headers.get("content-type") || "";
-      if (!ct.includes("application/json")) throw new Error(`Expected JSON, got ${ct}\nBody: ${bodyText.slice(0,300)}…`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}: ${bodyText.slice(0,300)}…`);
-      const json = JSON.parse(bodyText);
-      setData(json);
-      (window as any).__run = json;
-      dlog("Fetched by API", { runTopKeys: keysOf(json) });
-      printRunDiagnostics(json, "api");
-      return true;
-    } catch (e: any) {
-      setErr(e?.message ?? "Fehler beim Laden");
-      dlog("Fetch error", e);
-      return false;
-    }
-  }, [runId]);
-
-  useEffect(() => {
-    setLoading(true);
-    const ok = loadFromLocalStorage();
-    if (!ok) {
-      if (runId) fetchRunById().finally(() => setLoading(false));
-      else { setErr("Keine Daten gefunden (weder localStorage noch run_id)."); setLoading(false); }
-    } else setLoading(false);
-  }, [loadFromLocalStorage, fetchRunById, runId]);
-
-  const pdfUrl = useMemo(() => {
-    if (!key) return "";
-    try {
-      const raw = localStorage.getItem(`${LS_PREFIX}${key}`);
-      if (!raw) return "";
-      const parsed = JSON.parse(raw);
-      return parsed?.pdfUrl || "";
-    } catch { return ""; }
-  }, [key]);
-
-  const { extractedEff, scoresEff, decisionsEff, keys: chosenKeys } = useMemo(
-      () => detectFinalMaps(data),
-      [data]
+function ConfidenceBar({value}: { value?: number | null }) {
+  if (value == null || Number.isNaN(value)) return <Typography variant="body2">—</Typography>;
+  const v = clamp01(value);
+  return (
+      <Stack direction="row" alignItems="center" gap={1} sx={{minWidth: 160}}>
+        <Box sx={{flex: 1}}>
+          <LinearProgress variant="determinate" value={v * 100}/>
+        </Box>
+        <Typography variant="caption" sx={{width: 36, textAlign: "right"}}>
+          {(v * 100).toFixed(0)}%
+        </Typography>
+      </Stack>
   );
-  useEffect(() => { dlog("Chosen final map keys", chosenKeys); }, [chosenKeys]);
+}
+
+function formatValue(val: any) {
+  if (val == null) return "—";
+  if (typeof val === "boolean") return val ? "Ja" : "Nein";
+  if (typeof val === "number") return fmtNum(val);
+  if (typeof val === "string") return val;
+  try {
+    return JSON.stringify(val);
+  } catch {
+    return String(val);
+  }
+}
+
+function EvidenceChip({page, pdfUrl}: { page?: number; pdfUrl?: string }) {
+  if (!page) return <>—</>;
+  const open = () => pdfUrl && window.open(`${pdfUrl}#page=${page}`, "_blank", "noopener,noreferrer");
+  return <Chip size="small" variant="outlined" label={`Seite ${page}`} onClick={open}/>;
+}
+
+/** --------- main page --------- */
+export default function RunDetailsPage() {
+  const params = useParams<{ id?: string }>();
+  const [sp] = useSearchParams();
+  const runId = sp.get("run_id") || sp.get("id") || params.id || undefined;
+  const pdfUrl = sp.get("pdf") || sp.get("pdf_url") || undefined;
+
+  const {data, loading, error, scoreSum} = useRunDetails(runId);
 
   if (loading) {
     return (
-        <Container maxWidth="xl" sx={{ py: 3 }}>
-          <Stack direction="row" alignItems="center" gap={1}>
-            <CircularProgress size={22} /> <Typography>Lade Details…</Typography>
+        <Container maxWidth="xl" sx={{py: 3}}>
+          <Stack direction="row" gap={1} alignItems="center">
+            <CircularProgress size={22}/> <Typography>Lade Details…</Typography>
           </Stack>
         </Container>
     );
   }
-  if (err) {
+  if (error) {
     return (
-        <Container maxWidth="xl" sx={{ py: 3 }}>
-          <Alert severity="error" sx={{ mb: 2 }}>{err}</Alert>
+        <Container maxWidth="xl" sx={{py: 3}}>
+          <Alert severity="error" sx={{mb: 2}}>{error.message}</Alert>
           <Typography variant="body2" color="text.secondary">
-            Tipp: Seite aus der Liste erneut öffnen oder mit <code>?run_id=&lt;UUID&gt;</code>.
+            Prüfe die URL-Parameter (<code>?run_id=&lt;UUID&gt;</code>) oder lade die Seite neu.
           </Typography>
         </Container>
     );
@@ -268,177 +140,185 @@ export default function RunDetailsPage() {
   if (!data) return null;
 
   return (
-      <Container maxWidth="xl" sx={{ py: 3 }}>
-        <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
-          <Box>
-            <Typography variant="h5">Run-Details</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Pipeline: {String((data as any).pipeline_id)} • PDF-ID: {data.pdf_id} {typeof data.overall_score === "number" ? `• Final Score: ${data.overall_score?.toFixed(2)}` : ""}
-            </Typography>
-          </Box>
-          <Stack direction="row" gap={1}>
-            {pdfUrl && (
-                <Tooltip title="PDF öffnen">
-                  <IconButton size="small" onClick={() => window.open(pdfUrl, "_blank")}>
-                    <OpenInNewIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-            )}
-            <IconButton onClick={() => window.location.reload()} title="Neu laden"><RefreshIcon /></IconButton>
-          </Stack>
-        </Stack>
-
+      <Container maxWidth="xl" sx={{py: 3}}>
+        <HeaderBar detail={data} pdfUrl={pdfUrl}/>
         <Grid container spacing={2}>
-          <Grid item xs={12} md={8}>
-            <FinalExtractionCard extracted={extractedEff} pdfUrl={pdfUrl} />
-            <FinalScoringCard scores={scoresEff} pdfUrl={pdfUrl} />
-            <FinalDecisionCard decisions={decisionsEff} pdfUrl={pdfUrl} />
-            {(Object.keys(extractedEff ?? {}).length === 0
-                && Object.keys(scoresEff ?? {}).length === 0
-                && Object.keys(decisionsEff ?? {}).length === 0) && (
-                <Alert severity="info" sx={{ mt: 2 }}>
-                  Keine finalen Ergebnisse im DTO gefunden (auch nicht in verschachtelten Pfaden). Lädt der Client
-                  evtl. ein Objekt <em>vor</em> der Konsolidierung? Siehe Konsole <code>[RunView]</code> Logs.
-                </Alert>
-            )}
-          </Grid>
-
           <Grid item xs={12} md={4}>
-            <SummaryCard
-                data={data}
-                extractedEff={extractedEff}
-                scoresEff={scoresEff}
-                decisionsEff={decisionsEff}
-            />
-            <HintsCard data={data} />
+            <SummaryCard detail={data} scoreSum={scoreSum}/>
+            <ScoreBreakdownCard detail={data}/>
+            <DecisionCard detail={data}/>
           </Grid>
 
-          <Grid item xs={12}>
-            <PromptDrilldown data={data} pdfUrl={pdfUrl} />
+          <Grid item xs={12} md={8}>
+            <ExtractionCard detail={data}/>
+            <StepsWithAttempts detail={data} pdfUrl={pdfUrl}/>
           </Grid>
         </Grid>
       </Container>
   );
 }
 
-/* ===== Summary + Hints ===== */
-function SummaryCard({
-                       data, extractedEff, scoresEff, decisionsEff
-                     }: { data: any, extractedEff: any, scoresEff: any, decisionsEff: any }) {
-  const finalsExtraction = Object.values(extractedEff ?? {});
-  const finalsScoring = Object.values(scoresEff ?? {});
-  const finalsDecision = Object.values(decisionsEff ?? {});
+/** --------- sections --------- */
 
-  const warnExtract = finalsExtraction.filter((x: any) => (x?.confidence ?? 1) < CONF_WARN).length;
-  const warnScore = finalsScoring.filter((x: any) => (x?.confidence ?? 1) < CONF_WARN).length;
-  const warnDec = finalsDecision.filter((x: any) => (x?.confidence ?? 1) < CONF_WARN).length;
-
-  useEffect(() => {
-    dlog("SummaryCard finals", {
-      overall_score: data?.overall_score ?? null,
-      extracted_count: finalsExtraction.length,
-      scores_count: finalsScoring.length,
-      decisions_count: finalsDecision.length,
-      warnExtract, warnScore, warnDec
-    });
-  }, [data, finalsExtraction.length, finalsScoring.length, finalsDecision.length, warnExtract, warnScore, warnDec]);
-
+function HeaderBar({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
+  const {run} = detail;
   return (
-      <Card variant="outlined" sx={{ mb: 2 }}>
-        <CardHeader title="Finale Zusammenfassung" subheader="Priorisierte Übersicht der Normalisierung & Scores" />
-        <CardContent>
-          <Stack spacing={1}>
-            <Row label="Final Score">
-              {typeof data?.overall_score === "number"
-                  ? <ConfidenceBar value={clamp01(data.overall_score)} />
-                  : <Typography variant="body2">—</Typography>}
-            </Row>
-            <Row label="Final Extracted">
-              <Typography variant="body2">
-                {finalsExtraction.length} Felder • {warnExtract > 0 ? `⚠️ ${warnExtract} unter ${CONF_WARN}` : "alle ≥ Schwelle"}
-              </Typography>
-            </Row>
-            <Row label="Final Scoring">
-              <Typography variant="body2">
-                {finalsScoring.length} Regeln • {warnScore > 0 ? `⚠️ ${warnScore} unter ${CONF_WARN}` : "alle ≥ Schwelle"}
-              </Typography>
-            </Row>
-            <Row label="Final Decision">
-              <Typography variant="body2">
-                {finalsDecision.length} Entscheidungen • {warnDec > 0 ? `⚠️ ${warnDec} unter ${CONF_WARN}` : "alle ≥ Schwelle"}
-              </Typography>
-            </Row>
-          </Stack>
-        </CardContent>
-      </Card>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{mb: 2}}>
+        <Box>
+          <Typography variant="h5">Analyse · Run</Typography>
+          <Typography variant="body2" color="text.secondary">
+            Pipeline: {run.pipeline_id} • PDF-ID: {run.pdf_id} • Status: <StatusChip
+              status={run.status}/>
+          </Typography>
+        </Box>
+        <Stack direction="row" gap={1}>
+          {pdfUrl && (
+              <Tooltip title="PDF öffnen">
+                <IconButton size="small"
+                            onClick={() => window.open(pdfUrl!, "_blank", "noopener,noreferrer")}>
+                  <OpenInNewIcon fontSize="small"/>
+                </IconButton>
+              </Tooltip>
+          )}
+          <Tooltip title="Neu laden">
+            <IconButton size="small" onClick={() => window.location.reload()}>
+              <RefreshIcon fontSize="small"/>
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      </Stack>
   );
 }
 
-function HintsCard({ data }: { data: any }) {
-  const lowExtraction = Object.values((data?.extracted ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
-  const lowScoring   = Object.values((data?.scores ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
-  const lowDecision  = Object.values((data?.decisions ?? {}) as any).some((x: any) => x?.confidence < CONF_WARN);
-
-  useEffect(() => {
-    dlog("HintsCard thresholds", { CONF_WARN, lowExtraction, lowScoring, lowDecision });
-  }, [lowExtraction, lowScoring, lowDecision]);
+function SummaryCard({detail, scoreSum}: { detail: RunDetail; scoreSum: number }) {
+  const {run} = detail;
+  const finalKeys = Object.keys(run.final_extraction ?? {});
+  const decKeys = Object.keys(run.final_decisions ?? {});
+  const scKeys = Object.keys(run.final_scores ?? {});
 
   return (
-      <Card variant="outlined" sx={{ mb: 2 }}>
-        <CardHeader title="Hinweise" />
+      <Card variant="outlined" sx={{mb: 2}}>
+        <CardHeader title="Übersicht" subheader="Konsolidierte Ergebnisse & Score"/>
         <CardContent>
-          <Stack spacing={1}>
-            <Typography variant="body2">
-              {(lowExtraction || lowScoring || lowDecision)
-                  ? "⚠️ Einige finale Ergebnisse liegen unter der Konfidenzschwelle."
-                  : "Alle finalen Ergebnisse liegen über der Konfidenzschwelle (oder Finals fehlen)."}
-            </Typography>
+          <Stack spacing={1.25}>
             <Stack direction="row" alignItems="center" gap={1}>
-              <InfoOutlinedIcon fontSize="small" color="action" />
-              <Typography variant="caption" color="text.secondary">
-                Tipp: Chips „Seite X“ springen direkt zur Fundstelle im PDF (neuer Tab).
-              </Typography>
+              <AssessmentIcon sx={{color: "success.main"}} fontSize="small"/>
+              <Typography variant="body2" sx={{minWidth: 130, color: "text.secondary"}}>Final
+                Score</Typography>
+              <Box sx={{flex: 1}}>
+                {typeof run.overall_score === "number" ? (
+                    <Stack direction="row" alignItems="center" gap={1}>
+                      <LinearProgress variant="determinate"
+                                      value={clamp01(run.overall_score) * 100}/>
+                      <Typography variant="caption" sx={{
+                        width: 40,
+                        textAlign: "right"
+                      }}>{fmtNum(run.overall_score)}</Typography>
+                    </Stack>
+                ) : (
+                    <Typography variant="body2">—</Typography>
+                )}
+              </Box>
             </Stack>
+
+            <Row label="Extrakte">{finalKeys.length} Felder</Row>
+            <Row label="Entscheidungen">{decKeys.length} Einträge</Row>
+            <Row label="Score-Regeln">{scKeys.length} Regeln • Summe: {fmtNum(scoreSum)}</Row>
+            <Divider sx={{my: 1}}/>
+            <Row label="Start">{run.started_at ?? "—"}</Row>
+            <Row label="Ende">{run.finished_at ?? "—"}</Row>
+            {run.error && (
+                <Row label="Fehler">
+                  <Chip size="small" color="error" icon={<ErrorOutlineIcon/>} label={run.error}/>
+                </Row>
+            )}
           </Stack>
         </CardContent>
       </Card>
   );
 }
 
-/* ===== Final Cards ===== */
-function FinalExtractionCard({ extracted, pdfUrl }: { extracted?: Record<string, any>, pdfUrl: string }) {
-  const entries = useMemo(() => Object.entries(extracted ?? {}), [extracted]);
-  useEffect(() => { dlog("FinalExtractionCard", { count: entries.length, sample: entries.slice(0,3) }); }, [entries]);
+function ScoreBreakdownCard({detail}: { detail: RunDetail }) {
+  const map = detail.run.final_scores ?? {};
+  const entries = useMemo(() => Object.entries(map), [map]);
   if (!entries.length) return null;
+
   return (
-      <Card variant="outlined" sx={{ mb: 2 }}>
-        <CardHeader title="Finale Extraktion" subheader="Konsolidierte Normalisierungs-Ergebnisse pro Feld" />
+      <Card variant="outlined" sx={{mb: 2}}>
+        <CardHeader title="Scoring (Beitrag je Regel)"
+                    subheader="Gewicht addiert bei finalem TRUE"/>
+        <CardContent>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>Regel</TableCell>
+                <TableCell width={120} align="right">Beitrag</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {entries.map(([k, v]) => (
+                  <TableRow key={k}>
+                    <TableCell><Chip size="small" color={(v as number) > 0 ? "success" : "default"}
+                                     label={k}/></TableCell>
+                    <TableCell align="right">{fmtNum(typeof v === "number" ? v : 0)}</TableCell>
+                  </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+  );
+}
+
+function DecisionCard({detail}: { detail: RunDetail }) {
+  const map = detail.run.final_decisions ?? {};
+  const entries = useMemo(() => Object.entries(map), [map]);
+  if (!entries.length) return null;
+
+  return (
+      <Card variant="outlined" sx={{mb: 2}}>
+        <CardHeader title="Finale Entscheidungen" subheader="Routen/Ja-Nein"/>
+        <CardContent>
+          <Stack direction="row" gap={1} flexWrap="wrap">
+            {entries.map(([k, b]) => (
+                <Chip
+                    key={k}
+                    size="small"
+                    color={b ? "success" : "error"}
+                    icon={b ? <CheckCircleOutlineIcon/> : <ErrorOutlineIcon/>}
+                    label={`${k}: ${b ? "Ja" : "Nein"}`}
+                    variant={b ? "filled" : "outlined"}
+                />
+            ))}
+          </Stack>
+        </CardContent>
+      </Card>
+  );
+}
+
+function ExtractionCard({detail}: { detail: RunDetail }) {
+  const map = detail.run.final_extraction ?? {};
+  const entries = useMemo(() => Object.entries(map), [map]);
+  if (!entries.length) return null;
+
+  return (
+      <Card variant="outlined" sx={{mb: 2}}>
+        <CardHeader title="Finale Extraktion" subheader="Konsolidierte Felder"/>
         <CardContent>
           <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>Feld</TableCell>
                 <TableCell>Wert</TableCell>
-                <TableCell width={180}>Confidence</TableCell>
-                <TableCell>Seite</TableCell>
-                <TableCell>Zitat</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {entries.map(([key, v]: any) => {
-                const page = v?.page as number | undefined;
-                const quote = v?.quote as string | undefined;
-                const bbox = (v?.source?.bbox ?? v?.bbox) as number[] | undefined;
-                return (
-                    <TableRow key={key}>
-                      <TableCell><Chip size="small" label={key} /></TableCell>
-                      <TableCell>{formatValue(v?.value)}</TableCell>
-                      <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
-                      <TableCell>{page ? <EvidenceChip page={page} pdfUrl={pdfUrl} bbox={bbox} quote={quote} /> : "—"}</TableCell>
-                      <TableCell>{quote ? <Tooltip title={quote}><Typography noWrap sx={{ maxWidth: 360 }}>{quote}</Typography></Tooltip> : "—"}</TableCell>
-                    </TableRow>
-                );
-              })}
+              {entries.map(([k, v]) => (
+                  <TableRow key={k}>
+                    <TableCell><Chip size="small" label={k}/></TableCell>
+                    <TableCell>{formatValue(v)}</TableCell>
+                  </TableRow>
+              ))}
             </TableBody>
           </Table>
         </CardContent>
@@ -446,373 +326,113 @@ function FinalExtractionCard({ extracted, pdfUrl }: { extracted?: Record<string,
   );
 }
 
-function FinalScoringCard({ scores, pdfUrl }: { scores?: Record<string, any>, pdfUrl: string }) {
-  const entries = useMemo(() => Object.entries(scores ?? {}), [scores]);
-  useEffect(() => { dlog("FinalScoringCard", { count: entries.length, sample: entries.slice(0,3) }); }, [entries]);
-  if (!entries.length) return null;
-  return (
-      <Card variant="outlined" sx={{ mb: 2 }}>
-        <CardHeader title="Scoring (final)" subheader="Ja/Nein-Ergebnis (aggregiert) mit Evidenz" />
-        <CardContent>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Score-Key</TableCell>
-                <TableCell>Ergebnis</TableCell>
-                <TableCell width={180}>Confidence</TableCell>
-                <TableCell>Votes T/F</TableCell>
-                <TableCell>Erklärung</TableCell>
-                <TableCell>Support (Top 3)</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {entries.map(([key, v]: any) => {
-                const support: TextPosition[] = Array.isArray(v?.support) ? v.support.slice(0, 3) : [];
-                return (
-                    <TableRow key={key}>
-                      <TableCell><Chip size="small" label={key} /></TableCell>
-                      <TableCell><Chip size="small" color={v?.result ? "success" : "error"} label={v?.result ? "Ja" : "Nein"} /></TableCell>
-                      <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
-                      <TableCell>{(v?.votes_true ?? 0)} / {(v?.votes_false ?? 0)}</TableCell>
-                      <TableCell>{v?.explanation ?? "—"}</TableCell>
-                      <TableCell>
-                        <Stack direction="row" gap={0.5} flexWrap="wrap">
-                          {support.length ? support.map((s, i) => (
-                              <EvidenceChip key={i} page={s.page!} pdfUrl={pdfUrl} bbox={s.bbox} quote={s.quote ?? undefined} />
-                          )) : "—"}
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-  );
-}
-
-function FinalDecisionCard({ decisions, pdfUrl }: { decisions?: Record<string, any>, pdfUrl: string }) {
-  const entries = useMemo(() => Object.entries(decisions ?? {}), [decisions]);
-  useEffect(() => { dlog("FinalDecisionCard", { count: entries.length, sample: entries.slice(0,3) }); }, [entries]);
-  if (!entries.length) return null;
-  return (
-      <Card variant="outlined" sx={{ mb: 2 }}>
-        <CardHeader title="Decision (final)" subheader="Routen-/Ja/Nein-Entscheidung (aggregiert) mit Evidenz" />
-        <CardContent>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Decision-Key</TableCell>
-                <TableCell>Route</TableCell>
-                <TableCell>Answer</TableCell>
-                <TableCell width={180}>Confidence</TableCell>
-                <TableCell>Votes Y/N</TableCell>
-                <TableCell>Erklärung</TableCell>
-                <TableCell>Support (Top 3)</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {entries.map(([key, v]: any) => {
-                const support: TextPosition[] = Array.isArray(v?.support) ? v.support.slice(0, 3) : [];
-                return (
-                    <TableRow key={key}>
-                      <TableCell><Chip size="small" label={key} /></TableCell>
-                      <TableCell><Chip size="small" label={v?.route} /></TableCell>
-                      <TableCell>{typeof v?.answer === "boolean" ? (<Chip size="small" color={v.answer ? "success" : "error"} label={v.answer ? "Ja" : "Nein"} />) : "—"}</TableCell>
-                      <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
-                      <TableCell>{typeof v?.votes_yes === "number" || typeof v?.votes_no === "number" ? `${v?.votes_yes ?? 0} / ${v?.votes_no ?? 0}` : "—"}</TableCell>
-                      <TableCell>{v?.explanation ?? "—"}</TableCell>
-                      <TableCell>
-                        <Stack direction="row" gap={0.5} flexWrap="wrap">
-                          {support.length ? support.map((s, i) => (
-                              <EvidenceChip key={i} page={s.page!} pdfUrl={pdfUrl} bbox={s.bbox} quote={s.quote ?? undefined} />
-                          )) : "—"}
-                        </Stack>
-                      </TableCell>
-                    </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-  );
-}
-
-/* ===== Drilldown ===== */
-function PromptDrilldown({ data, pdfUrl }: { data: any, pdfUrl: string }) {
-  const extraction = (data?.extraction as any[]) ?? [];
-  const scoring = (data?.scoring as any[]) ?? [];
-  const decision = (data?.decision as any[]) ?? [];
-
-  const extractByPid = useMemo(() => groupByPid(extraction), [extraction]);
-  const scoringByPid = useMemo(() => groupByPid(scoring), [scoring]);
-  const decisionByPid = useMemo(() => groupByPid(decision), [decision]);
-
-  useEffect(() => {
-    dlog("Drilldown: groups", {
-      extraction_pids: Object.keys(extractByPid),
-      scoring_pids: Object.keys(scoringByPid),
-      decision_pids: Object.keys(decisionByPid),
-    });
-    const ex = ([] as any[]).concat(...Object.values(extractByPid));
-    const sc = ([] as any[]).concat(...Object.values(scoringByPid));
-    const dc = ([] as any[]).concat(...Object.values(decisionByPid));
-    dlog("Drilldown: weight presence", {
-      extraction: countWeightPresence(ex),
-      scoring: countWeightPresence(sc),
-      decision: countWeightPresence(dc),
-    });
-    dlog("Drilldown: sample extraction", summarizeArray(ex, r => ({
-      pid: r?.prompt_id, value: r?.value, weight: r?.weight, page: r?.source?.page, err: r?.error
-    })));
-    dlog("Drilldown: sample scoring", summarizeArray(sc, r => ({
-      pid: r?.prompt_id, result: r?.result, weight: r?.weight, page: r?.source?.page, err: r?.error
-    })));
-    dlog("Drilldown: sample decision", summarizeArray(dc, r => ({
-      pid: r?.prompt_id, route: r?.route, bool: r?.boolean, weight: r?.weight, page: r?.source?.page, err: r?.error
-    })));
-  }, [extractByPid, scoringByPid, decisionByPid]);
-
-  const [q, setQ] = useState("");
-  const [onlyErr, setOnlyErr] = useState(false);
-  const qlc = q.trim().toLowerCase();
-  const match = (txt?: string | null) => (txt ?? "").toLowerCase().includes(qlc);
-  const filterPR = <T extends PromptResult>(arr: T[]) => arr.filter((r: any) => {
-    if (onlyErr && !r?.error) return false;
-    if (!qlc) return true;
-    const parts: string[] = [];
-    if (r.prompt_text) parts.push(r.prompt_text);
-    if (typeof r.value !== "object") parts.push(String(r.value ?? ""));
-    if (r.route) parts.push(String(r.route));
-    if (r.explanation) parts.push(String(r.explanation));
-    if (r.source?.quote) parts.push(String(r.source.quote));
-    return parts.some(p => match(p));
+function StepsWithAttempts({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
+  const steps = (detail.steps ?? []).slice().sort((a, b) => {
+    const ao = (a.order_index ?? 0) - (b.order_index ?? 0);
+    return ao !== 0 ? ao : (a.id - b.id);
   });
+
+  if (!steps.length) {
+    return (
+        <Alert severity="info">
+          Keine Step-Instanzen vorhanden. Läuft der Run noch oder liefert der
+          Backend-Detail-Endpoint die Steps nicht?
+        </Alert>
+    );
+  }
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Evidenz pro Prompt" subheader="Batch-Ergebnisse (inkl. Seite/Zitat/BBox, Batch-Confidence falls vorhanden)" />
+        <CardHeader title="Steps & Attempts" subheader="Normalisierung je Step (Top-1 → final)"/>
         <CardContent>
-          <Stack direction={{ xs: "column", sm: "row" }} gap={1} sx={{ mb: 2 }}>
-            <TextField size="small" label="Suche in Evidenzen" value={q} onChange={e => setQ(e.target.value)} sx={{ width: { xs: "100%", sm: 360 } }} />
-            <FormControlLabel control={<Switch checked={onlyErr} onChange={e => setOnlyErr(e.target.checked)} />} label="Nur Fehler" />
-          </Stack>
+          {steps.map((s, idx) => (
+              <Accordion key={s.id} defaultExpanded={idx === 0}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon/>}>
+                  <Stack direction="row" alignItems="center" gap={1} sx={{width: "100%"}}>
+                    <Typography variant="body2" sx={{minWidth: 28, color: "text.secondary"}}>
+                      {(s.order_index ?? idx) + 1}.
+                    </Typography>
+                    <StepTypeIcon t={s.step_type}/>
+                    <Typography sx={{flex: 1}}>
+                      {labelForStep(s)}
+                    </Typography>
+                    <StatusChip status={s.status}/>
+                  </Stack>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Stack spacing={1} sx={{mb: 1}}>
+                    <Row label="Final Key"><Chip size="small" label={s.final_key ?? "—"}/></Row>
+                    <Row label="Final Value"><Typography
+                        variant="body2">{formatValue(s.final_value)}</Typography></Row>
+                    <Row label="Confidence"><ConfidenceBar value={s.final_confidence}/></Row>
+                    <Row label="Zeit">
+                      <Typography
+                          variant="body2">{s.started_at ?? "—"} → {s.finished_at ?? "—"}</Typography>
+                    </Row>
+                  </Stack>
 
-          {/* Extraction */}
-          {Object.entries(extractByPid).map(([pid, items]) => {
-            const list = filterPR(items as PromptResult[]);
-            if (!list.length) return null;
-            return (
-                <Accordion key={`ex-${pid}`} defaultExpanded>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography sx={{ flex: 1 }}>Extraction #{pid} – {(items as any)[0]?.prompt_text ?? "Prompt"}</Typography>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Seite</TableCell>
-                          <TableCell>Zitat</TableCell>
-                          <TableCell>Wert</TableCell>
-                          <TableCell width={180}>Batch-Confidence</TableCell>
-                          <TableCell>JSON-Key</TableCell>
-                          <TableCell>BBox</TableCell>
-                          <TableCell>Fehler</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {list.map((r, i) => (
-                            <TableRow key={i} hover>
-                              <TableCell>{r.source?.page ? <EvidenceChip page={r.source.page!} pdfUrl={pdfUrl} bbox={r.source?.bbox ?? undefined} quote={r.source?.quote ?? undefined} /> : "—"}</TableCell>
-                              <TableCell>{r.source?.quote ? <Tooltip title={r.source.quote}><Typography noWrap sx={{ maxWidth: 360 }}>{r.source.quote}</Typography></Tooltip> : "—"}</TableCell>
-                              <TableCell>{formatValue(r.value)}</TableCell>
-                              <TableCell>{typeof r.weight === "number" ? <ConfidenceBar value={r.weight} /> : <Typography variant="body2">—</Typography>}</TableCell>
-                              <TableCell>{r.json_key ?? "—"}</TableCell>
-                              <TableCell>{Array.isArray(r.source?.bbox) ? <Tooltip title={String(r.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip> : "—"}</TableCell>
-                              <TableCell>{r.error ?? ""}</TableCell>
+                  {/* Attempts */}
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell width={56}>#</TableCell>
+                        <TableCell>Candidate Key</TableCell>
+                        <TableCell>Value</TableCell>
+                        <TableCell width={180}>Confidence</TableCell>
+                        <TableCell width={120}>Quelle</TableCell>
+                        <TableCell width={100}>Evidenz</TableCell>
+                        <TableCell width={90}>Final</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {(s as any).attempts?.map((a: any, i: number) => {
+                        const page =
+                            a?.candidate_value?.page ??
+                            a?.candidate_value?.source?.page ??
+                            a?.candidate_value?.page_no;
+                        const bool = asBool(a?.candidate_value);
+                        return (
+                            <TableRow key={a.id ?? i} hover>
+                              <TableCell>{a.attempt_no ?? i + 1}</TableCell>
+                              <TableCell>{a.candidate_key ?? "—"}</TableCell>
+                              <TableCell>
+                                <Typography variant="body2">
+                                  {typeof bool === "boolean" ? (bool ? "Ja" : "Nein") : formatValue(a.candidate_value)}
+                                </Typography>
+                              </TableCell>
+                              <TableCell><ConfidenceBar value={a.candidate_confidence}/></TableCell>
+                              <TableCell>{a.source ?? "—"}</TableCell>
+                              <TableCell><EvidenceChip page={page} pdfUrl={pdfUrl}/></TableCell>
+                              <TableCell>
+                                {a.is_final ? <Chip size="small" color="success" label="final"/> :
+                                    <Chip size="small" variant="outlined" label="—"/>}
+                              </TableCell>
                             </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </AccordionDetails>
-                </Accordion>
-            );
-          })}
-          {/* Scoring */}
-          {Object.entries(scoringByPid).map(([pid, items]) => {
-            const list = filterPR(items as PromptResult[]);
-            if (!list.length) return null;
-            return (
-                <Accordion key={`sc-${pid}`}>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography sx={{ flex: 1 }}>Scoring #{pid} – {(items as any)[0]?.prompt_text ?? "Prompt"}</Typography>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Seite</TableCell>
-                          <TableCell>Ergebnis</TableCell>
-                          <TableCell>Erklärung</TableCell>
-                          <TableCell width={180}>Batch-Confidence</TableCell>
-                          <TableCell>BBox</TableCell>
-                          <TableCell>Fehler</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {list.map((s: any, i: number) => (
-                            <TableRow key={i} hover>
-                              <TableCell>{s.source?.page ? <EvidenceChip page={s.source.page!} pdfUrl={pdfUrl} bbox={s.source?.bbox ?? undefined} quote={s.source?.quote ?? undefined} /> : "—"}</TableCell>
-                              <TableCell>{s.result ? "Ja" : "Nein"}</TableCell>
-                              <TableCell>{s.explanation || "—"}</TableCell>
-                              <TableCell>{typeof s.weight === "number" ? <ConfidenceBar value={s.weight} /> : <Typography variant="body2">—</Typography>}</TableCell>
-                              <TableCell>{Array.isArray(s.source?.bbox) ? <Tooltip title={String(s.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip> : "—"}</TableCell>
-                              <TableCell>{(s as any).error ?? ""}</TableCell>
-                            </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </AccordionDetails>
-                </Accordion>
-            );
-          })}
-          {/* Decision */}
-          {Object.entries(decisionByPid).map(([pid, items]) => {
-            const list = filterPR(items as PromptResult[]);
-            if (!list.length) return null;
-            return (
-                <Accordion key={`dc-${pid}`}>
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography sx={{ flex: 1 }}>Decision #{pid} – {(items as any)[0]?.prompt_text ?? "Prompt"}</Typography>
-                  </AccordionSummary>
-                  <AccordionDetails>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell>Seite</TableCell>
-                          <TableCell>Route</TableCell>
-                          <TableCell>Answer</TableCell>
-                          <TableCell>Erklärung</TableCell>
-                          <TableCell width={180}>Batch-Confidence</TableCell>
-                          <TableCell>BBox</TableCell>
-                          <TableCell>Fehler</TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {list.map((r, i) => (
-                            <TableRow key={i} hover>
-                              <TableCell>{r.source?.page ? <EvidenceChip page={r.source.page!} pdfUrl={pdfUrl} bbox={r.source?.bbox ?? undefined} quote={r.source?.quote ?? undefined} /> : "—"}</TableCell>
-                              <TableCell>{r.route ?? "—"}</TableCell>
-                              <TableCell>{typeof r.boolean === "boolean" ? (r.boolean ? "Ja" : "Nein") : "—"}</TableCell>
-                              <TableCell>{r.explanation ?? (typeof r.value === "object" ? (r as any).value?.explanation : "—")}</TableCell>
-                              <TableCell>{typeof r.weight === "number" ? <ConfidenceBar value={r.weight} /> : <Typography variant="body2">—</Typography>}</TableCell>
-                              <TableCell>{Array.isArray(r.source?.bbox) ? <Tooltip title={String(r.source?.bbox)}><Chip size="small" label="BBox" variant="outlined" /></Tooltip> : "—"}</TableCell>
-                              <TableCell>{r.error ?? ""}</TableCell>
-                            </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </AccordionDetails>
-                </Accordion>
-            );
-          })}
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </AccordionDetails>
+              </Accordion>
+          ))}
         </CardContent>
       </Card>
   );
 }
 
-/* ===== Small helpers ===== */
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+/** --------- small UI bits --------- */
+
+function Row({label, children}: { label: string; children: React.ReactNode }) {
   return (
       <Stack direction="row" spacing={1} alignItems="center">
-        <Typography variant="body2" sx={{ minWidth: 130, color: "text.secondary" }}>{label}</Typography>
-        <Box sx={{ flex: 1 }}>{children}</Box>
+        <Typography variant="body2"
+                    sx={{minWidth: 130, color: "text.secondary"}}>{label}</Typography>
+        <Box sx={{flex: 1}}>{children}</Box>
       </Stack>
   );
 }
 
-function EvidenceChip({ page, pdfUrl, bbox, quote }: { page: number; pdfUrl: string; bbox?: number[] | null; quote?: string }) {
-  const title = `${`Seite ${page}`}${Array.isArray(bbox) ? ` • BBox: ${bbox.join(",")}` : ""}${quote ? `\n${quote}` : ""}`;
-  return (
-      <Tooltip title={title}>
-        <Chip
-            size="small"
-            label={`Seite ${page}`}
-            onClick={() => {
-              const url = pdfUrl ? `${pdfUrl}#page=${page}` : undefined;
-              dlog("Jump to PDF", { url, page, bbox, hasPdfUrl: !!pdfUrl });
-              if (url) window.open(url, "_blank", "noopener,noreferrer");
-            }}
-            variant="outlined"
-        />
-      </Tooltip>
-  );
-}
-
-function ConfidenceBar({ value }: { value?: number | null }) {
-  if (value == null || Number.isNaN(value)) return <Typography variant="body2">—</Typography>;
-  const v = clamp01(value);
-  return (
-      <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 160 }}>
-        <Box sx={{ flex: 1 }}>
-          <LinearProgress variant="determinate" value={v * 100} />
-        </Box>
-        <Typography variant="caption" sx={{ width: 36, textAlign: "right" }}>
-          {(v * 100).toFixed(0)}%
-        </Typography>
-      </Stack>
-  );
-}
-
-function groupByPid<T extends { prompt_id: number }>(arr: T[]): Record<number, T[]> {
-  return (arr ?? []).reduce<Record<number, T[]>>((acc, cur) => {
-    (acc[cur.prompt_id] ||= []).push(cur);
-    return acc;
-  }, {});
-}
-
-function formatValue(val: any) {
-  if (val == null) return "—";
-  if (typeof val === "number") return Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(val);
-  if (typeof val === "object") return JSON.stringify(val);
-  return String(val);
-}
-
-/* ===== Deep diagnostics ===== */
-function printRunDiagnostics(run: any, source: "localStorage" | "api") {
-  dlog(`RUN (${source}) top-level`, {
-    keys: keysOf(run),
-    pdf_id: run?.pdf_id,
-    pipeline_id: run?.pipeline_id,
-    overall_score: run?.overall_score,
-  });
-
-  const exKeys = keysOf(run?.extracted);
-  const scKeys = keysOf(run?.scores);
-  const dcKeys = keysOf(run?.decisions);
-  dlog("Finals present (exact keys)", { extracted_keys: exKeys, scores_keys: scKeys, decisions_keys: dcKeys });
-
-  const exArr = run?.extraction ?? [];
-  const scArr = run?.scoring ?? [];
-  const dcArr = run?.decision ?? [];
-
-  dlog("Arrays summary", {
-    extraction: summarizeArray(exArr, (r: any) => ({ pid: r?.prompt_id, hasValue: r?.value != null, weight: r?.weight, page: r?.source?.page, err: r?.error })),
-    scoring: summarizeArray(scArr, (r: any) => ({ pid: r?.prompt_id, result: r?.result, weight: r?.weight, page: r?.source?.page, err: r?.error })),
-    decision: summarizeArray(dcArr, (r: any) => ({ pid: r?.prompt_id, route: r?.route, bool: r?.boolean, weight: r?.weight, page: r?.source?.page, err: r?.error })),
-  });
-
-  dlog("Weight presence", {
-    extraction: countWeightPresence(exArr),
-    scoring: countWeightPresence(scArr),
-    decision: countWeightPresence(dcArr),
-  });
-
-  if (!exKeys.length && !scKeys.length && !dcKeys.length) {
-    dlog("WARN: Keine finalen Maps gefunden", {
-      tip: "DTO stammt wahrscheinlich vor der Konsolidierung ODER Feldnamen weichen ab (z. B. final_extracted/canonical_fields). Deep-Scan prüft verschachtelte Pfade.",
-    });
-  }
+function labelForStep(s: RunStep) {
+  const name = s.definition?.json_key || s.final_key || `${s.step_type}`;
+  return `${name} · ${s.step_type}`;
 }
