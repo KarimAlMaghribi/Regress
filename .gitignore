@@ -1,8 +1,28 @@
+# Rust
 target
 **/*.rs.bk
+
+# Node: niemals in den Build-Kontext
+node_modules
 **/node_modules
+
+# Build-Artefakte (Vite/CRA/sonstiges)
 frontend/dist
+**/dist
+**/build
+.cache
+
+# Logs
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# IDE/OS
+.vscode
+.idea
+.DS_Store
+
+# Git/Kram
 .git
 .gitlab
 .buildx-cache
-.DS_Store

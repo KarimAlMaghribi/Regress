@@ -1,11 +1,13 @@
-# syntax=docker/dockerfile:1.7-labs
+# syntax=docker/dockerfile:1.7
 FROM node:20 AS builder
 WORKDIR /app
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm corepack enable && npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --fund=false
 
-COPY frontend/ .
+COPY frontend/ ./
+
 ARG VITE_INGEST_URL=http://localhost:8081
 ARG VITE_HISTORY_WS=ws://localhost:8090
 ARG VITE_API_URL=http://localhost:8084
@@ -16,6 +18,7 @@ ENV VITE_INGEST_URL=$VITE_INGEST_URL \
     VITE_API_URL=$VITE_API_URL \
     VITE_HISTORY_URL=$VITE_HISTORY_URL \
     VITE_UPLOAD_API_URL=$VITE_UPLOAD_API_URL
+
 RUN npm run build
 
 FROM nginx:alpine AS runtime
