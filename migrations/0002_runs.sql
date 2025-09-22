@@ -3,10 +3,9 @@ DROP TABLE IF EXISTS pipeline_step_attempts CASCADE;
 DROP TABLE IF EXISTS pipeline_run_steps CASCADE;
 DROP TABLE IF EXISTS pipeline_runs CASCADE;
 
--- Pipeline-Läufe
 CREATE TABLE pipeline_runs (
                                id               UUID PRIMARY KEY,
-                               pipeline_id      INT   NOT NULL REFERENCES pipelines(id),  -- <— INT passend zu pipelines.id
+                               pipeline_id      UUID   NOT NULL REFERENCES pipelines(id),
                                pdf_id           BIGINT,
                                status           TEXT   NOT NULL CHECK (status IN ('queued','running','completed','failed','timeout','canceled')),
                                overall_score    NUMERIC(7,3),
@@ -19,7 +18,6 @@ CREATE TABLE pipeline_runs (
                                created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Step-Instanz im Run
 CREATE TABLE pipeline_run_steps (
                                     id                 BIGSERIAL PRIMARY KEY,
                                     run_id             UUID NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
@@ -38,7 +36,6 @@ CREATE TABLE pipeline_run_steps (
                                     UNIQUE (run_id, pipeline_step_id)
 );
 
--- Kandidaten/Versuche
 CREATE TABLE pipeline_step_attempts (
                                         id                    BIGSERIAL PRIMARY KEY,
                                         run_step_id           BIGINT NOT NULL REFERENCES pipeline_run_steps(id) ON DELETE CASCADE,
@@ -53,7 +50,6 @@ CREATE TABLE pipeline_step_attempts (
                                         is_final              BOOLEAN NOT NULL DEFAULT FALSE
 );
 
--- History/Events
 CREATE TABLE analysis_history (
                                   id          BIGSERIAL PRIMARY KEY,
                                   run_id      UUID NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
