@@ -10,7 +10,7 @@ pub mod prompt {
         pub id: i32,
         pub text: String,
         pub prompt_type: String,
-        pub weight: f64,
+        pub weight: Option<f64>,
         pub json_key: Option<String>,
         pub favorite: bool,
     }
@@ -57,12 +57,11 @@ pub mod group_prompt {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-// Re-export commonly used types for convenience
+pub use prompt::{ActiveModel, Entity, Model};
 pub use group::{ActiveModel as GroupActiveModel, Entity as GroupEntity, Model as GroupModel};
 pub use group_prompt::{
     ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity, Model as GroupPromptModel,
 };
-pub use prompt::{ActiveModel, Entity, Model};
 
 pub mod pipeline {
     use super::*;
