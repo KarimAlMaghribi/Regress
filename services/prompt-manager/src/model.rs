@@ -1,5 +1,7 @@
 use sea_orm::entity::prelude::*;
 
+/* ---------- PROMPTS ---------- */
+
 pub mod prompt {
     use super::*;
 
@@ -10,7 +12,7 @@ pub mod prompt {
         pub id: i32,
         pub text: String,
         pub prompt_type: String,
-        // DB: NUMERIC -> SeaORM: Decimal
+        // DB: NUMERIC(6,3) -> SeaORM: Decimal; optional (nur Scoring/Decision haben Gewicht)
         pub weight: Option<Decimal>,
         pub json_key: Option<String>,
         pub favorite: bool,
@@ -21,6 +23,8 @@ pub mod prompt {
 
     impl ActiveModelBehavior for ActiveModel {}
 }
+
+/* ---------- PROMPT GROUPS ---------- */
 
 pub mod group {
     use super::*;
@@ -58,12 +62,7 @@ pub mod group_prompt {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-// Re-exports (optional – entferne, wenn Warnungen stören)
-pub use prompt::{ActiveModel, Entity, Model};
-pub use group::{ActiveModel as GroupActiveModel, Entity as GroupEntity, Model as GroupModel};
-pub use group_prompt::{
-    ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity, Model as GroupPromptModel,
-};
+/* ---------- PIPELINES ---------- */
 
 pub mod pipeline {
     use super::*;
@@ -72,9 +71,9 @@ pub mod pipeline {
     #[sea_orm(table_name = "pipelines")]
     pub struct Model {
         #[sea_orm(primary_key)]
-        pub id: i32,
+        pub id: Uuid,          // UUID – passt zu pipeline-api und DB
         pub name: String,
-        pub data: Json,
+        pub config_json: Json, // statt "data"
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -83,4 +82,11 @@ pub mod pipeline {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
+/* ---------- Re-exports ---------- */
+
+pub use prompt::{ActiveModel, Entity, Model};
+pub use group::{ActiveModel as GroupActiveModel, Entity as GroupEntity, Model as GroupModel};
+pub use group_prompt::{
+    ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity, Model as GroupPromptModel,
+};
 pub use pipeline::{ActiveModel as PipelineActiveModel, Entity as PipelineEntity, Model as PipelineModel};

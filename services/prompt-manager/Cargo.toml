@@ -10,9 +10,24 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-sea-orm = { version = "0.12", features = ["sqlx-postgres", "runtime-tokio-native-tls", "mock"] }
-shared = { path = "../../shared" }
 tower-http = { version = "0.4", features = ["cors"] }
 tower = "0.4"
-strum = { workspace = true }
-strum_macros = { workspace = true }
+strum.workspace = true
+strum_macros.workspace = true
+shared = { path = "../../shared" }
+
+[dependencies.sea-orm]
+version = "0.12"
+features = [
+    "sqlx-postgres",
+    "runtime-tokio-native-tls",
+    "macros",
+    "with-uuid",
+    "with-json",
+    "with-rust_decimal",
+    "mock",
+]
+
+[dependencies.uuid]
+version = "1.17.0"
+features = ["v4", "serde"]

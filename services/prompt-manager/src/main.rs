@@ -17,6 +17,7 @@ use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tracing::{error, info};
 use tracing_subscriber::{fmt, EnvFilter};
+use uuid::Uuid;
 
 mod model;
 use model::{
@@ -81,9 +82,9 @@ struct GroupInput {
 
 #[derive(Serialize)]
 struct PipelineData {
-    id: i32,
+    id: Uuid,
     name: String,
-    data: serde_json::Value, // bleibt "data" in der API; falls DB config_json nutzt, bitte Model anpassen
+    data: serde_json::Value, // API bleibt "data"
 }
 
 #[derive(Deserialize)]
@@ -398,7 +399,9 @@ async fn list_pipelines(
 ) -> Result<Json<Vec<PipelineData>>, (StatusCode, Json<ErrorResponse>)> {
     let items = PipelineEntity::find().all(&*db).await.map_err(int_err)?;
     Ok(Json(items.into_iter().map(|p| PipelineData {
-        id: p.id, name: p.name, data: p.data
+        id: p.id,
+        name: p.name,
+        data: p.config_json, // wichtig: DB-Feld heißt config_json
     }).collect()))
 }
 
@@ -408,13 +411,13 @@ async fn create_pipeline(
 ) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
     let mut model: PipelineActiveModel = Default::default();
     model.name = Set(input.name);
-    model.data = Set(input.data);
+    model.config_json = Set(input.data);
     let res = model.insert(&*db).await.map_err(int_err)?;
-    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.data }))
+    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.config_json }))
 }
 
 async fn update_pipeline(
-    Path(id): Path<i32>,
+    Path(id): Path<Uuid>,
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PipelineInput>,
 ) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
@@ -422,14 +425,14 @@ async fn update_pipeline(
         return Err(not_found());
     };
     model.name = input.name;
-    model.data = input.data;
+    model.config_json = input.data;
     let active: PipelineActiveModel = model.into();
     let res = active.update(&*db).await.map_err(int_err)?;
-    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.data }))
+    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.config_json }))
 }
 
 async fn delete_pipeline(
-    Path(id): Path<i32>,
+    Path(id): Path<Uuid>,
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
     let Some(model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
@@ -458,7 +461,7 @@ fn not_found() -> (StatusCode, Json<ErrorResponse>) {
 async fn ensure_prompt_schema(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
     let be = db.get_database_backend();
 
-    // prompts (NUMERIC weight, Constraint nur wenn Tabelle neu entsteht)
+    // prompts (NUMERIC weight; Constraint greift nur bei Neuanlage)
     db.execute(Statement::from_string(be, r#"
         CREATE TABLE IF NOT EXISTS prompts (
           id           SERIAL PRIMARY KEY,
@@ -516,7 +519,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
 
-    // 👇 Fix: fehlende Tabellen idempotent anlegen
+    // idempotent: Kernobjekte für Prompt-Manager sicherstellen
     ensure_prompt_schema(&db).await?;
 
     let app = Router::new()
