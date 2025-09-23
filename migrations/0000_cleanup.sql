@@ -15,7 +15,7 @@ WHERE schemaname = 'public'
                     'pipeline_steps','pipelines',
                     'group_prompts','prompt_groups','prompts',
     -- Dateien/Texte
-                    'pdf_texts','pdf_files'
+                    'pdf_texts','pdf_files', 'pdfs', 'pdf_sources', 'merged_pdfs'
     )
     LOOP
     EXECUTE format('DROP TABLE IF EXISTS %I CASCADE', r.tablename);
