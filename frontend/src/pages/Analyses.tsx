@@ -135,10 +135,33 @@ async function fetchConsolidatedRun(normalized: any, entry: Entry): Promise<any 
 
 async function openDetailsInNewTab(entry: Entry) {
   const key = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
-  const normalized = normalizeRunShape(entry.result) ?? null;
+  const normalized = normalizeRunShape(entry?.result) ?? null;
 
-  // initial speichern (damit die Seite sofort rendert)
-  let payload = { run: normalized, pdfUrl: entry.pdfUrl ?? "" };
+  const toNum = (v: any): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+
+  // pdfId aus Entry/Result/Normalized ableiten
+  let pdfId: number | undefined = (() => {
+    const candidates = [
+      entry?.pdfId,
+      normalized?.pdf_id,
+      normalized?.pdfId,
+      entry?.result?.pdf_id,
+      entry?.result?.pdfId,
+    ];
+    for (const c of candidates) {
+      const n = toNum(c);
+      if (n != null) return n;
+    }
+    return undefined;
+  })();
+
+  // Initial-Payload (für Sofort-Render) inkl. pdfId falls vorhanden
+  let payload: any = { run: normalized, pdfUrl: entry?.pdfUrl ?? "" };
+  if (pdfId != null) payload.pdfId = pdfId;
+
   try {
     localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
   } catch (e) {
@@ -147,36 +170,60 @@ async function openDetailsInNewTab(entry: Entry) {
 
   // 1) Versuche run_id zu bekommen (bevorzugt)
   let runId: string | undefined;
-  try { runId = await resolveRunIdIfMissing(normalized, entry); } catch {}
+  try {
+    runId = await resolveRunIdIfMissing(normalized, entry);
+  } catch {
+    /* ignore */
+  }
 
-  // 2) Falls keine run_id & keine Finals: versuche direkt konsolidiertes DTO zu ziehen und in LS zu ersetzen
-  const hasFinals = !!(normalized && typeof normalized === 'object'
-      && (Object.keys(normalized.extracted ?? {}).length
-          + Object.keys(normalized.scores ?? {}).length
-          + Object.keys(normalized.decisions ?? {}).length > 0));
+  // 2) Wenn keine run_id & keine Finals → konsolidiertes DTO ziehen und Payload ersetzen
+  const hasFinals =
+      !!normalized &&
+      typeof normalized === "object" &&
+      ((normalized.extracted && Object.keys(normalized.extracted).length) ||
+          (normalized.scores && Object.keys(normalized.scores).length) ||
+          (normalized.decisions && Object.keys(normalized.decisions).length));
 
   if (!runId && !hasFinals) {
     try {
       const finalRun = await fetchConsolidatedRun(normalized, entry);
-      if (finalRun && (Object.keys(finalRun.extracted ?? {}).length > 0
-          || Object.keys(finalRun.scores ?? {}).length > 0
-          || Object.keys(finalRun.decisions ?? {}).length > 0)) {
-        payload = { run: finalRun, pdfUrl: entry.pdfUrl ?? "" };
-        localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
-        // falls die API eine id/run_id liefert, nimm sie für Query-Param
-        runId = finalRun.run_id ?? finalRun.id ?? runId;
+      if (
+          finalRun &&
+          ((finalRun.extracted && Object.keys(finalRun.extracted).length) ||
+              (finalRun.scores && Object.keys(finalRun.scores).length) ||
+              (finalRun.decisions && Object.keys(finalRun.decisions).length))
+      ) {
+        // pdfId ggf. aus finalRun aktualisieren
+        const candidate = toNum(finalRun?.pdf_id ?? finalRun?.pdfId);
+        if (candidate != null) pdfId = candidate;
+
+        payload = { run: finalRun, pdfUrl: entry?.pdfUrl ?? "" };
+        if (pdfId != null) payload.pdfId = pdfId;
+
+        try {
+          localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
+        } catch (e) {
+          console.warn("Konnte localStorage nicht schreiben (finalRun):", e);
+        }
+
+        // falls API eine id/run_id liefert, an die URL hängen
+        runId = finalRun?.run_id ?? finalRun?.id ?? runId;
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
-  // NEU: immer pdf_id (und optional pdf_url) an die URL hängen; run_id nur wenn vorhanden
+  // Query-Params bauen (pdf_id nur wenn valide)
   const qp = new URLSearchParams();
-  qp.set("pdf_id", String(entry.pdfId));
-  if (entry.pdfUrl) qp.set("pdf_url", entry.pdfUrl);
+  if (pdfId != null) qp.set("pdf_id", String(pdfId));
+  if (entry?.pdfUrl) qp.set("pdf_url", entry.pdfUrl);
   if (runId) qp.set("run_id", runId);
 
-  window.open(`/run-view/${key}?` + qp.toString(), "_blank", "noopener,noreferrer");
+  const url = `/run-view/${key}` + (qp.toString() ? `?${qp.toString()}` : "");
+  window.open(url, "_blank", "noopener,noreferrer");
 }
+
 
 
 /* -------- Page Component -------- */

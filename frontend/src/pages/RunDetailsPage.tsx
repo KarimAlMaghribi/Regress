@@ -114,11 +114,29 @@ export default function RunDetailsPage() {
   const params = useParams<{ id?: string; key?: string }>();
   const [sp] = useSearchParams();
 
-  const runId = sp.get("run_id") || sp.get("id") || params.id || params.key || undefined;
+  const key = params.key || params.id || undefined;
+  const runId = sp.get("run_id") || sp.get("id") || undefined;
   const pdfUrl = sp.get("pdf") || sp.get("pdf_url") || undefined;
-  const pdfId = sp.get("pdf_id") ? Number(sp.get("pdf_id")) : undefined;
 
-  const { data, loading, error, scoreSum } = useRunDetails(runId, { pdfId });
+  const pdfId = (() => {
+    const qp = sp.get("pdf_id");
+    if (qp && /^\d+$/.test(qp)) return Number(qp);
+    try {
+      const LS_PREFIX = "run-view:";
+      const storageKey = key ? `${LS_PREFIX}${key}` : undefined;
+      if (!storageKey) return undefined;
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return undefined;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.pdfId === "number") return parsed.pdfId;
+      if (typeof parsed?.run?.pdf_id === "number") return parsed.run.pdf_id;
+    } catch { /* ignore */ }
+    return undefined;
+  })();
+
+  const { data, loading, error, scoreSum } =
+      useRunDetails(runId, { pdfId, storageKey: key ? `run-view:${key}` : undefined });
+
 
   if (loading) {
     return (

@@ -83,10 +83,6 @@ function toNumber(x: any, fallback: number = 0): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-function isNonEmptyObject(o: any): o is Record<string, any> {
-  return o && typeof o === "object" && Object.keys(o).length > 0;
-}
-
 /** =========================
  *  Mappers
  *  ========================= */
@@ -180,7 +176,7 @@ async function fetchDetailViaFallback(runId: string): Promise<RunDetail> {
     const raw = await fetchJSON<any>(`${base}/analyses/${encodeURIComponent(runId)}`);
     const run = mapRunHeader(raw);
     return { run, steps: [] };
-  } catch (e) {
+  } catch {
     // continue
   }
 
@@ -192,14 +188,8 @@ async function fetchDetailViaFallback(runId: string): Promise<RunDetail> {
       const run = mapRunHeader(first);
       return { run, steps: [] };
     }
-  } catch (e) {
+  } catch {
     // continue
-  }
-
-  // If runId looks like a number, try results/{id} as last resort
-  if (/^\d+$/.test(runId)) {
-    const pdfId = Number(runId);
-    return fetchFromResults(pdfId);
   }
 
   const err: any = new Error("Run-Detail nicht gefunden");
@@ -211,24 +201,40 @@ async function fetchFromResults(pdfId: number): Promise<RunDetail> {
   const base = getHistoryBase();
   const raw = await fetchJSON<any>(`${base}/results/${encodeURIComponent(pdfId)}`);
   const run = mapRunHeader({ ...raw, pdf_id: raw?.pdf_id ?? pdfId });
-
-  // This endpoint is consolidated, no per-step details yet.
-  return { run, steps: [] };
+  return { run, steps: [] }; // results-Endpoint hat (vorerst) keine Steps
 }
 
 /** =========================
  *  Hook
  *  ========================= */
-export function useRunDetails(runId?: string, opts?: { pdfId?: number }) {
+export function useRunDetails(
+    runId?: string,
+    opts?: { pdfId?: number; storageKey?: string }
+) {
   const [data, setData] = useState<RunDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<Error | null>(null);
 
+  // pdfId aus opts oder notfalls aus localStorage lesen
+  function derivePdfId(): number | undefined {
+    if (typeof opts?.pdfId === "number" && Number.isFinite(opts.pdfId)) return opts.pdfId;
+    if (!opts?.storageKey) return undefined;
+    try {
+      const raw = localStorage.getItem(opts.storageKey);
+      if (!raw) return undefined;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed?.pdfId === "number") return parsed.pdfId;
+      if (typeof parsed?.run?.pdf_id === "number") return parsed.run.pdf_id;
+    } catch { /* ignore */ }
+    return undefined;
+  }
+
   useEffect(() => {
     let cancel = false;
 
-    // no identifiers → nothing to do
-    if (!runId && (opts?.pdfId == null)) {
+    // gar keine Identifikatoren → Fehler
+    const candidatePdfId = derivePdfId();
+    if (!runId && candidatePdfId == null) {
       setData(null);
       setErr(new Error("Es wurde weder run_id noch pdf_id übergeben."));
       return;
@@ -241,7 +247,7 @@ export function useRunDetails(runId?: string, opts?: { pdfId?: number }) {
       try {
         let detail: RunDetail | null = null;
 
-        // Prefer runId if present
+        // 1) Bevorzugt über runId (falls vorhanden)
         if (runId) {
           try {
             detail = await fetchDetailAggregated(runId);
@@ -249,14 +255,14 @@ export function useRunDetails(runId?: string, opts?: { pdfId?: number }) {
             try {
               detail = await fetchDetailViaFallback(runId);
             } catch {
-              // ignore; maybe we have pdfId
+              // weiter unten versuchen wir pdfId
             }
           }
         }
 
-        // If still nothing and pdfId exists → fallback to /results/{pdf_id}
-        if (!detail && opts?.pdfId != null) {
-          detail = await fetchFromResults(opts.pdfId);
+        // 2) Wenn noch nichts da: Fallback über /results/{pdf_id}
+        if (!detail && candidatePdfId != null) {
+          detail = await fetchFromResults(candidatePdfId);
         }
 
         if (!detail) {
@@ -274,7 +280,7 @@ export function useRunDetails(runId?: string, opts?: { pdfId?: number }) {
     })();
 
     return () => { cancel = true; };
-  }, [runId, opts?.pdfId]);
+  }, [runId, opts?.pdfId, opts?.storageKey]);
 
   const scoreSum = useMemo(() => {
     const fs = data?.run.final_scores;
