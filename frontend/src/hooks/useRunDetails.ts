@@ -232,7 +232,20 @@ export function useRunDetails(
   useEffect(() => {
     let cancel = false;
 
-    // gar keine Identifikatoren → Fehler
+    // pdfId robust herleiten (aus opts oder optional aus storageKey)
+    const derivePdfId = (): number | undefined => {
+      if (typeof opts?.pdfId === "number" && Number.isFinite(opts.pdfId)) return opts.pdfId;
+      if (!opts?.storageKey) return undefined;
+      try {
+        const raw = localStorage.getItem(opts.storageKey);
+        if (!raw) return undefined;
+        const parsed = JSON.parse(raw);
+        if (typeof parsed?.pdfId === "number") return parsed.pdfId;
+        if (typeof parsed?.run?.pdf_id === "number") return parsed.run.pdf_id;
+      } catch {}
+      return undefined;
+    };
+
     const candidatePdfId = derivePdfId();
     if (!runId && candidatePdfId == null) {
       setData(null);
@@ -247,22 +260,40 @@ export function useRunDetails(
       try {
         let detail: RunDetail | null = null;
 
-        // 1) Bevorzugt über runId (falls vorhanden)
-        if (runId) {
+        // 1) NEU: zuerst /results/{pdf_id}, wenn vorhanden
+        if (candidatePdfId != null) {
           try {
-            detail = await fetchDetailAggregated(runId);
+            detail = await fetchFromResults(candidatePdfId);
           } catch {
-            try {
-              detail = await fetchDetailViaFallback(runId);
-            } catch {
-              // weiter unten versuchen wir pdfId
-            }
+            // ignorieren → weiter mit runId-Fallbacks
           }
         }
 
-        // 2) Wenn noch nichts da: Fallback über /results/{pdf_id}
-        if (!detail && candidatePdfId != null) {
-          detail = await fetchFromResults(candidatePdfId);
+        // 2) Aggregiert: /analyses/{runId}/detail
+        if (!detail && runId) {
+          try {
+            detail = await fetchDetailAggregated(runId);
+          } catch {}
+        }
+
+        // 3) Fallbacks: /analyses/{runId} bzw. /analyses?run_id=
+        if (!detail && runId) {
+          try {
+            // Wenn deine bisherige Funktion zuerst /analyses/{id} und dann die Listensuche macht:
+            // Lass sie laufen, aber wenn die Listensuche einen pdf_id liefert, hole danach _bevorzugt_ /results/{pdf_id}
+            const fb = await fetchDetailViaFallback(runId); // könnte nur Header zurückgeben
+            const fbPdf = (fb?.run?.pdf_id as number | undefined) ?? candidatePdfId;
+            if (fbPdf != null) {
+              try {
+                detail = await fetchFromResults(fbPdf);
+              } catch {
+                // notfalls bei fb bleiben
+                detail = fb;
+              }
+            } else {
+              detail = fb;
+            }
+          } catch {}
         }
 
         if (!detail) {
