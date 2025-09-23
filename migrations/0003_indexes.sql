@@ -18,6 +18,17 @@ CREATE INDEX IF NOT EXISTS idx_prs_status
 CREATE INDEX IF NOT EXISTS idx_psa_runstep_conf
     ON pipeline_step_attempts(run_step_id, candidate_confidence DESC, id ASC);
 
+-- Runner-spezifische Lookups (aus deinem Code):
+CREATE INDEX IF NOT EXISTS idx_prs_run_final_type
+    ON pipeline_run_steps (run_id, is_final, prompt_type);
+CREATE INDEX IF NOT EXISTS idx_prs_run_final_key
+    ON pipeline_run_steps (run_id, final_key)
+    WHERE is_final = TRUE;
+
+-- Eindeutigkeit der Reihenfolge je Run
+CREATE UNIQUE INDEX IF NOT EXISTS uq_prs_run_seq
+    ON pipeline_run_steps(run_id, seq_no);
+
 -- History
 CREATE INDEX IF NOT EXISTS idx_hist_run_time
     ON analysis_history(run_id, event_time);
