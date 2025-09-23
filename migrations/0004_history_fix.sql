@@ -1,6 +1,6 @@
 SET search_path TO public;
 
--- 0) Sicherstellen, dass die für den History-Service genutzten Spalten existieren
+-- 0) Spalten für History-Service sicherstellen
 ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS pdf_id      INTEGER;
 ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS pipeline_id UUID;
 ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS state       JSONB;
@@ -11,11 +11,15 @@ ALTER TABLE analysis_history ALTER COLUMN status SET DEFAULT 'running';
 ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS score       DOUBLE PRECISION;
 ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS label       TEXT;
 
--- 1) Kernfix: run_id darf NULL sein (History-Service sendet es nicht)
+-- 1) run_id darf NULL sein
 ALTER TABLE analysis_history
     ALTER COLUMN run_id DROP NOT NULL;
 
--- 2) FKs idempotent anlegen
+-- 2) event_type darf NULL sein (Service setzt es bei Result-Zeilen nicht)
+ALTER TABLE analysis_history
+    ALTER COLUMN event_type DROP NOT NULL;
+
+-- 3) FKs (idempotent)
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -37,7 +41,7 @@ ALTER TABLE analysis_history
 END IF;
 END$$;
 
--- 3) Trigger: fehlende Felder automatisch füllen
+-- 4) Trigger: fehlende Felder automatisch füllen (inkl. event_type)
 CREATE OR REPLACE FUNCTION trg_fill_analysis_history()
 RETURNS trigger AS $$
 BEGIN
@@ -66,8 +70,20 @@ SELECT pipeline_id INTO NEW.pipeline_id FROM pipeline_runs WHERE id = NEW.run_id
 END IF;
 END IF;
 
+  -- event_type sinnvoll defaulten, falls nicht gesetzt
+  IF NEW.event_type IS NULL THEN
+    IF NEW.status IN ('completed','finished','finalized') THEN
+      NEW.event_type := 'FINALIZED';
+    ELSIF NEW.status = 'running' THEN
+      NEW.event_type := 'RUN_CREATED';
+    ELSIF NEW.status IN ('error','failed') THEN
+      NEW.event_type := 'ERROR';
+END IF;
+END IF;
+
 RETURN NEW;
-END$$ LANGUAGE plpgsql;
+END
+$$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
@@ -79,7 +95,7 @@ CREATE TRIGGER trg_analysis_history_fill
 END IF;
 END$$;
 
--- 4) Indexe fürs Trigger-Lookup & typische History-Queries
+-- 5) Indizes fürs Trigger-Lookup & typische History-Queries
 CREATE INDEX IF NOT EXISTS idx_runs_pdf_pipe_created
     ON pipeline_runs (pdf_id, pipeline_id, COALESCE(finished_at, created_at) DESC);
 

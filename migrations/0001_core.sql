@@ -90,7 +90,7 @@ CREATE TABLE IF NOT EXISTS pdf_texts (
 
 CREATE TABLE IF NOT EXISTS uploads (
                                        id          SERIAL PRIMARY KEY,
-                                       pdf_id      INTEGER,
-                                       pipeline_id UUID,
-                                       status      TEXT NOT NULL
-);
+                                       pdf_id      INTEGER REFERENCES merged_pdfs(id),
+    pipeline_id UUID    REFERENCES pipelines(id),
+    status      TEXT    NOT NULL
+    );

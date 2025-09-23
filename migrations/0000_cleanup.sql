@@ -17,7 +17,7 @@ WHERE schemaname='public'
                     'group_prompts','prompt_groups','prompts',
     -- Dateien/Texte
                     'pdf_texts','pdf_sources','merged_pdfs',
-    -- Uploads (falls vorhanden)
+    -- Uploads
                     'uploads',
     -- Altlasten (falls früher angelegt)
                     'pdf_files','pdfs'

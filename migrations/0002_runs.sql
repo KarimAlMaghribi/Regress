@@ -181,6 +181,7 @@ END IF;
 SELECT pipeline_id INTO NEW.pipeline_id FROM pipeline_runs WHERE id = NEW.run_id;
 END IF;
 END IF;
+
 RETURN NEW;
 END$$ LANGUAGE plpgsql;
 
