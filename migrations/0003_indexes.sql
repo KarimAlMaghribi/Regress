@@ -18,12 +18,11 @@ CREATE INDEX IF NOT EXISTS idx_prs_status
 CREATE INDEX IF NOT EXISTS idx_psa_runstep_conf
     ON pipeline_step_attempts(run_step_id, candidate_confidence DESC, id ASC);
 
--- Runner-spezifische Lookups (aus deinem Code):
+-- Runner-spezifische Lookups
 CREATE INDEX IF NOT EXISTS idx_prs_run_final_type
     ON pipeline_run_steps (run_id, is_final, prompt_type);
 CREATE INDEX IF NOT EXISTS idx_prs_run_final_key
-    ON pipeline_run_steps (run_id, final_key)
-    WHERE is_final = TRUE;
+    ON pipeline_run_steps (run_id, final_key) WHERE is_final = TRUE;
 
 -- Eindeutigkeit der Reihenfolge je Run
 CREATE UNIQUE INDEX IF NOT EXISTS uq_prs_run_seq
@@ -32,11 +31,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_prs_run_seq
 -- History
 CREATE INDEX IF NOT EXISTS idx_hist_run_time
     ON analysis_history(run_id, event_time);
-
--- Genau 1 finales Ergebnis pro Step-Instanz
-CREATE UNIQUE INDEX IF NOT EXISTS uq_psa_final_per_runstep
-    ON pipeline_step_attempts(run_step_id)
-    WHERE is_final;
 
 -- JSONB GIN für Summaries
 CREATE INDEX IF NOT EXISTS gin_runs_final_extraction
