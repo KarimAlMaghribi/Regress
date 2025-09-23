@@ -199,9 +199,133 @@ async function fetchDetailViaFallback(runId: string): Promise<RunDetail> {
 
 async function fetchFromResults(pdfId: number): Promise<RunDetail> {
   const base = getHistoryBase();
-  const raw = await fetchJSON<any>(`${base}/results/${encodeURIComponent(pdfId)}`);
-  const run = mapRunHeader({ ...raw, pdf_id: raw?.pdf_id ?? pdfId });
-  return { run, steps: [] }; // results-Endpoint hat (vorerst) keine Steps
+  const raw: any = await fetchJSON(`${base}/results/${encodeURIComponent(pdfId)}`);
+
+  const slug = (s?: string, fb?: string) =>
+      (s?.toLowerCase().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "")) || fb || "";
+
+  // === 1) Konsolidate bauen ===
+  const final_extraction: Record<string, unknown> = {};
+  const exList: any[] = Array.isArray(raw.extraction) ? raw.extraction : [];
+  exList.forEach((x, i) => {
+    const key = x?.json_key || slug(x?.prompt_text, x?.prompt_id != null ? `extraction_${x.prompt_id}` : `extraction_${i + 1}`);
+    final_extraction[key] = x?.value ?? null;
+  });
+
+  const final_scores: Record<string, number> = {};
+  const scList: any[] = Array.isArray(raw.scoring) ? raw.scoring : [];
+  scList.forEach((s, i) => {
+    const key = slug(s?.prompt_text, s?.prompt_id != null ? `score_${s.prompt_id}` : `score_${i + 1}`);
+    let v: number;
+    if (typeof s?.result === "boolean") v = s.result ? 1 : 0;
+    else if (typeof s?.result === "number") v = s.result;
+    else if (typeof s?.consolidated?.result === "boolean") v = s.consolidated.result ? 1 : 0;
+    else if (typeof s?.consolidated?.result === "number") v = s.consolidated.result;
+    else v = 0;
+    final_scores[key] = v;
+  });
+
+  const final_decisions: Record<string, boolean> = {};
+  const dcList: any[] = Array.isArray(raw.decision) ? raw.decision : [];
+  dcList.forEach((d, i) => {
+    const key = d?.decision_key || slug(d?.prompt_text, d?.prompt_id != null ? `decision_${d.prompt_id}` : `decision_${i + 1}`);
+    const v =
+        typeof d?.result === "boolean" ? d.result :
+            (typeof d?.consolidated?.result === "boolean" ? d.consolidated.result : false);
+    final_decisions[key] = v;
+  });
+
+  // === 2) Steps aus log[] mappen (für rechte Seite)
+  const steps: RunStep[] = [];
+  const logList: any[] = Array.isArray(raw.log) ? raw.log : [];
+
+  logList.forEach((l, idx) => {
+    const pt = String(l?.prompt_type || "");
+    const step_type: RunStep["step_type"] =
+        pt === "ExtractionPrompt" ? "Extraction" :
+            pt === "ScoringPrompt"   ? "Score" :
+                pt === "DecisionPrompt"  ? "Decision" : "Meta";
+
+    // Finalwert heuristisch
+    let finalValue: unknown = null;
+    if (l?.result?.consolidated?.result !== undefined) {
+      finalValue = l.result.consolidated.result;
+    } else if (Array.isArray(l?.result?.results) && l.result.results.length) {
+      finalValue = l.result.results[0]?.value ?? null;
+    } else if (Array.isArray(l?.result?.scores) && l.result.scores.length) {
+      const r = l.result.scores[0]?.result;
+      finalValue = typeof r === "boolean" ? r : (Number.isFinite(Number(r)) ? Number(r) : r ?? null);
+    }
+
+    // Attempts aus results[] / scores[]
+    const atts: Attempt[] = [];
+    if (Array.isArray(l?.result?.results)) {
+      l.result.results.forEach((r: any, i: number) => {
+        atts.push({
+          id: i + 1,
+          attempt_no: i + 1,
+          candidate_key: r?.source?.quote || null,
+          candidate_value: { value: r?.value, source: r?.source ?? null },
+          candidate_confidence: (typeof r?.confidence === "number" ? r.confidence : null),
+          is_final: i === 0,
+          source: "llm",
+          batch_no: Array.isArray(l?.result?.batches) ? 1 : null,
+          created_at: null,
+        });
+      });
+    } else if (Array.isArray(l?.result?.scores)) {
+      l.result.scores.forEach((r: any, i: number) => {
+        atts.push({
+          id: i + 1,
+          attempt_no: i + 1,
+          candidate_key: r?.source?.quote || null,
+          candidate_value: { result: r?.result, explanation: r?.explanation, source: r?.source ?? null },
+          candidate_confidence: null,
+          is_final: i === 0,
+          source: "llm",
+          batch_no: Array.isArray(l?.result?.batches) ? 1 : null,
+          created_at: null,
+        });
+      });
+    }
+
+    const step: RunStep = {
+      id: idx + 1,
+      order_index: Number.isFinite(Number(l?.seq_no)) ? Number(l.seq_no) : (idx + 1),
+      step_type,
+      status: "finalized",
+      final_key: l?.decision_key || slug(l?.result?.prompt_text, l?.prompt_id != null ? `step_${l.prompt_id}` : undefined) || null,
+      final_confidence: null,
+      final_value: finalValue,
+      definition: {
+        prompt_id: l?.prompt_id,
+        prompt_type: pt as any,
+        json_key: l?.decision_key || null,
+        weight: null,
+      },
+      attempts: atts,
+      created_at: null,
+      updated_at: null,
+    };
+    steps.push(step);
+  });
+
+  // === 3) RunHeader bauen (mit Konsolidaten)
+  const run: RunHeader = {
+    id: String(raw.run_id ?? `pdf-${pdfId}`),
+    status: "completed",
+    pipeline_id: String(raw.pipeline_id ?? "unknown"),
+    pdf_id: Number(raw.pdf_id ?? pdfId),
+    overall_score: typeof raw.overall_score === "number" ? raw.overall_score : null,
+    final_extraction: Object.keys(final_extraction).length ? final_extraction : null,
+    final_scores:     Object.keys(final_scores).length     ? final_scores     : null,
+    final_decisions:  Object.keys(final_decisions).length  ? final_decisions  : null,
+    started_at: raw.started_at ?? null,
+    finished_at: raw.finished_at ?? null,
+    error: raw.error ?? null,
+  };
+
+  return { run, steps };
 }
 
 /** =========================
