@@ -151,7 +151,9 @@ async function openDetailsInNewTab(entry: Entry) {
 
   // 2) Falls keine run_id & keine Finals: versuche direkt konsolidiertes DTO zu ziehen und in LS zu ersetzen
   const hasFinals = !!(normalized && typeof normalized === 'object'
-      && Object.keys(normalized.extracted ?? {}).length + Object.keys(normalized.scores ?? {}).length + Object.keys(normalized.decisions ?? {}).length > 0);
+      && (Object.keys(normalized.extracted ?? {}).length
+          + Object.keys(normalized.scores ?? {}).length
+          + Object.keys(normalized.decisions ?? {}).length > 0));
 
   if (!runId && !hasFinals) {
     try {
@@ -167,9 +169,15 @@ async function openDetailsInNewTab(entry: Entry) {
     } catch { /* ignore */ }
   }
 
-  const q = runId ? `?run_id=${encodeURIComponent(runId)}` : "";
-  window.open(`/run-view/${key}${q}`, "_blank", "noopener,noreferrer");
+  // NEU: immer pdf_id (und optional pdf_url) an die URL hängen; run_id nur wenn vorhanden
+  const qp = new URLSearchParams();
+  qp.set("pdf_id", String(entry.pdfId));
+  if (entry.pdfUrl) qp.set("pdf_url", entry.pdfUrl);
+  if (runId) qp.set("run_id", runId);
+
+  window.open(`/run-view/${key}?` + qp.toString(), "_blank", "noopener,noreferrer");
 }
+
 
 /* -------- Page Component -------- */
 

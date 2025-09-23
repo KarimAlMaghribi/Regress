@@ -111,12 +111,14 @@ function EvidenceChip({page, pdfUrl}: { page?: number; pdfUrl?: string }) {
 
 /** --------- main page --------- */
 export default function RunDetailsPage() {
-  const params = useParams<{ id?: string }>();
+  const params = useParams<{ id?: string; key?: string }>();
   const [sp] = useSearchParams();
-  const runId = sp.get("run_id") || sp.get("id") || params.id || undefined;
-  const pdfUrl = sp.get("pdf") || sp.get("pdf_url") || undefined;
 
-  const {data, loading, error, scoreSum} = useRunDetails(runId);
+  const runId = sp.get("run_id") || sp.get("id") || params.id || params.key || undefined;
+  const pdfUrl = sp.get("pdf") || sp.get("pdf_url") || undefined;
+  const pdfId = sp.get("pdf_id") ? Number(sp.get("pdf_id")) : undefined;
+
+  const { data, loading, error, scoreSum } = useRunDetails(runId, { pdfId });
 
   if (loading) {
     return (
