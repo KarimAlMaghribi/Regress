@@ -15,6 +15,8 @@ CREATE INDEX IF NOT EXISTS idx_prs_run
     ON pipeline_run_steps(run_id);
 CREATE INDEX IF NOT EXISTS idx_prs_status
     ON pipeline_run_steps(status);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_prs_run_seq
+    ON pipeline_run_steps(run_id, seq_no);
 CREATE INDEX IF NOT EXISTS idx_psa_runstep_conf
     ON pipeline_step_attempts(run_step_id, candidate_confidence DESC, id ASC);
 
@@ -23,14 +25,16 @@ CREATE INDEX IF NOT EXISTS idx_prs_run_final_type
     ON pipeline_run_steps (run_id, is_final, prompt_type);
 CREATE INDEX IF NOT EXISTS idx_prs_run_final_key
     ON pipeline_run_steps (run_id, final_key) WHERE is_final = TRUE;
-CREATE UNIQUE INDEX IF NOT EXISTS uq_prs_run_seq
-    ON pipeline_run_steps(run_id, seq_no);
 
--- History
+-- History-Service: typische Zugriffe
+CREATE INDEX IF NOT EXISTS idx_hist_pdf_ts
+    ON analysis_history (pdf_id, "timestamp" DESC);
+CREATE INDEX IF NOT EXISTS idx_hist_ts
+    ON analysis_history ("timestamp" DESC);
+CREATE INDEX IF NOT EXISTS idx_hist_pipeline_ts
+    ON analysis_history (pipeline_id, "timestamp" DESC);
 CREATE INDEX IF NOT EXISTS idx_hist_run_time
-    ON analysis_history(run_id, event_time);
-CREATE INDEX IF NOT EXISTS idx_hist_pdf_time
-    ON analysis_history(pdf_id, event_time);
+    ON analysis_history (run_id, event_time);
 
 -- JSONB GIN für Summaries
 CREATE INDEX IF NOT EXISTS gin_runs_final_extraction

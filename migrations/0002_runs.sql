@@ -1,6 +1,6 @@
 SET search_path TO public;
 
--- ========== pipeline_runs ==========
+-- ================= pipeline_runs =================
 CREATE TABLE IF NOT EXISTS pipeline_runs (
                                              id               UUID PRIMARY KEY,
                                              pipeline_id      UUID    NOT NULL REFERENCES pipelines(id),
@@ -16,19 +16,17 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
--- Runner nutzt zusätzlich 'finished' und 'error' → CHECK erweitern (idempotent)
 ALTER TABLE pipeline_runs
 DROP CONSTRAINT IF EXISTS pipeline_runs_status_check;
-
 ALTER TABLE pipeline_runs
     ADD CONSTRAINT pipeline_runs_status_check
         CHECK (status IN ('queued','running','completed','finished','finalized','failed','timeout','canceled','error'));
 
--- ========== pipeline_run_steps ==========
+-- ================= pipeline_run_steps =================
 CREATE TABLE IF NOT EXISTS pipeline_run_steps (
                                                   id                 BIGSERIAL PRIMARY KEY,
                                                   run_id             UUID    NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
-    pipeline_step_id   BIGINT      REFERENCES pipeline_steps(id)      ON DELETE CASCADE, -- darf NULL sein (final/virtuell)
+    pipeline_step_id   BIGINT      REFERENCES pipeline_steps(id)      ON DELETE CASCADE, -- kann NULL sein (final/virtuell)
     step_type          TEXT,                                                             -- Runner liefert das nicht → NULL ok
     status             TEXT    NOT NULL DEFAULT 'finalized' CHECK (status IN ('queued','running','finalized','failed')),
     started_at         TIMESTAMPTZ,
@@ -54,10 +52,9 @@ CREATE TABLE IF NOT EXISTS pipeline_run_steps (
     page               INT,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    UNIQUE (run_id, pipeline_step_id) -- NULL in pipeline_step_id ist für UNIQUE okay
+    UNIQUE (run_id, pipeline_step_id)
     );
 
--- Bestehende Schemata anpassen (idempotent)
 ALTER TABLE pipeline_run_steps ALTER COLUMN step_type DROP NOT NULL;
 ALTER TABLE pipeline_run_steps DROP CONSTRAINT IF EXISTS pipeline_run_steps_step_type_check;
 ALTER TABLE pipeline_run_steps ALTER COLUMN pipeline_step_id DROP NOT NULL;
@@ -85,7 +82,7 @@ ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS created_at   TIMESTAMPTZ
 UPDATE pipeline_run_steps SET seq_no = COALESCE(seq_no, 0);
 ALTER TABLE pipeline_run_steps ALTER COLUMN seq_no SET NOT NULL;
 
--- ========== pipeline_step_attempts ==========
+-- ================= pipeline_step_attempts =================
 CREATE TABLE IF NOT EXISTS pipeline_step_attempts (
                                                       id                   BIGSERIAL PRIMARY KEY,
                                                       run_step_id          BIGINT NOT NULL REFERENCES pipeline_run_steps(id) ON DELETE CASCADE,
@@ -100,25 +97,43 @@ CREATE TABLE IF NOT EXISTS pipeline_step_attempts (
     is_final             BOOLEAN NOT NULL DEFAULT FALSE
     );
 
--- ========== analysis_history ==========
--- Neu: pdf_id direkt mitführen (für History-Queries wie latest_by_status)
+-- ================= analysis_history =================
 CREATE TABLE IF NOT EXISTS analysis_history (
                                                 id          BIGSERIAL PRIMARY KEY,
-                                                run_id      UUID NOT NULL REFERENCES pipeline_runs(id) ON DELETE CASCADE,
-    pdf_id      INTEGER, -- wird per Trigger aus pipeline_runs(run_id→pdf_id) gesetzt
+                                                run_id      UUID REFERENCES pipeline_runs(id) ON DELETE CASCADE,
+    pdf_id      INTEGER,            -- wird per Trigger aus pipeline_runs befüllt, falls NULL
+    pipeline_id UUID,               -- dto.
+    state       JSONB,              -- Ergebnis (alias 'result')
+    pdf_url     TEXT,
+    "timestamp" TIMESTAMPTZ,        -- UI-Order (History-Service)
+    status      TEXT NOT NULL DEFAULT 'running',
+    score       DOUBLE PRECISION,
+    label       TEXT,
+
     event_time  TIMESTAMPTZ NOT NULL DEFAULT now(),
-    event_type  TEXT NOT NULL CHECK (event_type IN
-('RUN_CREATED','STEP_STARTED','STEP_COMPLETED','STEP_FINALIZED','BRANCH_SELECTED','ERROR','FINALIZED')),
+    event_type  TEXT CHECK (event_type IN ('RUN_CREATED','STEP_STARTED','STEP_COMPLETED','STEP_FINALIZED','BRANCH_SELECTED','ERROR','FINALIZED')),
     step_index  INT,
     prompt_id   INT REFERENCES prompts(id),
-    status      TEXT,
     message     TEXT,
     openai_raw  JSONB,
     route_stack TEXT[]
     );
 
--- Falls Tabelle schon existiert: pdf_id nachziehen + FK
-ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS pdf_id INTEGER;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS pdf_id      INTEGER;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS pipeline_id UUID;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS state       JSONB;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS pdf_url     TEXT;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS "timestamp" TIMESTAMPTZ;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS status      TEXT;
+ALTER TABLE analysis_history ALTER COLUMN status SET DEFAULT 'running';
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS score       DOUBLE PRECISION;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS label       TEXT;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS event_time  TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS event_type  TEXT;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS step_index  INT;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS message     TEXT;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS openai_raw  JSONB;
+ALTER TABLE analysis_history ADD COLUMN IF NOT EXISTS route_stack TEXT[];
 
 DO $$
 BEGIN
@@ -130,31 +145,51 @@ ALTER TABLE analysis_history
     ADD CONSTRAINT analysis_history_pdf_id_fkey
         FOREIGN KEY (pdf_id) REFERENCES merged_pdfs(id) ON DELETE SET NULL;
 END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.table_constraints
+    WHERE table_name='analysis_history' AND constraint_name='analysis_history_pipeline_id_fkey'
+  ) THEN
+ALTER TABLE analysis_history
+    ADD CONSTRAINT analysis_history_pipeline_id_fkey
+        FOREIGN KEY (pipeline_id) REFERENCES pipelines(id) ON DELETE SET NULL;
+END IF;
 END$$;
 
--- Backfill (idempotent)
 UPDATE analysis_history ah
 SET pdf_id = pr.pdf_id
     FROM pipeline_runs pr
-WHERE ah.run_id = pr.id
-  AND ah.pdf_id IS NULL;
+WHERE ah.run_id = pr.id AND ah.pdf_id IS NULL;
 
--- Trigger zum automatischen Setzen von pdf_id bei INSERT
-CREATE OR REPLACE FUNCTION set_analysis_history_pdf_id()
+UPDATE analysis_history ah
+SET pipeline_id = pr.pipeline_id
+    FROM pipeline_runs pr
+WHERE ah.run_id = pr.id AND ah.pipeline_id IS NULL;
+
+CREATE OR REPLACE FUNCTION trg_fill_analysis_history()
 RETURNS trigger AS $$
 BEGIN
-  IF NEW.pdf_id IS NULL THEN
+  IF NEW."timestamp" IS NULL THEN
+    NEW."timestamp" := now();
+END IF;
+
+  IF NEW.run_id IS NOT NULL THEN
+    IF NEW.pdf_id IS NULL THEN
 SELECT pdf_id INTO NEW.pdf_id FROM pipeline_runs WHERE id = NEW.run_id;
+END IF;
+    IF NEW.pipeline_id IS NULL THEN
+SELECT pipeline_id INTO NEW.pipeline_id FROM pipeline_runs WHERE id = NEW.run_id;
+END IF;
 END IF;
 RETURN NEW;
 END$$ LANGUAGE plpgsql;
 
 DO $$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_analysis_history_set_pdf_id') THEN
-CREATE TRIGGER trg_analysis_history_set_pdf_id
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_analysis_history_fill') THEN
+CREATE TRIGGER trg_analysis_history_fill
     BEFORE INSERT ON analysis_history
     FOR EACH ROW
-    EXECUTE FUNCTION set_analysis_history_pdf_id();
+    EXECUTE FUNCTION trg_fill_analysis_history();
 END IF;
 END$$;
