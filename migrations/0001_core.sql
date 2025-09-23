@@ -67,9 +67,30 @@ CREATE TABLE pipeline_steps (
                                 UNIQUE (pipeline_id, order_index)
 );
 
--- ===== PDFs & Uploads (von Services genutzt) =====
+-- ===== PDFs & Uploads =====
 CREATE TABLE merged_pdfs (
                              id         SERIAL PRIMARY KEY,
                              sha256     TEXT    NOT NULL,
                              size_bytes INTEGER NOT NULL,
-                             d
+                             data       BYTEA   NOT NULL
+);
+
+CREATE TABLE pdf_sources (
+                             pdf_id INTEGER PRIMARY KEY REFERENCES merged_pdfs(id) ON DELETE CASCADE,
+                             names  TEXT,
+                             count  INTEGER
+);
+
+CREATE TABLE pdf_texts (
+                           merged_pdf_id INTEGER NOT NULL REFERENCES merged_pdfs(id) ON DELETE CASCADE,
+                           page_no       INTEGER NOT NULL,
+                           text          TEXT    NOT NULL,
+                           PRIMARY KEY (merged_pdf_id, page_no)
+);
+
+CREATE TABLE uploads (
+                         id          SERIAL PRIMARY KEY,
+                         pdf_id      INTEGER,
+                         pipeline_id UUID,
+                         status      TEXT NOT NULL
+);
