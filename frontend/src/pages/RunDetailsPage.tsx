@@ -14,7 +14,6 @@ import {
   CircularProgress,
   Container,
   Divider,
-  Grid,
   IconButton,
   LinearProgress,
   Stack,
@@ -33,8 +32,8 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import ArticleIcon from "@mui/icons-material/Article"; // Extraction
-import RuleIcon from "@mui/icons-material/Rule"; // Score
+import ArticleIcon from "@mui/icons-material/Article";  // Extraction
+import RuleIcon from "@mui/icons-material/Rule";        // Score
 import AltRouteIcon from "@mui/icons-material/AltRoute"; // Decision
 import AssessmentIcon from "@mui/icons-material/Assessment"; // Scoring header
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
@@ -44,7 +43,17 @@ import {type RunDetail, type RunStep, useRunDetails} from "../hooks/useRunDetail
 /** --------- helpers --------- */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
 const fmtNum = (n: number) => Intl.NumberFormat(undefined, {maximumFractionDigits: 2}).format(n);
-const asBool = (v: unknown) => (typeof v === "boolean" ? v : (typeof v === "object" && v !== null ? (v as any).bool ?? (v as any).decision : undefined));
+const asBool = (v: unknown) =>
+    (typeof v === "boolean"
+        ? v
+        : typeof v === "object" && v !== null
+            ? (v as any).bool ?? (v as any).decision
+            : undefined);
+
+function valOrObjValue(v: any) {
+  if (v && typeof v === "object" && "value" in v) return (v as any).value;
+  return v;
+}
 
 function StatusChip({status}: { status?: string }) {
   const map: Record<string, {
@@ -52,27 +61,22 @@ function StatusChip({status}: { status?: string }) {
     icon: React.ReactNode;
     label: string
   }> = {
-    queued: {color: "info", icon: <HourglassEmptyIcon fontSize="small"/>, label: "Wartend"},
-    running: {color: "warning", icon: <PlayArrowIcon fontSize="small"/>, label: "Laufend"},
-    finalized: {color: "success", icon: <CheckCircleOutlineIcon fontSize="small"/>, label: "Final"},
-    completed: {
-      color: "success",
-      icon: <CheckCircleOutlineIcon fontSize="small"/>,
-      label: "Abgeschlossen"
-    },
-    failed: {color: "error", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Fehler"},
-    timeout: {color: "error", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Timeout"},
-    canceled: {color: "default", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Abgebrochen"},
+    queued:   {color: "info",    icon: <HourglassEmptyIcon fontSize="small"/>, label: "Wartend"},
+    running:  {color: "warning", icon: <PlayArrowIcon fontSize="small"/>,      label: "Laufend"},
+    finalized:{color: "success", icon: <CheckCircleOutlineIcon fontSize="small"/>, label: "Final"},
+    completed:{color: "success", icon: <CheckCircleOutlineIcon fontSize="small"/>, label: "Abgeschlossen"},
+    failed:   {color: "error",   icon: <ErrorOutlineIcon fontSize="small"/>,   label: "Fehler"},
+    timeout:  {color: "error",   icon: <ErrorOutlineIcon fontSize="small"/>,   label: "Timeout"},
+    canceled: {color: "default", icon: <ErrorOutlineIcon fontSize="small"/>,   label: "Abgebrochen"},
   };
   const c = status ? map[status] : undefined;
-  return <Chip size="small" color={c?.color ?? "default"} icon={c?.icon}
-               label={c?.label ?? (status ?? "–")}/>;
+  return <Chip size="small" color={c?.color ?? "default"} icon={c?.icon} label={c?.label ?? (status ?? "–")}/>;
 }
 
 function StepTypeIcon({t}: { t: RunStep["step_type"] }) {
   if (t === "Extraction") return <ArticleIcon sx={{color: "primary.main"}} fontSize="small"/>;
-  if (t === "Score") return <RuleIcon sx={{color: "success.main"}} fontSize="small"/>;
-  if (t === "Decision") return <AltRouteIcon sx={{color: "warning.main"}} fontSize="small"/>;
+  if (t === "Score")      return <RuleIcon sx={{color: "success.main"}} fontSize="small"/>;
+  if (t === "Decision")   return <AltRouteIcon sx={{color: "warning.main"}} fontSize="small"/>;
   return <InfoOutlinedIcon color="disabled" fontSize="small"/>;
 }
 
@@ -84,7 +88,7 @@ function ConfidenceBar({value}: { value?: number | null }) {
         <Box sx={{flex: 1}}>
           <LinearProgress variant="determinate" value={v * 100}/>
         </Box>
-        <Typography variant="caption" sx={{width: 36, textAlign: "right"}}>
+        <Typography variant="caption" sx={{width: 40, textAlign: "right"}}>
           {(v * 100).toFixed(0)}%
         </Typography>
       </Stack>
@@ -92,15 +96,12 @@ function ConfidenceBar({value}: { value?: number | null }) {
 }
 
 function formatValue(val: any) {
-  if (val == null) return "—";
-  if (typeof val === "boolean") return val ? "Ja" : "Nein";
-  if (typeof val === "number") return fmtNum(val);
-  if (typeof val === "string") return val;
-  try {
-    return JSON.stringify(val);
-  } catch {
-    return String(val);
-  }
+  const v = valOrObjValue(val);
+  if (v == null) return "—";
+  if (typeof v === "boolean") return v ? "Ja" : "Nein";
+  if (typeof v === "number") return fmtNum(v);
+  if (typeof v === "string") return v;
+  try { return JSON.stringify(v); } catch { return String(v); }
 }
 
 function EvidenceChip({page, pdfUrl}: { page?: number; pdfUrl?: string }) {
@@ -114,8 +115,8 @@ export default function RunDetailsPage() {
   const params = useParams<{ id?: string; key?: string }>();
   const [sp] = useSearchParams();
 
-  const key = params.key || params.id || undefined;
-  const runId = sp.get("run_id") || sp.get("id") || undefined;
+  const key    = params.key || params.id || undefined;
+  const runId  = sp.get("run_id") || sp.get("id") || undefined;
   const pdfUrl = sp.get("pdf") || sp.get("pdf_url") || undefined;
 
   const pdfId = (() => {
@@ -130,13 +131,12 @@ export default function RunDetailsPage() {
       const parsed = JSON.parse(raw);
       if (typeof parsed?.pdfId === "number") return parsed.pdfId;
       if (typeof parsed?.run?.pdf_id === "number") return parsed.run.pdf_id;
-    } catch { /* ignore */ }
+    } catch {}
     return undefined;
   })();
 
   const { data, loading, error, scoreSum } =
       useRunDetails(runId, { pdfId, storageKey: key ? `run-view:${key}` : undefined });
-
 
   if (loading) {
     return (
@@ -162,18 +162,15 @@ export default function RunDetailsPage() {
   return (
       <Container maxWidth="xl" sx={{py: 3}}>
         <HeaderBar detail={data} pdfUrl={pdfUrl}/>
-        <Grid container spacing={2}>
-          <Grid item xs={12} md={4}>
-            <SummaryCard detail={data} scoreSum={scoreSum}/>
-            <ScoreBreakdownCard detail={data}/>
-            <DecisionCard detail={data}/>
-          </Grid>
 
-          <Grid item xs={12} md={8}>
-            <ExtractionCard detail={data}/>
-            <StepsWithAttempts detail={data} pdfUrl={pdfUrl}/>
-          </Grid>
-        </Grid>
+        {/* ALLES in voller Breite, klar gestapelt */}
+        <Stack spacing={2}>
+          <SummaryCard detail={data} scoreSum={scoreSum}/>
+          <ExtractionCard detail={data} pdfUrl={pdfUrl}/>
+          <ScoreBreakdownCard detail={data}/>
+          <DecisionCard detail={data}/>
+          <StepsWithAttempts detail={data} pdfUrl={pdfUrl}/>
+        </Stack>
       </Container>
   );
 }
@@ -183,19 +180,17 @@ export default function RunDetailsPage() {
 function HeaderBar({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
   const {run} = detail;
   return (
-      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{mb: 2}}>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{mb: 1}}>
         <Box>
           <Typography variant="h5">Analyse · Run</Typography>
           <Typography variant="body2" color="text.secondary">
-            Pipeline: {run.pipeline_id} • PDF-ID: {run.pdf_id} • Status: <StatusChip
-              status={run.status}/>
+            Pipeline: {run.pipeline_id} • PDF-ID: {run.pdf_id} • Status: <StatusChip status={run.status}/>
           </Typography>
         </Box>
         <Stack direction="row" gap={1}>
           {pdfUrl && (
               <Tooltip title="PDF öffnen">
-                <IconButton size="small"
-                            onClick={() => window.open(pdfUrl!, "_blank", "noopener,noreferrer")}>
+                <IconButton size="small" onClick={() => window.open(pdfUrl!, "_blank", "noopener,noreferrer")}>
                   <OpenInNewIcon fontSize="small"/>
                 </IconButton>
               </Tooltip>
@@ -213,27 +208,24 @@ function HeaderBar({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
 function SummaryCard({detail, scoreSum}: { detail: RunDetail; scoreSum: number }) {
   const {run} = detail;
   const finalKeys = Object.keys(run.final_extraction ?? {});
-  const decKeys = Object.keys(run.final_decisions ?? {});
-  const scKeys = Object.keys(run.final_scores ?? {});
+  const decKeys   = Object.keys(run.final_decisions ?? {});
+  const scKeys    = Object.keys(run.final_scores ?? {});
 
   return (
-      <Card variant="outlined" sx={{mb: 2}}>
+      <Card variant="outlined">
         <CardHeader title="Übersicht" subheader="Konsolidierte Ergebnisse & Score"/>
         <CardContent>
           <Stack spacing={1.25}>
             <Stack direction="row" alignItems="center" gap={1}>
               <AssessmentIcon sx={{color: "success.main"}} fontSize="small"/>
-              <Typography variant="body2" sx={{minWidth: 130, color: "text.secondary"}}>Final
-                Score</Typography>
+              <Typography variant="body2" sx={{minWidth: 150, color: "text.secondary"}}>Final Score</Typography>
               <Box sx={{flex: 1}}>
                 {typeof run.overall_score === "number" ? (
                     <Stack direction="row" alignItems="center" gap={1}>
-                      <LinearProgress variant="determinate"
-                                      value={clamp01(run.overall_score) * 100}/>
-                      <Typography variant="caption" sx={{
-                        width: 40,
-                        textAlign: "right"
-                      }}>{fmtNum(run.overall_score)}</Typography>
+                      <LinearProgress variant="determinate" value={clamp01(run.overall_score) * 100}/>
+                      <Typography variant="caption" sx={{width: 40, textAlign: "right"}}>
+                        {fmtNum(run.overall_score)}
+                      </Typography>
                     </Stack>
                 ) : (
                     <Typography variant="body2">—</Typography>
@@ -264,9 +256,8 @@ function ScoreBreakdownCard({detail}: { detail: RunDetail }) {
   if (!entries.length) return null;
 
   return (
-      <Card variant="outlined" sx={{mb: 2}}>
-        <CardHeader title="Scoring (Beitrag je Regel)"
-                    subheader="Gewicht addiert bei finalem TRUE"/>
+      <Card variant="outlined">
+        <CardHeader title="Scoring (Beitrag je Regel)" subheader="Gewicht addiert bei finalem TRUE"/>
         <CardContent>
           <Table size="small">
             <TableHead>
@@ -278,8 +269,9 @@ function ScoreBreakdownCard({detail}: { detail: RunDetail }) {
             <TableBody>
               {entries.map(([k, v]) => (
                   <TableRow key={k}>
-                    <TableCell><Chip size="small" color={(v as number) > 0 ? "success" : "default"}
-                                     label={k}/></TableCell>
+                    <TableCell>
+                      <Chip size="small" color={(v as number) > 0 ? "success" : "default"} label={k}/>
+                    </TableCell>
                     <TableCell align="right">{fmtNum(typeof v === "number" ? v : 0)}</TableCell>
                   </TableRow>
               ))}
@@ -296,7 +288,7 @@ function DecisionCard({detail}: { detail: RunDetail }) {
   if (!entries.length) return null;
 
   return (
-      <Card variant="outlined" sx={{mb: 2}}>
+      <Card variant="outlined">
         <CardHeader title="Finale Entscheidungen" subheader="Routen/Ja-Nein"/>
         <CardContent>
           <Stack direction="row" gap={1} flexWrap="wrap">
@@ -316,13 +308,25 @@ function DecisionCard({detail}: { detail: RunDetail }) {
   );
 }
 
-function ExtractionCard({detail}: { detail: RunDetail }) {
+function ExtractionCard({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
   const map = detail.run.final_extraction ?? {};
   const entries = useMemo(() => Object.entries(map), [map]);
+
+  // Confidence je Feld aus Steps auslesen
+  const confByKey = useMemo(() => {
+    const m = new Map<string, number>();
+    (detail.steps ?? []).forEach(s => {
+      if (s.step_type === "Extraction" && s.final_key) {
+        if (typeof s.final_confidence === "number") m.set(s.final_key, s.final_confidence);
+      }
+    });
+    return m;
+  }, [detail.steps]);
+
   if (!entries.length) return null;
 
   return (
-      <Card variant="outlined" sx={{mb: 2}}>
+      <Card variant="outlined">
         <CardHeader title="Finale Extraktion" subheader="Konsolidierte Felder"/>
         <CardContent>
           <Table size="small">
@@ -330,15 +334,22 @@ function ExtractionCard({detail}: { detail: RunDetail }) {
               <TableRow>
                 <TableCell>Feld</TableCell>
                 <TableCell>Wert</TableCell>
+                <TableCell width={180} align="right">Confidence</TableCell>
+                <TableCell width={110} align="right">Evidenz</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {entries.map(([k, v]) => (
-                  <TableRow key={k}>
-                    <TableCell><Chip size="small" label={k}/></TableCell>
-                    <TableCell>{formatValue(v)}</TableCell>
-                  </TableRow>
-              ))}
+              {entries.map(([k, v]) => {
+                const page = (v && typeof v === "object" && "page" in (v as any)) ? (v as any).page : undefined;
+                return (
+                    <TableRow key={k}>
+                      <TableCell><Chip size="small" label={k}/></TableCell>
+                      <TableCell>{formatValue(v)}</TableCell>
+                      <TableCell align="right"><ConfidenceBar value={confByKey.get(k)}/></TableCell>
+                      <TableCell align="right"><EvidenceChip page={page} pdfUrl={pdfUrl}/></TableCell>
+                    </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </CardContent>
@@ -355,15 +366,14 @@ function StepsWithAttempts({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: strin
   if (!steps.length) {
     return (
         <Alert severity="info">
-          Keine Step-Instanzen vorhanden. Läuft der Run noch oder liefert der
-          Backend-Detail-Endpoint die Steps nicht?
+          Keine Step-Instanzen vorhanden. Läuft der Run noch oder liefert der Backend-Detail-Endpoint die Steps nicht?
         </Alert>
     );
   }
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Steps & Attempts" subheader="Normalisierung je Step (Top-1 → final)"/>
+        <CardHeader title="Steps & Attempts" subheader="Normalisierung je Step (Mehrheit/Qualität → final)"/>
         <CardContent>
           {steps.map((s, idx) => (
               <Accordion key={s.id} defaultExpanded={idx === 0}>
@@ -382,12 +392,10 @@ function StepsWithAttempts({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: strin
                 <AccordionDetails>
                   <Stack spacing={1} sx={{mb: 1}}>
                     <Row label="Final Key"><Chip size="small" label={s.final_key ?? "—"}/></Row>
-                    <Row label="Final Value"><Typography
-                        variant="body2">{formatValue(s.final_value)}</Typography></Row>
+                    <Row label="Final Value"><Typography variant="body2">{formatValue(s.final_value)}</Typography></Row>
                     <Row label="Confidence"><ConfidenceBar value={s.final_confidence}/></Row>
                     <Row label="Zeit">
-                      <Typography
-                          variant="body2">{s.started_at ?? "—"} → {s.finished_at ?? "—"}</Typography>
+                      <Typography variant="body2">{s.started_at ?? "—"} → {s.finished_at ?? "—"}</Typography>
                     </Row>
                   </Stack>
 
@@ -411,15 +419,15 @@ function StepsWithAttempts({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: strin
                             a?.candidate_value?.source?.page ??
                             a?.candidate_value?.page_no;
                         const bool = asBool(a?.candidate_value);
+                        const display =
+                            typeof bool === "boolean"
+                                ? (bool ? "Ja" : "Nein")
+                                : formatValue(a?.candidate_value?.value ?? a?.candidate_value);
                         return (
                             <TableRow key={a.id ?? i} hover>
                               <TableCell>{a.attempt_no ?? i + 1}</TableCell>
                               <TableCell>{a.candidate_key ?? "—"}</TableCell>
-                              <TableCell>
-                                <Typography variant="body2">
-                                  {typeof bool === "boolean" ? (bool ? "Ja" : "Nein") : formatValue(a.candidate_value)}
-                                </Typography>
-                              </TableCell>
+                              <TableCell><Typography variant="body2">{display}</Typography></TableCell>
                               <TableCell><ConfidenceBar value={a.candidate_confidence}/></TableCell>
                               <TableCell>{a.source ?? "—"}</TableCell>
                               <TableCell><EvidenceChip page={page} pdfUrl={pdfUrl}/></TableCell>
@@ -445,8 +453,7 @@ function StepsWithAttempts({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: strin
 function Row({label, children}: { label: string; children: React.ReactNode }) {
   return (
       <Stack direction="row" spacing={1} alignItems="center">
-        <Typography variant="body2"
-                    sx={{minWidth: 130, color: "text.secondary"}}>{label}</Typography>
+        <Typography variant="body2" sx={{minWidth: 150, color: "text.secondary"}}>{label}</Typography>
         <Box sx={{flex: 1}}>{children}</Box>
       </Stack>
   );
