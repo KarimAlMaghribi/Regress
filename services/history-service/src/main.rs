@@ -3,7 +3,7 @@ use actix_cors::Cors;
 use actix_web::web::Payload;
 use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use actix_web_actors::ws;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     ClientConfig, Message,
@@ -14,13 +14,13 @@ use shared::dto::PipelineRunResult;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tokio_postgres::{Client, NoTls};
-use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
+use tokio_postgres::{types::ToSql, Client, NoTls, Row};
+use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
 /* ============================================================================================
-   DB-Wrapper: NoTLS, Auto-Reconnect (bei "connection closed") + Heartbeat (SELECT 1)
+   DB-Manager: NoTLS, Auto-Reconnect bei "connection closed" + Heartbeat (SELECT 1)
    ============================================================================================ */
 
 struct Db {
@@ -35,12 +35,12 @@ impl Db {
             client: RwLock::new(None),
         });
 
-        // Erste Verbindung herstellen
+        // Erste Verbindung versuchen
         if let Err(e) = db.reconnect().await {
-            error!(%e, "initial db connect failed; will keep retrying via operations/heartbeat");
+            warn!(%e, "initial db connect failed; will retry on demand");
         }
 
-        // Heartbeat: hält Verbindung warm und erkennt Drops
+        // Heartbeat, damit Idle-Verbindung nicht stirbt (und Drops früh erkannt werden)
         let weak = Arc::downgrade(&db);
         tokio::spawn(async move {
             let secs: u64 = std::env::var("DB_PING_SECS")
@@ -75,7 +75,6 @@ impl Db {
 
     async fn reconnect(&self) -> Result<(), tokio_postgres::Error> {
         let (client, connection_fut) = self.connect_once().await?;
-        // Background-Task, die das Verbindungsende nur loggt (Reconnect macht die Aufruferlogik)
         tokio::spawn(async move {
             let _ = connection_fut.await;
         });
@@ -98,29 +97,47 @@ impl Db {
         Ok(())
     }
 
-    /// Führt `op` aus; bei "connection closed/reset" wird **einmal** reconnectet und wiederholt.
-    async fn with_client<F, Fut, T>(&self, op: F) -> Result<T, tokio_postgres::Error>
-    where
-            for<'c> F: FnOnce(&'c Client) -> Fut,
-            Fut: std::future::Future<Output = Result<T, tokio_postgres::Error>>,
-    {
+    #[inline]
+    fn looks_like_closed(err: &tokio_postgres::Error) -> bool {
+        let s = err.to_string().to_lowercase();
+        s.contains("closed") || s.contains("broken pipe") || s.contains("connection reset")
+    }
+
+    /// query mit 1x Auto-Reconnect-Retry
+    async fn query(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, tokio_postgres::Error> {
         let c1 = self.current().await?;
-        match op(&*c1).await {
-            Ok(v) => Ok(v),
-            Err(e) if looks_like_closed(&e) => {
-                warn!(%e, "db op on closed connection; reconnecting once");
+        match c1.query(sql, params).await {
+            Ok(rows) => Ok(rows),
+            Err(e) if Self::looks_like_closed(&e) => {
+                warn!(%e, "query failed on closed connection; reconnecting once");
                 self.reconnect().await?;
                 let c2 = self.current().await?;
-                op(&*c2).await
+                c2.query(sql, params).await
             }
             Err(e) => Err(e),
         }
     }
-}
 
-fn looks_like_closed(err: &tokio_postgres::Error) -> bool {
-    let s = err.to_string().to_lowercase();
-    s.contains("closed") || s.contains("broken pipe") || s.contains("connection reset")
+    /// execute mit 1x Auto-Reconnect-Retry
+    async fn execute(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64, tokio_postgres::Error> {
+        let c1 = self.current().await?;
+        match c1.execute(sql, params).await {
+            Ok(n) => Ok(n),
+            Err(e) if Self::looks_like_closed(&e) => {
+                warn!(%e, "execute failed on closed connection; reconnecting once");
+                self.reconnect().await?;
+                let c2 = self.current().await?;
+                c2.execute(sql, params).await
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// query_opt mit 1x Auto-Reconnect-Retry
+    async fn query_opt(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>, tokio_postgres::Error> {
+        let mut rows = self.query(sql, params).await?;
+        Ok(rows.pop()) // erste Zeile (oder None)
+    }
 }
 
 /* ============================================================================================
@@ -149,104 +166,35 @@ struct AppState {
 }
 
 /* ============================================================================================
-   DB-Helfer (idempotent & robust)
+   DB-Helfer (ohne gecachte Prepared Statements → reconnection-safe)
    ============================================================================================ */
 
-async fn ensure_schema(db: &Client) -> Result<(), tokio_postgres::Error> {
-    let _ = db
-        .execute(
-            "CREATE TABLE IF NOT EXISTS analysis_history ( \
-                id SERIAL PRIMARY KEY, \
-                pdf_id INTEGER NOT NULL, \
-                pipeline_id UUID NOT NULL, \
-                state JSONB, \
-                pdf_url TEXT, \
-                timestamp TIMESTAMPTZ, \
-                status TEXT NOT NULL DEFAULT 'running', \
-                score DOUBLE PRECISION, \
-                label TEXT \
-            )",
-            &[],
-        )
-        .await;
+async fn ensure_schema_db(db: &Db) {
+    let _ = db.execute(
+        "CREATE TABLE IF NOT EXISTS analysis_history ( \
+            id SERIAL PRIMARY KEY, \
+            pdf_id INTEGER NOT NULL, \
+            pipeline_id UUID NOT NULL, \
+            state JSONB, \
+            pdf_url TEXT, \
+            timestamp TIMESTAMPTZ, \
+            status TEXT NOT NULL DEFAULT 'running', \
+            score DOUBLE PRECISION, \
+            label TEXT \
+        )",
+        &[],
+    ).await;
 
-    let _ = db
-        .execute(
-            "ALTER TABLE analysis_history \
-             ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'running'",
-            &[],
-        )
-        .await;
+    let _ = db.execute(
+        "ALTER TABLE analysis_history \
+         ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'running'",
+        &[],
+    ).await;
 
     info!("database schema ensured");
-    Ok(())
 }
 
-async fn mark_pending(
-    db: &Client,
-    pdf_id: i32,
-    pipeline_id: Uuid,
-    pdf_url: &str,
-    timestamp: DateTime<Utc>,
-) -> Result<i32, tokio_postgres::Error> {
-    let row = db
-        .query_one(
-            "INSERT INTO analysis_history (pdf_id, pipeline_id, pdf_url, timestamp, status) \
-             VALUES ($1,$2,$3,$4,'running') RETURNING id",
-            &[&pdf_id, &pipeline_id, &pdf_url, &timestamp],
-        )
-        .await?;
-    Ok(row.get::<_, i32>(0))
-}
-
-async fn insert_result(db: &Client, entry: &HistoryEntry) -> Result<i32, tokio_postgres::Error> {
-    if let Some(row) = db
-        .query_opt(
-            "SELECT id FROM analysis_history WHERE pdf_id=$1 AND status='running' \
-             ORDER BY timestamp DESC LIMIT 1",
-            &[&entry.pdf_id],
-        )
-        .await?
-    {
-        let id: i32 = row.get(0);
-        let _ = db
-            .execute(
-                "UPDATE analysis_history \
-                 SET state=$2, pdf_url=$3, timestamp=$4, status='completed', score=$5, label=$6 \
-                 WHERE id=$1",
-                &[
-                    &id,
-                    &entry.result,
-                    &entry.pdf_url,
-                    &entry.timestamp,
-                    &entry.score,
-                    &entry.result_label,
-                ],
-            )
-            .await?;
-        return Ok(id);
-    }
-
-    let row = db
-        .query_one(
-            "INSERT INTO analysis_history \
-             (pdf_id, pipeline_id, state, pdf_url, timestamp, status, score, label) \
-             VALUES ($1,$2,$3,$4,$5,'completed',$6,$7) RETURNING id",
-            &[
-                &entry.pdf_id,
-                &entry.pipeline_id,
-                &entry.result,
-                &entry.pdf_url,
-                &entry.timestamp,
-                &entry.score,
-                &entry.result_label,
-            ],
-        )
-        .await?;
-    Ok(row.get::<_, i32>(0))
-}
-
-fn row_to_entry(r: tokio_postgres::Row) -> HistoryEntry {
+fn row_to_entry(r: Row) -> HistoryEntry {
     HistoryEntry {
         id: r.get(0),
         pdf_id: r.get(1),
@@ -261,58 +209,149 @@ fn row_to_entry(r: tokio_postgres::Row) -> HistoryEntry {
     }
 }
 
-async fn latest(db: &Client, limit: i64) -> Result<Vec<HistoryEntry>, tokio_postgres::Error> {
-    let stmt = db
-        .prepare(
-            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
-             FROM analysis_history ORDER BY timestamp DESC LIMIT $1",
-        )
-        .await?;
-    let rows = db.query(&stmt, &[&limit]).await?;
-    Ok(rows.into_iter().map(row_to_entry).collect())
+async fn latest_db(db: &Db, limit: i64) -> Vec<HistoryEntry> {
+    match db.query(
+        "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
+         FROM analysis_history ORDER BY timestamp DESC LIMIT $1",
+        &[&limit],
+    ).await {
+        Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
+        Err(e) => {
+            error!(%e, "latest_db: query failed");
+            vec![]
+        }
+    }
 }
 
-async fn all_entries(db: &Client) -> Result<Vec<HistoryEntry>, tokio_postgres::Error> {
-    let stmt = db
-        .prepare(
-            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
-             FROM analysis_history ORDER BY timestamp DESC",
-        )
-        .await?;
-    let rows = db.query(&stmt, &[]).await?;
-    Ok(rows.into_iter().map(row_to_entry).collect())
+async fn all_entries_db(db: &Db) -> Vec<HistoryEntry> {
+    match db.query(
+        "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
+         FROM analysis_history ORDER BY timestamp DESC",
+        &[],
+    ).await {
+        Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
+        Err(e) => {
+            error!(%e, "all_entries_db: query failed");
+            vec![]
+        }
+    }
 }
 
-async fn latest_by_status(
-    db: &Client,
-    status: Option<String>,
-) -> Result<Vec<HistoryEntry>, tokio_postgres::Error> {
+async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntry> {
     if let Some(s) = status {
-        let stmt = db
-            .prepare(
-                "SELECT * FROM ( \
-                   SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, \
-                          pdf_url, timestamp, status, score, label AS result_label \
-                   FROM analysis_history WHERE status = $1 \
-                   ORDER BY pdf_id, timestamp DESC \
-                 ) AS t ORDER BY timestamp DESC",
-            )
-            .await?;
-        let rows = db.query(&stmt, &[&s]).await?;
-        Ok(rows.into_iter().map(row_to_entry).collect())
+        match db.query(
+            "SELECT * FROM ( \
+               SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, \
+                      pdf_url, timestamp, status, score, label AS result_label \
+               FROM analysis_history WHERE status = $1 \
+               ORDER BY pdf_id, timestamp DESC \
+             ) AS t ORDER BY timestamp DESC",
+            &[&s],
+        ).await {
+            Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
+            Err(e) => {
+                error!(%e, "latest_by_status_db(status): query failed");
+                vec![]
+            }
+        }
     } else {
-        let stmt = db
-            .prepare(
-                "SELECT * FROM ( \
-                   SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, \
-                          pdf_url, timestamp, status, score, label AS result_label \
-                   FROM analysis_history \
-                   ORDER BY pdf_id, timestamp DESC \
-                 ) AS t ORDER BY timestamp DESC",
-            )
-            .await?;
-        let rows = db.query(&stmt, &[]).await?;
-        Ok(rows.into_iter().map(row_to_entry).collect())
+        match db.query(
+            "SELECT * FROM ( \
+               SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, \
+                      pdf_url, timestamp, status, score, label AS result_label \
+               FROM analysis_history \
+               ORDER BY pdf_id, timestamp DESC \
+             ) AS t ORDER BY timestamp DESC",
+            &[],
+        ).await {
+            Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
+            Err(e) => {
+                error!(%e, "latest_by_status_db(all): query failed");
+                vec![]
+            }
+        }
+    }
+}
+
+async fn mark_pending_db(
+    db: &Db,
+    pdf_id: i32,
+    pipeline_id: Uuid,
+    pdf_url: &str,
+    timestamp: DateTime<Utc>,
+) -> i32 {
+    match db.query_opt(
+        "INSERT INTO analysis_history (pdf_id, pipeline_id, pdf_url, timestamp, status) \
+         VALUES ($1,$2,$3,$4,'running') RETURNING id",
+        &[&pdf_id, &pipeline_id, &pdf_url, &timestamp],
+    ).await {
+        Ok(Some(row)) => row.get(0),
+        Ok(None) => {
+            error!("mark_pending_db: no row returned");
+            0
+        }
+        Err(e) => {
+            error!(%e, pdf_id, "failed to insert running row");
+            0
+        }
+    }
+}
+
+async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
+    match db.query_opt(
+        "SELECT id FROM analysis_history WHERE pdf_id=$1 AND status='running' \
+         ORDER BY timestamp DESC LIMIT 1",
+        &[&entry.pdf_id],
+    ).await {
+        Ok(Some(row)) => {
+            let id: i32 = row.get(0);
+            if let Err(e) = db.execute(
+                "UPDATE analysis_history \
+                 SET state=$2, pdf_url=$3, timestamp=$4, status='completed', score=$5, label=$6 \
+                 WHERE id=$1",
+                &[
+                    &id,
+                    &entry.result,
+                    &entry.pdf_url,
+                    &entry.timestamp,
+                    &entry.score,
+                    &entry.result_label,
+                ],
+            ).await {
+                error!(%e, id, "failed to update running row to completed");
+            }
+            id
+        }
+        Ok(None) => {
+            match db.query_opt(
+                "INSERT INTO analysis_history \
+                 (pdf_id, pipeline_id, state, pdf_url, timestamp, status, score, label) \
+                 VALUES ($1,$2,$3,$4,$5,'completed',$6,$7) RETURNING id",
+                &[
+                    &entry.pdf_id,
+                    &entry.pipeline_id,
+                    &entry.result,
+                    &entry.pdf_url,
+                    &entry.timestamp,
+                    &entry.score,
+                    &entry.result_label,
+                ],
+            ).await {
+                Ok(Some(row)) => row.get(0),
+                Ok(None) => {
+                    error!("insert_result_db: no row returned");
+                    0
+                }
+                Err(e) => {
+                    error!(%e, pdf_id = entry.pdf_id, "failed to insert completed row");
+                    0
+                }
+            }
+        }
+        Err(e) => {
+            error!(%e, pdf_id = entry.pdf_id, "failed to lookup running row");
+            0
+        }
     }
 }
 
@@ -324,18 +363,9 @@ async fn classifications(
     state: web::Data<AppState>,
     query: web::Query<HashMap<String, String>>,
 ) -> impl Responder {
-    let limit = query
-        .get("limit")
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(50);
-
-    match state.db.with_client(|c| latest(c, limit)).await {
-        Ok(items) => HttpResponse::Ok().json(items),
-        Err(e) => {
-            error!(%e, "classifications: db error");
-            HttpResponse::Ok().json(Vec::<HistoryEntry>::new())
-        }
-    }
+    let limit = query.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(50);
+    let items = latest_db(&state.db, limit).await;
+    HttpResponse::Ok().json(items)
 }
 
 async fn analyses(
@@ -343,29 +373,18 @@ async fn analyses(
     query: web::Query<HashMap<String, String>>,
 ) -> impl Responder {
     let status = query.get("status").cloned();
-
-    match state.db.with_client(|c| latest_by_status(c, status)).await {
-        Ok(items) => HttpResponse::Ok().json(items),
-        Err(e) => {
-            error!(%e, "analyses: db error");
-            HttpResponse::Ok().json(Vec::<HistoryEntry>::new())
-        }
-    }
+    let items = latest_by_status_db(&state.db, status).await;
+    HttpResponse::Ok().json(items)
 }
 
 async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Responder {
     let pdf_id = path.into_inner();
-    let fut = |c: &Client| async move {
-        c.query_opt(
-            "SELECT state FROM analysis_history \
-             WHERE pdf_id=$1 AND status='completed' \
-             ORDER BY timestamp DESC LIMIT 1",
-            &[&pdf_id],
-        )
-            .await
-    };
-
-    match state.db.with_client(fut).await {
+    match state.db.query_opt(
+        "SELECT state FROM analysis_history \
+         WHERE pdf_id=$1 AND status='completed' \
+         ORDER BY timestamp DESC LIMIT 1",
+        &[&pdf_id],
+    ).await {
         Ok(Some(r)) => {
             let value: serde_json::Value = r.get(0);
             HttpResponse::Ok().json(value)
@@ -399,20 +418,12 @@ impl actix::Actor for WsConn {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         let dbwrap = self.db.clone();
-        async move {
-            match dbwrap.with_client(|c| all_entries(c)).await {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(%e, "ws init load failed");
-                    Vec::new()
-                }
-            }
-        }
+        async move { all_entries_db(&dbwrap).await }
             .into_actor(self)
             .map(|entries, _act, ctx| {
-                if let Ok(text) =
-                    serde_json::to_string(&serde_json::json!({ "type": "history", "data": entries }))
-                {
+                if let Ok(text) = serde_json::to_string(
+                    &serde_json::json!({"type":"history","data":entries})
+                ) {
                     ctx.text(text);
                 }
             })
@@ -423,15 +434,11 @@ impl actix::Actor for WsConn {
 }
 
 impl actix::StreamHandler<Result<HistoryEntry, BroadcastStreamRecvError>> for WsConn {
-    fn handle(
-        &mut self,
-        item: Result<HistoryEntry, BroadcastStreamRecvError>,
-        ctx: &mut Self::Context,
-    ) {
+    fn handle(&mut self, item: Result<HistoryEntry, BroadcastStreamRecvError>, ctx: &mut Self::Context) {
         if let Ok(entry) = item {
-            if let Ok(text) =
-                serde_json::to_string(&serde_json::json!({ "type": "update", "data": entry }))
-            {
+            if let Ok(text) = serde_json::to_string(
+                &serde_json::json!({"type":"update","data":entry})
+            ) {
                 ctx.text(text);
             }
         }
@@ -448,15 +455,8 @@ impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
     }
 }
 
-async fn ws_index(
-    req: HttpRequest,
-    stream: Payload,
-    state: web::Data<AppState>,
-) -> Result<HttpResponse, Error> {
-    let ws = WsConn {
-        db: state.db.clone(),
-        rx: state.tx.subscribe(),
-    };
+async fn ws_index(req: HttpRequest, stream: Payload, state: web::Data<AppState>) -> Result<HttpResponse, Error> {
+    let ws = WsConn { db: state.db.clone(), rx: state.tx.subscribe() };
     ws::start(ws, &req, stream)
 }
 
@@ -478,8 +478,7 @@ async fn start_kafka(
     let consumer: StreamConsumer = match ClientConfig::new()
         .set("group.id", "history-service")
         .set("bootstrap.servers", &message_broker_url)
-        .create()
-    {
+        .create() {
         Ok(c) => c,
         Err(e) => {
             error!(%e, "failed to create kafka consumer");
@@ -505,14 +504,7 @@ async fn start_kafka(
                                     let ts = Utc::now();
                                     let pdf_url = format!("{}/pdf/{}", pdf_base, data.pdf_id);
 
-                                    // DB: running markieren
-                                    let id = match db.with_client(|c| mark_pending(c, data.pdf_id, data.pipeline_id, &pdf_url, ts)).await {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            error!(%e, "failed to insert running row");
-                                            0
-                                        }
-                                    };
+                                    let id = mark_pending_db(&db, data.pdf_id, data.pipeline_id, &pdf_url, ts).await;
 
                                     let entry = HistoryEntry {
                                         id,
@@ -535,6 +527,7 @@ async fn start_kafka(
                             match serde_json::from_str::<PipelineRunResult>(payload) {
                                 Ok(data) => {
                                     let value = serde_json::to_value(&data).unwrap_or_default();
+
                                     let mut entry = HistoryEntry {
                                         id: 0,
                                         pdf_id: data.pdf_id,
@@ -548,15 +541,9 @@ async fn start_kafka(
                                         result_label: None,
                                     };
 
-                                    let id = match db.with_client(|c| insert_result(c, &entry)).await {
-                                        Ok(id) => id,
-                                        Err(e) => {
-                                            error!(%e, "failed to upsert completed row");
-                                            0
-                                        }
-                                    };
-
+                                    let id = insert_result_db(&db, &entry).await;
                                     entry.id = id;
+
                                     let _ = tx.send(entry);
                                 }
                                 Err(e) => error!(%e, "failed to parse pipeline-result payload"),
@@ -590,17 +577,12 @@ async fn main() -> std::io::Result<()> {
     // NoTLS + Auto-Reconnect
     let db = Db::new(settings.database_url.clone()).await;
 
-    // Schema sicherstellen (über Wrapper; tolerant bei Drops)
-    let _ = db.with_client(|c| ensure_schema(c)).await;
+    // Schema sicherstellen
+    ensure_schema_db(&db).await;
 
     let (tx, _) = tokio::sync::broadcast::channel(100);
-    let pdf_base =
-        std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
-    let state = web::Data::new(AppState {
-        db: db.clone(),
-        tx: tx.clone(),
-        pdf_base: pdf_base.clone(),
-    });
+    let pdf_base = std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
+    let state = web::Data::new(AppState { db: db.clone(), tx: tx.clone(), pdf_base: pdf_base.clone() });
 
     // Kafka-Consumer
     {
@@ -608,14 +590,10 @@ async fn main() -> std::io::Result<()> {
         let tx_for_kafka = tx.clone();
         let pdf_base_for_kafka = pdf_base.clone();
         let broker_url = settings.message_broker_url.clone();
-        actix_web::rt::spawn(start_kafka(
-            db_for_kafka,
-            tx_for_kafka,
-            broker_url,
-            pdf_base_for_kafka,
-        ));
+        actix_web::rt::spawn(start_kafka(db_for_kafka, tx_for_kafka, broker_url, pdf_base_for_kafka));
     }
 
+    let port: u16 = std::env::var("SERVER_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8090);
     HttpServer::new(move || {
         App::new()
             .wrap(Cors::permissive())
@@ -626,7 +604,7 @@ async fn main() -> std::io::Result<()> {
             .route("/", web::get().to(ws_index))
             .route("/health", web::get().to(health))
     })
-        .bind(("0.0.0.0", std::env::var("SERVER_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8090)))?
+        .bind(("0.0.0.0", port))?
         .run()
         .await
 }
