@@ -1,3 +1,4 @@
+// src/hooks/useRunDetails.ts
 import * as React from "react";
 
 /* ============================== Types ============================== */
@@ -8,7 +9,7 @@ export interface Attempt {
   id?: number | string;
   attempt_no?: number;
   candidate_key?: string;
-  candidate_value?: any; // kann string oder {value, source:{page}} sein
+  candidate_value?: any; // string | { value: string; page?: number; source?: { page?: number } }
   candidate_confidence?: number | null;
   source?: string | null;
   is_final?: boolean;
@@ -79,14 +80,8 @@ export function useRunDetails(
 
             const text = await res.text();
             if (!text || text.trim().startsWith("<")) return undefined;
-            try {
-              return JSON.parse(text);
-            } catch {
-              return undefined;
-            }
-          } catch {
-            return undefined;
-          }
+            try { return JSON.parse(text); } catch { return undefined; }
+          } catch { return undefined; }
         };
 
         // pdfId herleiten: opts → localStorage
@@ -103,9 +98,7 @@ export function useRunDetails(
                           ? parsed.run.pdf_id
                           : undefined;
             }
-          } catch {
-            /* ignore */
-          }
+          } catch { /* ignore */ }
         }
 
         // 1) bevorzugt: /hist/results/{pdf_id}
@@ -124,7 +117,7 @@ export function useRunDetails(
           }
         }
 
-        // 3) als letzter Versuch: /analyses/{id}/detail (falls dein Backend das liefert)
+        // 3) letzter Versuch: /analyses/{id}/detail (falls vorhanden)
         if (!payload && runId) {
           payload = await tryFetchJson(`${HIST}/analyses/${encodeURIComponent(runId)}/detail`);
         }
@@ -137,15 +130,11 @@ export function useRunDetails(
               const parsed = JSON.parse(raw);
               payload = parsed?.run ?? parsed;
             }
-          } catch {
-            /* ignore */
-          }
+          } catch { /* ignore */ }
         }
 
         if (!payload) {
-          throw new Error(
-              "Keine Run-Daten als JSON gefunden. (Die angefragten Endpunkte liefern HTML oder 4xx.)"
-          );
+          throw new Error("Keine Run-Daten als JSON gefunden. (Die angefragten Endpunkte liefern HTML oder 4xx.)");
         }
 
         const normalized = toRunDetail(payload);
@@ -160,9 +149,7 @@ export function useRunDetails(
                 JSON.stringify({ pdfId: normalized.run.pdf_id, run: normalized.run })
             );
           }
-        } catch {
-          /* ignore */
-        }
+        } catch { /* ignore */ }
 
         setLoading(false);
       } catch (e: any) {
@@ -171,9 +158,7 @@ export function useRunDetails(
         setLoading(false);
       }
     })();
-    return () => {
-      alive = false;
-    };
+    return () => { alive = false; };
   }, [runId, opts?.pdfId, opts?.storageKey]);
 
   // Summe der Scores (für die Seitenkarte)
@@ -260,7 +245,23 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
   for (const r of records) {
     attemptNo++;
     const parsed = tryParseOpenAiRaw(r?.openai_raw);
-    const page = parsed?.source?.page ?? r?.source?.page ?? undefined;
+
+    // WICHTIG: Runner-Quelle hat Vorrang (Batch-Hint aus r.source.page), erst dann openai_raw
+    const runnerPage =
+        r?.source && typeof r.source.page === "number" && r.source.page > 0
+            ? r.source.page
+            : undefined;
+    const rawPage =
+        parsed?.source && typeof parsed.source.page === "number" && parsed.source.page > 0
+            ? parsed.source.page
+            : undefined;
+    const page = runnerPage ?? rawPage;
+
+    const quote =
+        (r?.source && r.source.quote) ||
+        (parsed?.source && parsed.source.quote) ||
+        r?.prompt_text ||
+        "(ohne Kontext)";
 
     const value = (typeof parsed?.value !== "undefined" ? parsed.value : r?.value) ?? null;
     const displayVal = value == null ? "" : String(value);
@@ -269,9 +270,8 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
       attempts.push({
         id: r?.id ?? `${finalKey}:${attemptNo}`,
         attempt_no: attemptNo,
-        candidate_key:
-            parsed?.source?.quote ?? r?.source?.quote ?? r?.prompt_text ?? "(ohne Kontext)",
-        candidate_value: displayVal,
+        candidate_key: quote,
+        candidate_value: page != null ? { value: displayVal, page, source: { page } } : displayVal,
         candidate_confidence: null,
         source: r?.route ?? "llm",
         is_final: false,
@@ -282,8 +282,7 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
     const normKey = normStrategy(displayVal);
     const quality = qualityOf(displayVal, finalKey);
 
-    const b =
-        buckets.get(normKey) ?? { normKey, prettyValues: [], votes: 0, quality: 0 };
+    const b = buckets.get(normKey) ?? { normKey, prettyValues: [], votes: 0, quality: 0 };
     b.prettyValues.push(displayVal);
     b.votes += 1;
     b.quality = Math.max(b.quality, quality);
@@ -292,9 +291,10 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
     attempts.push({
       id: r?.id ?? `${finalKey}:${attemptNo}`,
       attempt_no: attemptNo,
-      candidate_key:
-          parsed?.source?.quote ?? r?.source?.quote ?? r?.prompt_text ?? "(ohne Kontext)",
-      candidate_value: page ? { value: displayVal, source: { page } } : displayVal,
+      candidate_key: quote,
+      // Seite doppelt ablegen: flach unter .page und nochmals unter .source.page,
+      // damit die RunDetailsPage beide Lesarten unterstützt.
+      candidate_value: page != null ? { value: displayVal, page, source: { page } } : { value: displayVal },
       candidate_confidence: null,
       source: r?.route ?? "llm",
       is_final: false,
@@ -312,9 +312,7 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
 
   const totalVotes = valid.reduce((acc, b) => acc + b.votes, 0);
   const base = (top.votes + 0.5) / (totalVotes + 1);
-  const margin = second
-      ? Math.max(0, (top.votes - second.votes) / Math.max(1, totalVotes))
-      : 1;
+  const margin = second ? Math.max(0, (top.votes - second.votes) / Math.max(1, totalVotes)) : 1;
   const conf = clamp01(base * 0.8 + margin * 0.2) * 0.8 + clamp01(top.quality) * 0.2;
 
   const pretty = (() => {
@@ -325,11 +323,10 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0][0];
   })();
 
+  // markiere Final-Attempt(s)
   for (const a of attempts) {
     const rawVal =
-        typeof a.candidate_value === "object" &&
-        a.candidate_value &&
-        "value" in a.candidate_value
+        typeof a.candidate_value === "object" && a.candidate_value && "value" in a.candidate_value
             ? (a.candidate_value as any).value
             : a.candidate_value;
     const isWin =
@@ -351,9 +348,7 @@ function consolidateDecisionGroup(items: any[], keySlug: string) {
   };
 
   const attempts: Attempt[] = [];
-  let t = 0,
-      f = 0,
-      idx = 0;
+  let t = 0, f = 0, idx = 0;
 
   for (const r of items) {
     idx++;
@@ -370,7 +365,7 @@ function consolidateDecisionGroup(items: any[], keySlug: string) {
       candidate_value: typeof b === "boolean" ? b : String(v ?? "—"),
       candidate_confidence: null,
       source: r?.route ?? "llm",
-      is_final: false,
+      is_final: false
     });
   }
 
@@ -540,9 +535,7 @@ function tryParseOpenAiRaw(raw: any): any | undefined {
   try {
     const obj = JSON.parse(raw);
     if (typeof obj?.value !== "undefined" || typeof obj?.source !== "undefined") return obj;
-  } catch {
-    // ignore
-  }
+  } catch { /* ignore */ }
   return undefined;
 }
 
