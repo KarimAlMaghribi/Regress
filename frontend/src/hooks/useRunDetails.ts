@@ -1,475 +1,505 @@
-import { useEffect, useMemo, useState } from "react";
+// src/hooks/useRunDetails.ts
+import * as React from "react";
 
-declare global { interface Window { __ENV__?: any } }
+/* ============================== Types ============================== */
 
-/* =======================
- * Types
- * ======================= */
-export type RunHeader = {
-  id: string;
-  status: "queued" | "running" | "completed" | "failed" | "timeout" | "canceled" | "finalized";
-  pipeline_id: string;
-  pdf_id: number;
-  overall_score: number | null;
-  final_extraction: Record<string, any> | null;
-  final_scores: Record<string, number> | null;
-  final_decisions: Record<string, boolean> | null;
-  started_at?: string | null;
-  finished_at?: string | null;
-  error?: string | null;
-};
+export type StepType = "Extraction" | "Decision" | "Score";
 
-export type StepDefinition = {
-  id?: number;
-  prompt_id?: number;
-  prompt_type?: "ExtractionPrompt" | "ScoringPrompt" | "DecisionPrompt" | "FinalPrompt" | "MetaPrompt";
-  json_key?: string | null;
-  weight?: number | null;
-};
-
-export type Attempt = {
-  id: number;
-  attempt_no: number;
-  candidate_key?: string | null;            // e.g. quote
-  candidate_value: any;                     // raw value or {value, source, ...}
+export interface Attempt {
+  id?: number | string;
+  attempt_no?: number;
+  candidate_key?: string;
+  candidate_value?: any; // kann string oder {value, source:{page}} sein
   candidate_confidence?: number | null;
-  is_final: boolean;
-  source?: string | null;                   // 'llm'|'regex'|'ocr'|'rule'
-  batch_no?: number | null;
-  created_at?: string | null;
-};
+  source?: string | null;
+  is_final?: boolean;
+}
 
-export type RunStep = {
+export interface RunStep {
   id: number;
-  order_index: number;
-  step_type: "Extraction" | "Score" | "Decision" | "Final" | "Meta";
-  status: "queued" | "running" | "finalized" | "failed" | "timeout" | "canceled";
+  step_type: StepType;
+  status?: "queued" | "running" | "finalized" | "completed" | "failed" | "timeout" | "canceled";
+  order_index?: number;
+  definition?: { json_key?: string } | null;
+
   final_key?: string | null;
-  final_confidence?: number | null;         // 0..1
   final_value?: any;
-  definition?: StepDefinition | null;
-  attempts?: Attempt[] | null;
+  final_confidence?: number | null;
   started_at?: string | null;
   finished_at?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
 
-export type RunDetail = {
-  run: RunHeader;
+  attempts?: Attempt[];
+}
+
+export interface RunCore {
+  id: string;
+  pipeline_id?: string | null;
+  pdf_id?: number | null;
+  status?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+  overall_score?: number | null;
+  error?: string | null;
+
+  final_extraction?: Record<string, any>;
+  final_decisions?: Record<string, boolean>;
+  final_scores?: Record<string, number>;
+}
+
+export interface RunDetail {
+  run: RunCore;
   steps: RunStep[];
-};
-
-/* =======================
- * Helpers / config
- * ======================= */
-function getHistoryBase(): string {
-  const w = (window as any);
-  return w.__ENV__?.HISTORY_URL || (import.meta as any)?.env?.VITE_HISTORY_URL || "/hist";
+  raw?: any; // Rohdaten für Debug
 }
 
-async function fetchJSON<T = any>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(url, init);
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    const err: any = new Error(`HTTP ${res.status} for ${url}: ${txt || res.statusText}`);
-    err.status = res.status;
-    err.body = txt;
-    throw err;
-  }
-  return res.json() as Promise<T>;
-}
-
-const Q_MAX = 2.3; // Heuristik-Obergrenze für Qualitätsscore
-
-const slug = (s?: string, fb?: string) =>
-    (s?.toLowerCase().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "")) || fb || "";
-
-const normalizeVal = (v: any): string | null => {
-  if (v == null) return null;
-  const s = String(v).trim().toLowerCase();
-  if (!s) return null;
-  return s.replace(/\s+/g, " ").replace(/[^\p{L}\p{N}\s]/gu, "");
-};
-
-const isPlaceholder = (s: string) => {
-  const t = s.toLowerCase();
-  return (
-      t === "nicht angegeben" ||
-      t === "nicht vorhanden" ||
-      t === "schadennummer" ||
-      t === "versicherungsnehmer name"
-  );
-};
-
-const qualityScore = (r: any, promptText?: string) => {
-  let q = 0;
-  const v = String(r?.value ?? "").trim();
-  const quote = String(r?.source?.quote ?? "").toLowerCase();
-  const bbox = r?.source?.bbox;
-  const page = r?.source?.page;
-
-  if (v && !isPlaceholder(v)) q += 1.0;
-  const digits = v.replace(/\D/g, "");
-  if (digits.length >= 8) q += 0.4;                       // plausibel für IDs/Nummern
-  if (/[a-zA-Zäöüß]+\s+[a-zA-Zäöüß-]+/.test(v)) q += 0.3; // plausibel für Personennamen
-  if (Array.isArray(bbox) && bbox.some((n: number) => Number(n) > 0)) q += 0.2;
-  if (typeof page === "number" && page > 0) q += 0.1;
-  if (quote.includes("schaden") || quote.includes("schadennummer") || quote.includes("versicherungsnehmer")) q += 0.3;
-  return q; // 0..~2.3
-};
-
-const combineConfidence = (votes: number, total: number, qBest: number) => {
-  const pVotes = (votes + 1) / (total + 2);               // Laplace
-  const pQual  = Math.min(1, Math.max(0, qBest / Q_MAX)); // 0..1
-  const alpha  = Math.min(0.85, 0.55 + 0.06 * total);     // 0.61..0.85
-  return +(alpha * pVotes + (1 - alpha) * pQual).toFixed(4);
-};
-
-/* =======================
- * Mappers / API
- * ======================= */
-function mapRunHeader(raw: any): RunHeader {
-  const id = String(raw?.run_id ?? raw?.id ?? raw?.runId ?? raw?.key ?? "unknown");
-  const pipeline_id = String(raw?.pipeline_id ?? raw?.pipelineId ?? "unknown");
-  const pdf_id = Number(raw?.pdf_id ?? raw?.pdfId ?? raw?.pdf ?? 0) || 0;
-
-  const status = (raw?.status as any) ?? "completed";
-
-  return {
-    id,
-    status,
-    pipeline_id,
-    pdf_id,
-    final_extraction: (raw?.final_extraction ?? raw?.extracted) ?? null,
-    final_scores: (raw?.final_scores ?? raw?.scores) ?? null,
-    final_decisions: (raw?.final_decisions ?? raw?.decisions) ?? null,
-    overall_score:
-        typeof raw?.overall_score === "number"
-            ? raw.overall_score
-            : typeof raw?.overallScore === "number"
-                ? raw.overallScore
-                : null,
-    started_at: raw?.started_at ?? raw?.startedAt ?? null,
-    finished_at: raw?.finished_at ?? raw?.finishedAt ?? null,
-    error: raw?.error ?? null,
-  };
-}
-
-async function fetchDetailAggregated(runId: string): Promise<RunDetail> {
-  const base = getHistoryBase();
-  const url = `${base}/analyses/${encodeURIComponent(runId)}/detail`;
-  const raw = await fetchJSON<any>(url);
-  const runRaw = raw?.run ?? raw;
-  const stepsRaw = raw?.steps ?? raw?.run_steps ?? [];
-  const run = mapRunHeader(runRaw);
-
-  const steps: RunStep[] = Array.isArray(stepsRaw)
-      ? stepsRaw.map((s: any, idx: number) => ({
-        id: Number(s?.id ?? idx + 1),
-        order_index: Number(s?.order_index ?? idx),
-        step_type: s?.step_type ?? "Meta",
-        status: s?.status ?? "finalized",
-        final_key: s?.final_key ?? null,
-        final_confidence: s?.final_confidence ?? null,
-        final_value: s?.final_value,
-        definition: s?.definition ?? null,
-        attempts: s?.attempts ?? null,
-        started_at: s?.started_at ?? null,
-        finished_at: s?.finished_at ?? null,
-        created_at: s?.created_at ?? null,
-        updated_at: s?.updated_at ?? null,
-      }))
-      : [];
-
-  return { run, steps };
-}
-
-async function fetchDetailViaFallback(runId: string): Promise<RunDetail> {
-  const base = getHistoryBase();
-
-  try {
-    const raw = await fetchJSON<any>(`${base}/analyses/${encodeURIComponent(runId)}`);
-    const run = mapRunHeader(raw);
-    return { run, steps: [] };
-  } catch {}
-
-  try {
-    const list = await fetchJSON<any[]>(`${base}/analyses?run_id=${encodeURIComponent(runId)}`);
-    const first = Array.isArray(list) && list.length > 0 ? list[0] : null;
-    if (first) {
-      const run = mapRunHeader(first);
-      return { run, steps: [] };
-    }
-  } catch {}
-
-  const err: any = new Error("Run-Detail nicht gefunden");
-  err.status = 404;
-  throw err;
-}
-
-async function fetchFromResults(pdfId: number): Promise<RunDetail> {
-  const base = getHistoryBase();
-  const raw: any = await fetchJSON(`${base}/results/${encodeURIComponent(pdfId)}`);
-
-  const final_extraction: Record<string, any> = {};
-  const steps: RunStep[] = [];
-  const logList: any[] = Array.isArray(raw.log) ? raw.log : [];
-  let order = 0;
-
-  for (const l of logList) {
-    const pt = String(l?.prompt_type || "");
-    const promptText = l?.result?.prompt_text;
-    const key =
-        l?.decision_key ||
-        slug(promptText, l?.prompt_id != null ? `prompt_${l.prompt_id}` : undefined) ||
-        (l?.prompt_id != null ? `prompt_${l.prompt_id}` : `step_${order + 1}`);
-
-    if (pt === "ExtractionPrompt") {
-      const results: any[] = Array.isArray(l?.result?.results) ? l.result.results : [];
-
-      // gruppieren nach normalisiertem Wert
-      const groups = new Map<string, { norm: string; samples: any[]; best?: any; bestScore: number }>();
-      for (const r of results) {
-        const norm = normalizeVal(r?.value);
-        if (!norm) continue;
-        const g = groups.get(norm) || { norm, samples: [], bestScore: -Infinity };
-        g.samples.push(r);
-        const sc = qualityScore(r, promptText);
-        if (sc > g.bestScore) { g.bestScore = sc; g.best = r; }
-        groups.set(norm, g);
-      }
-
-      let chosenValue: any = null;
-      let chosenSource: any = null;
-      let chosenConf: number | null = null;
-
-      if (groups.size > 0) {
-        const arr = Array.from(groups.values()).map(g => ({
-          ...g,
-          votes: g.samples.length,
-          total: results.length,
-          scoreSum: g.samples.reduce((s, r) => s + qualityScore(r, promptText), 0),
-        }));
-        arr.sort((a, b) => b.votes - a.votes || b.scoreSum - a.scoreSum);
-        const top = arr[0];
-        chosenValue  = top.best?.value ?? top.samples[0]?.value ?? null;
-        chosenSource = top.best?.source ?? top.samples[0]?.source ?? null;
-        chosenConf   = combineConfidence(top.votes, top.total, top.bestScore);
-      } else if (results.length) {
-        const r0 = results.find(r => r?.value != null) ?? results[0];
-        chosenValue = r0?.value ?? null;
-        chosenSource = r0?.source ?? null;
-        chosenConf = null;
-      }
-
-      // konsolidiertes Feld für Übersicht (mit Meta)
-      final_extraction[key] = {
-        value: chosenValue,
-        page: chosenSource?.page ?? null,
-        bbox: chosenSource?.bbox ?? null,
-        quote: chosenSource?.quote ?? null,
-      };
-
-      // Step-Card: gleicher Finalwert + Confidence
-      steps.push({
-        id: ++order,
-        order_index: l?.seq_no ?? order,
-        step_type: "Extraction",
-        status: "finalized",
-        final_key: key,
-        final_confidence: chosenConf,
-        final_value: chosenValue,
-        definition: { prompt_id: l?.prompt_id, prompt_type: "ExtractionPrompt", json_key: null, weight: null },
-        attempts: (Array.isArray(l?.result?.results) ? l.result.results : []).slice(0, 8).map((r: any, i: number) => ({
-          id: i + 1,
-          attempt_no: i + 1,
-          candidate_key: r?.source?.quote ?? null,
-          candidate_value: { value: r?.value, source: r?.source ?? null },
-          candidate_confidence: null,
-          is_final: normalizeVal(r?.value) === normalizeVal(chosenValue),
-          source: "llm",
-          batch_no: Array.isArray(l?.result?.batches) ? 1 : null,
-          created_at: null,
-        })),
-        created_at: null,
-        updated_at: null,
-      });
-    } else if (pt === "ScoringPrompt") {
-      const consolidated = l?.result?.consolidated;
-      const scoresArr: any[] = Array.isArray(l?.result?.scores) ? l.result.scores : [];
-      const finalVal = consolidated?.result ?? (scoresArr[0]?.result ?? null);
-
-      steps.push({
-        id: ++order,
-        order_index: l?.seq_no ?? order,
-        step_type: "Score",
-        status: "finalized",
-        final_key: key,
-        final_confidence: null,
-        final_value: finalVal,
-        definition: { prompt_id: l?.prompt_id, prompt_type: "ScoringPrompt", json_key: null, weight: null },
-        attempts: scoresArr.map((r: any, i: number) => ({
-          id: i + 1, attempt_no: i + 1,
-          candidate_key: r?.source?.quote ?? null,
-          candidate_value: { result: r?.result, explanation: r?.explanation, source: r?.source ?? null },
-          candidate_confidence: null, is_final: i === 0, source: "llm",
-          batch_no: Array.isArray(l?.result?.batches) ? 1 : null, created_at: null
-        })),
-        created_at: null, updated_at: null
-      });
-    } else if (pt === "DecisionPrompt") {
-      steps.push({
-        id: ++order,
-        order_index: l?.seq_no ?? order,
-        step_type: "Decision",
-        status: "finalized",
-        final_key: key,
-        final_confidence: null,
-        final_value: l?.result?.consolidated?.result ?? null,
-        definition: { prompt_id: l?.prompt_id, prompt_type: "DecisionPrompt", json_key: l?.decision_key ?? null, weight: null },
-        attempts: null,
-        created_at: null, updated_at: null
-      });
-    }
-  }
-
-  // final_scores aus raw.scoring (booleans → 1/0)
-  const final_scores: Record<string, number> = {};
-  const scList: any[] = Array.isArray(raw.scoring) ? raw.scoring : [];
-  scList.forEach((s, i) => {
-    const k = slug(s?.prompt_text, s?.prompt_id != null ? `score_${s.prompt_id}` : `score_${i + 1}`);
-    let v: number;
-    if (typeof s?.result === "boolean") v = s.result ? 1 : 0;
-    else if (typeof s?.result === "number") v = s.result;
-    else if (typeof s?.consolidated?.result === "boolean") v = s.consolidated.result ? 1 : 0;
-    else if (typeof s?.consolidated?.result === "number") v = s.consolidated.result;
-    else v = 0;
-    final_scores[k] = v;
-  });
-
-  // final_decisions aus raw.decision
-  const final_decisions: Record<string, boolean> = {};
-  (Array.isArray(raw.decision) ? raw.decision : []).forEach((d, i) => {
-    const k = d?.decision_key || slug(d?.prompt_text, d?.prompt_id != null ? `decision_${d.prompt_id}` : `decision_${i + 1}`);
-    const v =
-        typeof d?.result === "boolean" ? d.result :
-            (typeof d?.consolidated?.result === "boolean" ? d.consolidated.result : false);
-    final_decisions[k] = v;
-  });
-
-  const run: RunHeader = {
-    id: String(raw.run_id ?? `pdf-${pdfId}`),
-    status: "completed",
-    pipeline_id: String(raw.pipeline_id ?? "unknown"),
-    pdf_id: Number(raw.pdf_id ?? pdfId),
-    overall_score: typeof raw.overall_score === "number" ? raw.overall_score : null,
-    final_extraction: Object.keys(final_extraction).length ? final_extraction : null,
-    final_scores:     Object.keys(final_scores).length     ? final_scores     : null,
-    final_decisions:  Object.keys(final_decisions).length  ? final_decisions  : null,
-    started_at: raw.started_at ?? null,
-    finished_at: raw.finished_at ?? null,
-    error: raw.error ?? null,
-  };
-
-  return { run, steps };
-}
-
-/* =======================
- * Hook
- * ======================= */
 export function useRunDetails(
-    runId?: string,
+    runId?: string | null,
     opts?: { pdfId?: number; storageKey?: string }
 ) {
-  const [data, setData] = useState<RunDetail | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [err, setErr] = useState<Error | null>(null);
+  const [data, setData] = React.useState<RunDetail | undefined>();
+  const [loading, setLoading] = React.useState<boolean>(true);
+  const [error, setError] = React.useState<Error | undefined>();
 
-  // pdfId robust herleiten, falls nicht explizit übergeben
-  const derivePdfId = (): number | undefined => {
-    if (typeof opts?.pdfId === "number" && Number.isFinite(opts.pdfId)) return opts.pdfId;
-    if (!opts?.storageKey) return undefined;
-    try {
-      const raw = localStorage.getItem(opts.storageKey);
-      if (!raw) return undefined;
-      const parsed = JSON.parse(raw);
-      if (typeof parsed?.pdfId === "number") return parsed.pdfId;
-      if (typeof parsed?.run?.pdf_id === "number") return parsed.run.pdf_id;
-    } catch {}
-    return undefined;
-  };
+  const fetchOnce = React.useRef(false);
 
-  useEffect(() => {
-    let cancel = false;
-    const candidatePdfId = derivePdfId();
-
-    if (!runId && candidatePdfId == null) {
-      setData(null);
-      setErr(new Error("Es wurde weder run_id noch pdf_id übergeben."));
-      return;
-    }
-
-    setLoading(true);
-    setErr(null);
+  React.useEffect(() => {
+    let alive = true;
+    if (fetchOnce.current) return;
+    fetchOnce.current = true;
 
     (async () => {
+      setLoading(true);
       try {
-        let detail: RunDetail | null = null;
+        // 1) Quelle: API (best effort)
+        let payload: any | undefined;
 
-        // 1) Bevorzugt konsolidierten Endpoint, wenn pdfId bekannt
-        if (candidatePdfId != null) {
-          try {
-            detail = await fetchFromResults(candidatePdfId);
-          } catch {}
+        const tryFetch = async (url: string) => {
+          const res = await fetch(url, { headers: { "accept": "application/json" } });
+          if (res.ok) return await res.json();
+          return undefined;
+        };
+
+        if (runId) {
+          payload =
+              (await tryFetch(`/api/run-details?run_id=${encodeURIComponent(runId)}`)) ??
+              (await tryFetch(`/api/run_details?run_id=${encodeURIComponent(runId)}`)) ??
+              (await tryFetch(`/api/runs/${encodeURIComponent(runId)}`)) ??
+              (await tryFetch(`/api/run?id=${encodeURIComponent(runId)}`));
         }
 
-        // 2) Aggregierte Details per runId
-        if (!detail && runId) {
+        // 2) Fallback: LocalStorage (z. B. vom Viewer gespeichert)
+        if (!payload && opts?.storageKey) {
           try {
-            detail = await fetchDetailAggregated(runId);
-          } catch {}
-        }
-
-        // 3) Fallbacks
-        if (!detail && runId) {
-          try {
-            const fb = await fetchDetailViaFallback(runId);
-            const fbPdf = (fb?.run?.pdf_id as number | undefined) ?? candidatePdfId;
-            if (fbPdf != null) {
-              try {
-                detail = await fetchFromResults(fbPdf);
-              } catch {
-                detail = fb;
-              }
-            } else {
-              detail = fb;
+            const raw = localStorage.getItem(opts.storageKey);
+            if (raw) {
+              const parsed = JSON.parse(raw);
+              // häufig liegt der Inhalt unter parsed.run
+              payload = parsed?.run ?? parsed;
             }
-          } catch {}
+          } catch {
+            /* ignore */
+          }
         }
 
-        if (!detail) {
-          const e: any = new Error("Keine Details gefunden");
-          e.status = 404;
-          throw e;
-        }
+        if (!payload) throw new Error("Keine Run-Daten gefunden.");
 
-        if (!cancel) setData(detail);
+        const normalized = toRunDetail(payload);
+        if (!alive) return;
+        setData(normalized);
+        setLoading(false);
       } catch (e: any) {
-        if (!cancel) setErr(e);
-      } finally {
-        if (!cancel) setLoading(false);
+        if (!alive) return;
+        setError(e instanceof Error ? e : new Error(String(e)));
+        setLoading(false);
       }
     })();
 
-    return () => { cancel = true; };
-  }, [runId, opts?.pdfId, opts?.storageKey]);
+    return () => {
+      alive = false;
+    };
+  }, [runId, opts?.storageKey]);
 
-  const scoreSum = useMemo(() => {
-    const fs = data?.run.final_scores;
-    if (!fs) return 0;
-    return Object.values(fs).reduce((a, b) => a + (typeof b === "number" ? b : 0), 0);
-  }, [data]);
+  // Summe der Scores (für die Seitenkarte)
+  const scoreSum = React.useMemo(() => {
+    if (!data?.run?.final_scores) return 0;
+    return Object.values(data.run.final_scores).reduce((acc, n) => acc + (typeof n === "number" ? n : 0), 0);
+  }, [data?.run?.final_scores]);
 
-  return { data, loading, error: err, scoreSum };
+  return { data, loading, error, scoreSum };
+}
+
+/* ============================== Transform / Consolidation ============================== */
+
+// sehr schlichte Stoppliste für offensichtliche Nicht-Werte
+const STOP_VALUES = new Set<string>([
+  "", "-", "–", "—",
+  "schadennummer", "schadenummer", "schaden-nummer", "schaden-nr", "schaden-nr.",
+  "nichtvorhanden", "nicht angegeben", "nichtangegeben", "nicht vorhanden",
+  "n/a", "na", "none"
+]);
+
+const DEBLANK = (s: string) => s.replace(/\s+/g, "");
+const ONLY_DIGITS = (s: string) => s.replace(/\D+/g, "");
+const SIMPLE_NORM = (s: string) =>
+    DEBLANK(String(s).toLowerCase())
+    .replace(/[._\-:;,/\\|()[\]{}]+/g, "")
+    .normalize("NFKC");
+
+const slug = (s: string) =>
+    String(s)
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[^\p{Letter}\p{Number}]+/gu, "_")
+    .replace(/^_+|_+$/g, "");
+
+// heuristik: "ist dieses string-fragment als leer/junk zu werten?"
+function isJunkValue(raw: any, finalKey?: string): boolean {
+  if (raw == null) return true;
+  if (typeof raw === "object") {
+    // wenn LLM-Objekt { value, source } kommt, auf inneren Wert schauen
+    if (typeof (raw as any).value !== "undefined") return isJunkValue((raw as any).value, finalKey);
+    // andere Objekte gelten als nicht junk, werden aber später serialisiert
+    return false;
+  }
+  const s = String(raw).trim();
+  if (!s) return true;
+  const norm = SIMPLE_NORM(s);
+  if (STOP_VALUES.has(norm)) return true;
+  // Bei "schadennummer"-Feldern: sehr kurze Ziffernfolgen ignorieren
+  if (finalKey && finalKey.includes("schaden") && ONLY_DIGITS(s).length < 6) return true;
+  return false;
+}
+
+type VoteBucket = {
+  normKey: string;        // Kanonschreibweise, z. B. nur Ziffern oder vollständig normalisiert
+  prettyValues: string[]; // Originalwerte (zur Anzeige)
+  votes: number;
+  quality: number;        // 0..1
+};
+
+// Einfache Qualitätsheuristik für Extraktionswerte
+function qualityOf(value: string, finalKey?: string): number {
+  const digits = ONLY_DIGITS(value);
+  if (digits.length >= 10) return 1;        // lange Kennnummern sind sehr stabil
+  if (digits.length >= 6) return 0.7;
+  if (finalKey && finalKey.includes("name")) {
+    // Namen: längere Strings mit Leerzeichen bevorzugen
+    const words = String(value).trim().split(/\s+/).length;
+    return Math.min(1, 0.3 + words * 0.15);
+  }
+  // fallback: etwas besser als null, wenn nicht leer
+  return 0.4;
+}
+
+function consolidateExtractionGroup(records: any[], finalKey: string) {
+  // 1) Kandidaten aufbereiten
+  const buckets = new Map<string, VoteBucket>();
+  const attempts: Attempt[] = [];
+
+  const normStrategy = (v: string) => {
+    const d = ONLY_DIGITS(v);
+    // wenn das Feld wahrscheinlich eine Nummer ist (>=6 Ziffern), nimm digits-only
+    if (d.length >= 6) return d;
+    // ansonsten einfache Normierung (whitespace raus, case-insensitiv, Satzzeichen raus)
+    return SIMPLE_NORM(v);
+  };
+
+  let attemptNo = 0;
+  for (const r of records) {
+    attemptNo++;
+    // Rohquellen lesen
+    const parsed = tryParseOpenAiRaw(r?.openai_raw);
+    const page =
+        parsed?.source?.page ?? r?.source?.page ?? undefined;
+
+    const value = (typeof parsed?.value !== "undefined" ? parsed.value : r?.value) ?? null;
+    const displayVal = value == null ? "" : String(value);
+
+    // Versuche herausfiltern, die offensichtlich keine Antwort sind
+    if (isJunkValue(displayVal, finalKey)) {
+      attempts.push({
+        id: r?.id ?? `${finalKey}:${attemptNo}`,
+        attempt_no: attemptNo,
+        candidate_key: parsed?.source?.quote ?? r?.source?.quote ?? r?.prompt_text ?? "(ohne Kontext)",
+        candidate_value: displayVal, // zur Anzeige
+        candidate_confidence: null,
+        source: r?.route ?? "llm",
+        is_final: false
+      });
+      continue;
+    }
+
+    const normKey = normStrategy(displayVal);
+    const quality = qualityOf(displayVal, finalKey);
+
+    const b = buckets.get(normKey) ?? {
+      normKey,
+      prettyValues: [],
+      votes: 0,
+      quality: 0
+    };
+    b.prettyValues.push(displayVal);
+    b.votes += 1;
+    b.quality = Math.max(b.quality, quality);
+    buckets.set(normKey, b);
+
+    // Attempt erfassen (is_final später markiert)
+    attempts.push({
+      id: r?.id ?? `${finalKey}:${attemptNo}`,
+      attempt_no: attemptNo,
+      candidate_key: parsed?.source?.quote ?? r?.source?.quote ?? r?.prompt_text ?? "(ohne Kontext)",
+      candidate_value: page ? { value: displayVal, source: { page } } : displayVal,
+      candidate_confidence: null,
+      source: r?.route ?? "llm",
+      is_final: false
+    });
+  }
+
+  const valid = Array.from(buckets.values());
+  if (!valid.length) {
+    return {
+      final_value: "—",
+      final_confidence: 0,
+      attempts
+    };
+  }
+
+  // 2) Gewinner ermitteln (Mehrheit)
+  valid.sort((a, b) => (b.votes - a.votes) || (b.quality - a.quality));
+  const top = valid[0];
+  const second = valid[1];
+
+  const totalVotes = valid.reduce((acc, b) => acc + b.votes, 0);
+  // Laplace-Glättung + kleiner Bonus, wenn Abstand zum Zweiten groß ist + Qualitätsbonus
+  const base = (top.votes + 0.5) / (totalVotes + 1);
+  const margin = second ? Math.max(0, (top.votes - second.votes) / Math.max(1, totalVotes)) : 1;
+  const conf = clamp01(base * 0.8 + margin * 0.2) * 0.8 + clamp01(top.quality) * 0.2;
+
+  // 3) Anzeigewert: nimm die häufigste Originalschreibweise des Gewinner-Buckets,
+  //    für IDs mit vielen Ziffern bevorzugen wir die digits-only Form (kompakt & eindeutig)
+  const pretty = (() => {
+    const digits = top.normKey.replace(/\D+/g, "");
+    if (digits.length >= 6) return digits;
+    // häufigste pretty-Variante
+    const counts = new Map<string, number>();
+    for (const s of top.prettyValues) counts.set(s, (counts.get(s) ?? 0) + 1);
+    return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0][0];
+  })();
+
+  // Attempts markieren
+  for (const a of attempts) {
+    const rawVal = typeof a.candidate_value === "object" && a.candidate_value && "value" in a.candidate_value
+        ? (a.candidate_value as any).value
+        : a.candidate_value;
+    const isWin = !isJunkValue(rawVal, finalKey) && normStrategy(String(rawVal)) === top.normKey;
+    a.is_final = Boolean(isWin);
+  }
+
+  return {
+    final_value: pretty,
+    final_confidence: conf,
+    attempts
+  };
+}
+
+function consolidateDecisionGroup(items: any[], keySlug: string) {
+  // true/false per Mehrheit (Case-insensitiv auch Strings wie "ja"/"nein" erlauben)
+  const toBool = (v: any): boolean | undefined => {
+    if (typeof v === "boolean") return v;
+    const s = String(v ?? "").toLowerCase().trim();
+    if (["true", "wahr", "ja", "yes"].includes(s)) return true;
+    if (["false", "falsch", "nein", "no"].includes(s)) return false;
+    return undefined;
+  };
+
+  const attempts: Attempt[] = [];
+  let t = 0, f = 0, idx = 0;
+
+  for (const r of items) {
+    idx++;
+    const parsed = tryParseOpenAiRaw(r?.openai_raw);
+    const v = typeof parsed?.value !== "undefined" ? parsed.value : r?.value;
+    const b = toBool(v);
+    if (b === true) t++;
+    if (b === false) f++;
+
+    attempts.push({
+      id: r?.id ?? `${keySlug}:${idx}`,
+      attempt_no: idx,
+      candidate_key: parsed?.source?.quote ?? r?.prompt_text ?? "(ohne Kontext)",
+      candidate_value: typeof b === "boolean" ? b : String(v ?? "—"),
+      candidate_confidence: null,
+      source: r?.route ?? "llm",
+      is_final: false
+    });
+  }
+
+  const total = t + f;
+  const result = t >= f; // Gleichstand -> true
+  const conf = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
+
+  // final markieren
+  for (const a of attempts) {
+    const v = typeof a.candidate_value === "boolean"
+        ? a.candidate_value
+        : (() => {
+          const s = String(a.candidate_value ?? "").toLowerCase().trim();
+          if (["true", "wahr", "ja", "yes"].includes(s)) return true;
+          if (["false", "falsch", "nein", "no"].includes(s)) return false;
+          return undefined;
+        })();
+    a.is_final = typeof v === "boolean" && v === result;
+  }
+
+  return { value: result, confidence: conf, attempts };
+}
+
+/* ============================== Main converter ============================== */
+
+function toRunDetail(payload: any): RunDetail {
+  // Wir akzeptieren zwei mögliche Formen:
+  // A) ein flacher "run" mit Feldern extraction[], decision[], scoring[] (wie im Beispiel)
+  // B) bereits strukturierte Steps
+  const runCore: RunCore = {
+    id: String(payload?.run_id ?? payload?.id ?? cryptoRandomId()),
+    pipeline_id: payload?.pipeline_id ?? null,
+    pdf_id: payload?.pdf_id ?? null,
+    status: payload?.status ?? "finalized",
+    started_at: payload?.started_at ?? null,
+    finished_at: payload?.finished_at ?? null,
+    overall_score: typeof payload?.overall_score === "number" ? payload.overall_score : 0,
+    error: payload?.error ?? null,
+    final_extraction: {},
+    final_decisions: {},
+    final_scores: payload?.final_scores ?? {}
+  };
+
+  const steps: RunStep[] = [];
+
+  // ---------- Extraction ----------
+  const extractionArr: any[] = Array.isArray(payload?.extraction) ? payload.extraction : [];
+  const groupsByKey = groupBy(extractionArr, (r) => slug(r?.json_key ?? r?.final_key ?? r?.prompt_text ?? "extraction"));
+  let orderCounter = 0;
+  for (const [keySlug, items] of groupsByKey) {
+    orderCounter++;
+    const { final_value, final_confidence, attempts } = consolidateExtractionGroup(items, keySlug);
+    runCore.final_extraction![keySlug] = final_value;
+
+    steps.push({
+      id: hashId(keySlug, orderCounter),
+      step_type: "Extraction",
+      status: "finalized",
+      order_index: orderCounter - 1,
+      definition: { json_key: keySlug },
+      final_key: keySlug,
+      final_value,
+      final_confidence,
+      started_at: payload?.started_at ?? null,
+      finished_at: payload?.finished_at ?? null,
+      attempts
+    });
+  }
+
+  // ---------- Decision (falls vorhanden) ----------
+  const decisionArr: any[] = Array.isArray(payload?.decision) ? payload.decision : [];
+  if (decisionArr.length) {
+    const dGroups = groupBy(decisionArr, (r) => slug(r?.json_key ?? r?.final_key ?? r?.prompt_text ?? "decision"));
+    for (const [keySlug, items] of dGroups) {
+      orderCounter++;
+      const { value, confidence, attempts } = consolidateDecisionGroup(items, keySlug);
+      runCore.final_decisions![keySlug] = value;
+
+      steps.push({
+        id: hashId(keySlug, orderCounter),
+        step_type: "Decision",
+        status: "finalized",
+        order_index: orderCounter - 1,
+        definition: { json_key: keySlug },
+        final_key: keySlug,
+        final_value: value,
+        final_confidence: confidence,
+        attempts
+      });
+    }
+  }
+
+  // ---------- ScoringPrompt (boolean-Mehrheit als Entscheidung, Score-Karte separat) ----------
+  // Beispiel-Format: payload.scoring = [{ scores:[{result:true/false, ...}, ...], consolidated:{result, explanation}}]
+  const scoringArr: any[] = Array.isArray(payload?.scoring) ? payload.scoring : [];
+  for (const s of scoringArr) {
+    const keySlug = slug(s?.prompt_text ?? "scoring");
+    const scores: any[] = Array.isArray(s?.scores) ? s.scores : [];
+    const itemsLikeExtraction = scores.map((x: any) => ({
+      prompt_text: s?.prompt_text,
+      openai_raw: JSON.stringify({ value: !!x?.result, source: { quote: x?.explanation ?? "" } })
+    }));
+    orderCounter++;
+    const { value, confidence, attempts } = consolidateDecisionGroup(itemsLikeExtraction, keySlug);
+    runCore.final_decisions![keySlug] = Boolean(
+        typeof s?.consolidated?.result === "boolean" ? s.consolidated.result : value
+    );
+
+    steps.push({
+      id: hashId(keySlug, orderCounter),
+      step_type: "Score",
+      status: "finalized",
+      order_index: orderCounter - 1,
+      definition: { json_key: keySlug },
+      final_key: keySlug,
+      final_value: Boolean(runCore.final_decisions![keySlug]),
+      final_confidence: confidence,
+      attempts
+    });
+  }
+
+  return { run: runCore, steps, raw: payload };
+}
+
+/* ============================== Small utils ============================== */
+
+function groupBy<T>(arr: T[], keyer: (v: T) => string): Map<string, T[]> {
+  const m = new Map<string, T[]>();
+  for (const it of arr) {
+    const k = keyer(it);
+    const list = m.get(k) ?? [];
+    list.push(it);
+    m.set(k, list);
+  }
+  return m;
+}
+
+function tryParseOpenAiRaw(raw: any): any | undefined {
+  if (!raw || typeof raw !== "string") return undefined;
+  try {
+    const obj = JSON.parse(raw);
+    // manche Varianten packen Wert auf root-level {value, source}
+    if (typeof obj?.value !== "undefined" || typeof obj?.source !== "undefined") return obj;
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+function clamp01(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function hashId(s: string, salt: number) {
+  let h = 2166136261 ^ salt;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return Math.abs(h);
+}
+
+function cryptoRandomId() {
+  try {
+    const buf = new Uint8Array(8);
+    (globalThis.crypto ?? (globalThis as any).msCrypto).getRandomValues(buf);
+    return Array.from(buf).map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return String(Math.random()).slice(2);
+  }
 }
