@@ -36,16 +36,16 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import ArticleIcon from "@mui/icons-material/Article"; // Extraction
-import RuleIcon from "@mui/icons-material/Rule"; // Score
-import AltRouteIcon from "@mui/icons-material/AltRoute"; // Decision
-import AssessmentIcon from "@mui/icons-material/Assessment"; // Summary
+import ArticleIcon from "@mui/icons-material/Article"; // Extraktion
+import RuleIcon from "@mui/icons-material/Rule"; // Bewertung (Scoring)
+import AltRouteIcon from "@mui/icons-material/AltRoute"; // Entscheidung
+import AssessmentIcon from "@mui/icons-material/Assessment"; // Übersicht
 import CloseIcon from "@mui/icons-material/Close";
 
 import {type RunDetail, type RunStep, useRunDetails} from "../hooks/useRunDetails";
 import {computeWeightedScore, ScoringWeightsCard} from "../components/ScoringWeightsCard";
 
-/* ===== helpers ===== */
+/* ===== Helfer ===== */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
 const fmtNum = (n: number) => Intl.NumberFormat(undefined, {maximumFractionDigits: 2}).format(n);
 
@@ -66,14 +66,14 @@ function getAttemptPage(a: any): number | undefined {
 function resolvePdfUrl(raw?: string | null, pdfId?: number | null): string | undefined {
   const ipBase = "http://192.168.130.102:8081";
   if (raw && typeof raw === "string") {
-    // normalize host "pdf-ingest" → IP
+    // Host „pdf-ingest“ -> IP normalisieren
     return raw.replace("http://pdf-ingest:8081", ipBase);
   }
   if (pdfId != null) return `${ipBase}/pdf/${pdfId}`;
   return undefined;
 }
 
-/* ===== small UI bits ===== */
+/* ===== kleine UI-Bausteine ===== */
 
 function StatusChip({status}: { status?: string | null }) {
   const map: Record<string, {
@@ -84,11 +84,7 @@ function StatusChip({status}: { status?: string | null }) {
     queued: {color: "info", icon: <HourglassEmptyIcon fontSize="small"/>, label: "Wartend"},
     running: {color: "warning", icon: <PlayArrowIcon fontSize="small"/>, label: "Laufend"},
     finalized: {color: "success", icon: <CheckCircleOutlineIcon fontSize="small"/>, label: "Final"},
-    completed: {
-      color: "success",
-      icon: <CheckCircleOutlineIcon fontSize="small"/>,
-      label: "Abgeschlossen"
-    },
+    completed: {color: "success", icon: <CheckCircleOutlineIcon fontSize="small"/>, label: "Abgeschlossen"},
     failed: {color: "error", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Fehler"},
     timeout: {color: "error", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Timeout"},
     canceled: {color: "default", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Abgebrochen"},
@@ -133,16 +129,17 @@ function formatValue(val: any) {
   }
 }
 
-/* ===== Evidence Modal ===== */
+/* ===== Evidence-Modal ===== */
 
 function EvidenceModal({
-                         open, onClose, page, pdfUrl, detail
+                         open, onClose, page, pdfUrl, detail, onChangePage
                        }: {
   open: boolean;
   onClose: () => void;
   page?: number;
   pdfUrl?: string;
-  detail: RunDetail
+  detail: RunDetail;
+  onChangePage?: (p: number) => void;
 }) {
 
   const byPage = React.useMemo(() => {
@@ -160,7 +157,6 @@ function EvidenceModal({
       });
     });
 
-    // kleine sortierung
     const byKey = (r: any) => r.step.final_key ?? r.step.definition?.json_key ?? "";
     items.extraction.sort((a, b) => byKey(a).localeCompare(byKey(b)));
     items.scoring.sort((a, b) => byKey(a).localeCompare(byKey(b)));
@@ -170,7 +166,6 @@ function EvidenceModal({
 
   return (
       <Dialog open={open} onClose={onClose} maxWidth="xl" fullWidth>
-        // im EvidenceModal-Header:
         <DialogTitle sx={{display: "flex", alignItems: "center", gap: 1}}>
           📄 Seite
           <IconButton size="small" onClick={() => onChangePage?.(Math.max(1, (page ?? 2) - 1))}
@@ -188,12 +183,8 @@ function EvidenceModal({
 
         <DialogContent dividers sx={{p: 0}}>
           <Box sx={{display: "flex", height: "80vh"}}>
-            {/* Left: PDF */}
-            <Box sx={{
-              flex: 1,
-              minWidth: 0,
-              borderRight: theme => `1px solid ${theme.palette.divider}`
-            }}>
+            {/* Links: PDF */}
+            <Box sx={{flex: 1, minWidth: 0, borderRight: theme => `1px solid ${theme.palette.divider}`}}>
               {pdfUrl ? (
                   <iframe
                       title="PDF"
@@ -202,18 +193,17 @@ function EvidenceModal({
                   />
               ) : (
                   <Stack sx={{height: "100%"}} alignItems="center" justifyContent="center">
-                    <Typography variant="body2" color="text.secondary">Kein PDF
-                      verfügbar</Typography>
+                    <Typography variant="body2" color="text.secondary">Kein PDF verfügbar</Typography>
                   </Stack>
               )}
             </Box>
 
-            {/* Right: Results for this page */}
+            {/* Rechts: Ergebnisse für diese Seite */}
             <Box sx={{width: 480, p: 2, overflowY: "auto"}}>
               <Typography variant="subtitle1" sx={{mb: 1}}>Ergebnisse auf dieser Seite</Typography>
 
-              {/* Extraction */}
-              <Section title="🧩 Extraction">
+              {/* Extraktion */}
+              <Section title="🧩 Extraktion">
                 {byPage.extraction.length === 0 ? <EmptyLine/> :
                     <Table size="small">
                       <TableHead>
@@ -235,14 +225,14 @@ function EvidenceModal({
                     </Table>}
               </Section>
 
-              {/* Scoring */}
-              <Section title="🟢 Scoring">
+              {/* Bewertung (Scoring) */}
+              <Section title="🟢 Bewertung">
                 {byPage.scoring.length === 0 ? <EmptyLine/> :
                     <Table size="small">
                       <TableHead>
                         <TableRow>
                           <TableCell>Regel</TableCell>
-                          <TableCell>Vote</TableCell>
+                          <TableCell>Stimme</TableCell>
                           <TableCell width={60}>Final</TableCell>
                         </TableRow>
                       </TableHead>
@@ -261,14 +251,14 @@ function EvidenceModal({
                     </Table>}
               </Section>
 
-              {/* Decision */}
-              <Section title="⚖️ Decision">
+              {/* Entscheidung */}
+              <Section title="⚖️ Entscheidung">
                 {byPage.decision.length === 0 ? <EmptyLine/> :
                     <Table size="small">
                       <TableHead>
                         <TableRow>
                           <TableCell>Frage</TableCell>
-                          <TableCell>Vote</TableCell>
+                          <TableCell>Stimme</TableCell>
                           <TableCell width={60}>Final</TableCell>
                         </TableRow>
                       </TableHead>
@@ -306,7 +296,7 @@ function EmptyLine() {
   return <Typography variant="body2" color="text.secondary">— keine Einträge —</Typography>;
 }
 
-/* ===== Page ===== */
+/* ===== Seite ===== */
 
 export default function RunDetailsPage() {
   const params = useParams<{ id?: string; key?: string }>();
@@ -328,8 +318,7 @@ export default function RunDetailsPage() {
       const parsed = JSON.parse(raw);
       if (typeof parsed?.pdfId === "number") return parsed.pdfId;
       if (typeof parsed?.run?.pdf_id === "number") return parsed.run.pdf_id;
-    } catch {
-    }
+    } catch {}
     return undefined;
   })();
 
@@ -339,7 +328,7 @@ export default function RunDetailsPage() {
   // ► PDF-URL auf IP normalisieren
   const resolvedPdfUrl = resolvePdfUrl(rawPdf ?? undefined, data?.run?.pdf_id);
 
-  // Modal State
+  // Modal-Zustand
   const [modalOpen, setModalOpen] = React.useState(false);
   const [modalPage, setModalPage] = React.useState<number | undefined>(undefined);
   const openEvidence = (page?: number) => {
@@ -393,7 +382,7 @@ export default function RunDetailsPage() {
   );
 }
 
-/* ===== Header / Summary ===== */
+/* ===== Kopf / Übersicht ===== */
 
 function HeaderBar({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
   const {run} = detail;
@@ -402,15 +391,13 @@ function HeaderBar({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
         <Box>
           <Typography variant="h5">Analyse · Run</Typography>
           <Typography variant="body2" color="text.secondary">
-            Pipeline: {run.pipeline_id} • PDF-ID: {run.pdf_id} • Status: <StatusChip
-              status={run.status}/>
+            Pipeline: {run.pipeline_id} • PDF-ID: {run.pdf_id} • Status: <StatusChip status={run.status}/>
           </Typography>
         </Box>
         <Stack direction="row" gap={1}>
           {pdfUrl && (
-              <Tooltip title="PDF im neuen Tab öffnen">
-                <IconButton size="small"
-                            onClick={() => window.open(pdfUrl!, "_blank", "noopener,noreferrer")}>
+              <Tooltip title="PDF in neuem Tab öffnen">
+                <IconButton size="small" onClick={() => window.open(pdfUrl!, "_blank", "noopener,noreferrer")}>
                   <OpenInNewIcon fontSize="small"/>
                 </IconButton>
               </Tooltip>
@@ -450,7 +437,7 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
             <Stack direction="row" alignItems="center" gap={1}>
               <AssessmentIcon sx={{ color: "success.main" }} fontSize="small" />
               <Typography variant="body2" sx={{ minWidth: 150, color: "text.secondary" }}>
-                Final Score
+                Gesamtscore
               </Typography>
               <Box sx={{ flex: 1 }}>
                 {scoreValue != null ? (
@@ -486,7 +473,7 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
   );
 }
 
-/* ===== Cards ===== */
+/* ===== Karten ===== */
 
 function ExtractionCard({
                           detail, pdfUrl, onOpenEvidence
@@ -519,7 +506,7 @@ function ExtractionCard({
               <TableRow>
                 <TableCell>Feld</TableCell>
                 <TableCell>Wert</TableCell>
-                <TableCell width={180} align="right">Confidence</TableCell>
+                <TableCell width={180} align="right">Konfidenz</TableCell>
                 <TableCell width={130} align="right">Evidenz</TableCell>
               </TableRow>
             </TableHead>
@@ -556,17 +543,15 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Decision-Ergebnisse" subheader="Kandidaten (Mehrheit)"/>
+        <CardHeader title="Entscheidungs-Ergebnisse" subheader="Kandidaten (Mehrheit)"/>
         <CardContent>
           <Stack spacing={2}>
             {decisionSteps.map((s, idx) => (
                 <Box key={s.id}>
                   <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                    <AltRouteIcon sx={{color: (s.final_value ? "success.main" : "error.main")}}
-                                  fontSize="small"/>
+                    <AltRouteIcon sx={{color: (s.final_value ? "success.main" : "error.main")}} fontSize="small"/>
                     <Typography variant="subtitle2">
-                      {s.final_key ?? `Decision ${idx + 1}`} ·
-                      Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
+                      {s.final_key ?? `Entscheidung ${idx + 1}`} · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
                     </Typography>
                     <Box sx={{flex: 1}}/>
                     <ConfidenceBar value={s.final_confidence}/>
@@ -575,8 +560,8 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
                     <TableHead>
                       <TableRow>
                         <TableCell width={56}>#</TableCell>
-                        <TableCell>Quelle</TableCell>
-                        <TableCell width={120}>Vote</TableCell>
+                        <TableCell>Kandidatentext</TableCell>
+                        <TableCell width={120}>Stimme</TableCell>
                         <TableCell width={120}>Evidenz</TableCell>
                         <TableCell width={90}>Final</TableCell>
                       </TableRow>
@@ -592,9 +577,8 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
                               <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
                               <TableCell>
                                 {page
-                                    ?
-                                    <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
-                                          onClick={() => onOpenEvidence(page)} clickable/>
+                                    ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
+                                            onClick={() => onOpenEvidence(page)} clickable/>
                                     : "—"}
                               </TableCell>
                               <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
@@ -611,7 +595,7 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
   );
 }
 
-/* ===== Steps (Detail) ===== */
+/* ===== Schritte (Detail) ===== */
 
 function StepsWithAttempts({
                              detail, pdfUrl, onOpenEvidence
@@ -628,15 +612,21 @@ function StepsWithAttempts({
   if (!steps.length) {
     return (
         <Alert severity="info">
-          Keine Step-Instanzen vorhanden. Läuft der Run noch oder liefert der
-          Backend-Detail-Endpoint die Steps nicht?
+          Keine Schritt-Instanzen vorhanden. Läuft der Run noch oder liefert der
+          Backend-Detail-Endpoint die Schritte nicht?
         </Alert>
     );
   }
 
+  // UI-Filter: Attempts ohne Wert ausblenden
+  const hasValue = (a: any) => {
+    const v = valOrObjValue(a?.candidate_value);
+    return !(v == null || (typeof v === "string" && v.trim() === ""));
+  };
+
   return (
       <Card variant="outlined">
-        <CardHeader title="Steps & Attempts" subheader="Audit-Trail je Step"/>
+        <CardHeader title="Schritte & Versuche" subheader="Protokoll je Schritt"/>
         <CardContent>
           {steps.map((s, idx) => (
               <Accordion key={s.id} defaultExpanded={idx === 0}>
@@ -654,13 +644,11 @@ function StepsWithAttempts({
                 </AccordionSummary>
                 <AccordionDetails>
                   <Stack spacing={1} sx={{mb: 1}}>
-                    <Row label="Final Key"><Chip size="small" label={s.final_key ?? "—"}/></Row>
-                    <Row label="Final Value"><Typography
-                        variant="body2">{formatValue(s.final_value)}</Typography></Row>
-                    <Row label="Confidence"><ConfidenceBar value={s.final_confidence}/></Row>
+                    <Row label="Finaler Schlüssel"><Chip size="small" label={s.final_key ?? "—"}/></Row>
+                    <Row label="Finaler Wert"><Typography variant="body2">{formatValue(s.final_value)}</Typography></Row>
+                    <Row label="Konfidenz"><ConfidenceBar value={s.final_confidence}/></Row>
                     <Row label="Zeit">
-                      <Typography
-                          variant="body2">{s.started_at ?? "—"} → {s.finished_at ?? "—"}</Typography>
+                      <Typography variant="body2">{s.started_at ?? "—"} → {s.finished_at ?? "—"}</Typography>
                     </Row>
                   </Stack>
 
@@ -668,29 +656,28 @@ function StepsWithAttempts({
                     <TableHead>
                       <TableRow>
                         <TableCell width={56}>#</TableCell>
-                        <TableCell>Candidate Key</TableCell>
-                        <TableCell>Value</TableCell>
-                        <TableCell width={120}>Quelle</TableCell>
+                        <TableCell>Kandidatentext</TableCell>
+                        <TableCell>Wert</TableCell>
+                        {/* Spalte „Quelle“ entfällt */}
                         <TableCell width={120}>Evidenz</TableCell>
                         <TableCell width={90}>Final</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {(s as any).attempts?.map((a: any, i: number) => {
+                      {(s as any).attempts
+                      ?.filter(hasValue)
+                      .map((a: any, i: number) => {
                         const page = getAttemptPage(a);
                         const display = formatValue(a?.candidate_value);
                         return (
                             <TableRow key={a.id ?? i} hover>
                               <TableCell>{a.attempt_no ?? i + 1}</TableCell>
                               <TableCell>{a.candidate_key ?? "—"}</TableCell>
-                              <TableCell><Typography
-                                  variant="body2">{display}</Typography></TableCell>
-                              <TableCell>{a.source ?? "—"}</TableCell>
+                              <TableCell><Typography variant="body2">{display}</Typography></TableCell>
                               <TableCell>
                                 {page
-                                    ?
-                                    <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
-                                          onClick={() => onOpenEvidence(page)} clickable/>
+                                    ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
+                                            onClick={() => onOpenEvidence(page)} clickable/>
                                     : "—"}
                               </TableCell>
                               <TableCell>
@@ -710,13 +697,12 @@ function StepsWithAttempts({
   );
 }
 
-/* ===== misc ===== */
+/* ===== Diverses ===== */
 
 function Row({label, children}: { label: string; children: React.ReactNode }) {
   return (
       <Stack direction="row" spacing={1} alignItems="center">
-        <Typography variant="body2"
-                    sx={{minWidth: 150, color: "text.secondary"}}>{label}</Typography>
+        <Typography variant="body2" sx={{minWidth: 150, color: "text.secondary"}}>{label}</Typography>
         <Box sx={{flex: 1}}>{children}</Box>
       </Stack>
   );
@@ -724,5 +710,11 @@ function Row({label, children}: { label: string; children: React.ReactNode }) {
 
 function labelForStep(s: RunStep) {
   const name = s.definition?.json_key || s.final_key || `${s.step_type}`;
-  return `${name} · ${s.step_type}`;
+  const tMap: Record<RunStep["step_type"], string> = {
+    Extraction: "Extraktion",
+    Decision: "Entscheidung",
+    Score: "Bewertung"
+  };
+  const t = tMap[s.step_type] ?? s.step_type;
+  return `${name} · ${t}`;
 }

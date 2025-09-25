@@ -2,34 +2,34 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Tabs, Tab, Paper, Button, Typography,
   Table, TableHead, TableRow, TableCell, TableBody,
-  Chip, Stack, Drawer, IconButton, FormControlLabel, Checkbox, Tooltip
+  Stack, IconButton, FormControlLabel, Checkbox, Tooltip
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
 import { utils as XLSXUtils, writeFile } from 'xlsx';
 import PageHeader from '../components/PageHeader';
 import { PipelineRunResult } from '../types/pipeline';
-import RunDetails from '../components/RunDetails';
-import { FinalSnapshotCell } from '../components/final/FinalPills';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 
 declare global { interface Window { __ENV__?: any } }
 
 interface PromptCfg { text: string }
 interface Entry {
-  id: number;           // analysis id (History)
+  id: number;           // Analyse-ID (History)
   pdfId: number;
   pdfUrl?: string;
-  prompts: PromptCfg[];
+  prompts: PromptCfg[]; // verbleibt im Typ, wird jedoch nicht mehr angezeigt
   status: string;
   timestamp: string;
   result?: PipelineRunResult | any;
+  pipelineId?: string;
+  pipelineName?: string;
 }
 
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
-const LS_PREFIX = "run-view:";
+const LS_PREFIX = 'run-view:';
 
-/* -------- helpers -------- */
+/* -------- Hilfsfunktionen -------- */
 
 function getPipelineApiBase(): string {
   const w = (window as any);
@@ -65,7 +65,21 @@ function computeFinalKeyOrder(items: Entry[], maxCols = 4): string[] {
   return [...presentPreferred, ...others].slice(0, maxCols);
 }
 
-/* -------- NEW: Backend-Auflösung -------- */
+const KEY_LABELS: Record<string, string> = {
+  sender: 'Rechnungssteller',
+  iban: 'IBAN',
+  bic: 'BIC',
+  totalAmount: 'Brutto-Gesamtsumme',
+  amount: 'Betrag',
+  customerNumber: 'Kundennummer',
+  contract_valid: 'Vertrag gültig',
+};
+
+function translateKeyHeader(key: string): string {
+  return KEY_LABELS[key] ?? key;
+}
+
+/* -------- Backend-Auflösung (run_id & Konsolidat) -------- */
 
 /** Versucht eine run_id über mehrere Endpunkte zu ermitteln */
 async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<string | undefined> {
@@ -74,13 +88,13 @@ async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<str
 
   const api = getPipelineApiBase();
   const pdfId = normalized?.pdf_id ?? entry.pdfId;
-  const pipelineId = normalized?.pipeline_id ?? normalized?.pipelineId;
+  const pipelineId = normalized?.pipeline_id ?? normalized?.pipelineId ?? entry.pipelineId;
   if (!pdfId || !pipelineId) return undefined;
 
   const candidates = [
     `${api}/runs/latest?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}`,
     `${api}/runs?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}&limit=1`,
-    `${api}/runs/last?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}`
+    `${api}/runs/last?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}`,
   ];
 
   for (const url of candidates) {
@@ -102,16 +116,16 @@ async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<str
   return undefined;
 }
 
-/** Holt direkt das (vermutlich) konsolidierte DTO über pdf_id + pipeline_id */
+/** Holt direkt ein konsolidiertes DTO über pdf_id + pipeline_id */
 async function fetchConsolidatedRun(normalized: any, entry: Entry): Promise<any | undefined> {
   const api = getPipelineApiBase();
   const pdfId = normalized?.pdf_id ?? entry.pdfId;
-  const pipelineId = normalized?.pipeline_id ?? normalized?.pipelineId;
+  const pipelineId = normalized?.pipeline_id ?? normalized?.pipelineId ?? entry.pipelineId;
   if (!pdfId || !pipelineId) return undefined;
 
   const candidates = [
     `${api}/runs/full?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}&limit=1`,
-    `${api}/runs?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}&limit=1`
+    `${api}/runs?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(pipelineId)}&limit=1`,
   ];
 
   for (const url of candidates) {
@@ -131,10 +145,10 @@ async function fetchConsolidatedRun(normalized: any, entry: Entry): Promise<any 
   return undefined;
 }
 
-/* -------- Öffner: Details in neuem Tab -------- */
+/* -------- Details in neuem Tab öffnen -------- */
 
 async function openDetailsInNewTab(entry: Entry) {
-  const key = `${Date.now()}_${Math.random().toString(36).slice(2,8)}`;
+  const key = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const normalized = normalizeRunShape(entry?.result) ?? null;
 
   const toNum = (v: any): number | undefined => {
@@ -159,27 +173,25 @@ async function openDetailsInNewTab(entry: Entry) {
   })();
 
   // Initial-Payload (für Sofort-Render) inkl. pdfId falls vorhanden
-  let payload: any = { run: normalized, pdfUrl: entry?.pdfUrl ?? "" };
+  let payload: any = { run: normalized, pdfUrl: entry?.pdfUrl ?? '' };
   if (pdfId != null) payload.pdfId = pdfId;
 
   try {
     localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
   } catch (e) {
-    console.warn("Konnte localStorage nicht schreiben:", e);
+    console.warn('Konnte localStorage nicht schreiben:', e);
   }
 
-  // 1) Versuche run_id zu bekommen (bevorzugt)
+  // 1) run_id beschaffen (bevorzugt)
   let runId: string | undefined;
   try {
     runId = await resolveRunIdIfMissing(normalized, entry);
-  } catch {
-    /* ignore */
-  }
+  } catch { /* ignore */ }
 
-  // 2) Wenn keine run_id & keine Finals → konsolidiertes DTO ziehen und Payload ersetzen
+  // 2) Falls keine run_id & keine Finals → konsolidiertes DTO ziehen und Payload ersetzen
   const hasFinals =
       !!normalized &&
-      typeof normalized === "object" &&
+      typeof normalized === 'object' &&
       ((normalized.extracted && Object.keys(normalized.extracted).length) ||
           (normalized.scores && Object.keys(normalized.scores).length) ||
           (normalized.decisions && Object.keys(normalized.decisions).length));
@@ -197,36 +209,39 @@ async function openDetailsInNewTab(entry: Entry) {
         const candidate = toNum(finalRun?.pdf_id ?? finalRun?.pdfId);
         if (candidate != null) pdfId = candidate;
 
-        payload = { run: finalRun, pdfUrl: entry?.pdfUrl ?? "" };
+        payload = { run: finalRun, pdfUrl: entry?.pdfUrl ?? '' };
         if (pdfId != null) payload.pdfId = pdfId;
 
         try {
           localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
         } catch (e) {
-          console.warn("Konnte localStorage nicht schreiben (finalRun):", e);
+          console.warn('Konnte localStorage nicht schreiben (finalRun):', e);
         }
 
         // falls API eine id/run_id liefert, an die URL hängen
         runId = finalRun?.run_id ?? finalRun?.id ?? runId;
       }
-    } catch {
-      /* ignore */
-    }
+    } catch { /* ignore */ }
   }
 
   // Query-Params bauen (pdf_id nur wenn valide)
   const qp = new URLSearchParams();
-  if (pdfId != null) qp.set("pdf_id", String(pdfId));
-  if (entry?.pdfUrl) qp.set("pdf_url", entry.pdfUrl);
-  if (runId) qp.set("run_id", runId);
+  if (pdfId != null) qp.set('pdf_id', String(pdfId));
+  if (entry?.pdfUrl) qp.set('pdf_url', entry.pdfUrl);
+  if (runId) qp.set('run_id', runId);
 
-  const url = `/run-view/${key}` + (qp.toString() ? `?${qp.toString()}` : "");
-  window.open(url, "_blank", "noopener,noreferrer");
+  const url = `/run-view/${key}` + (qp.toString() ? `?${qp.toString()}` : '');
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+function getPipelineLabel(entry: Entry): string {
+  const r = normalizeRunShape(entry.result);
+  const name = entry.pipelineName ?? r?.pipeline_name ?? r?.pipelineName ?? r?.pipeline?.name;
+  const id = entry.pipelineId ?? r?.pipeline_id ?? r?.pipelineId;
+  return name ?? (id ? `ID ${id}` : '—');
+}
 
-
-/* -------- Page Component -------- */
+/* -------- Seitenkomponente -------- */
 
 export default function Analyses() {
   const [tab, setTab] = useState(0);
@@ -234,8 +249,6 @@ export default function Analyses() {
   const [done, setDone] = useState<Entry[]>([]);
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
-
-  const [selected, setSelected] = useState<Entry | null>(null);
   const [onlyLowConf, setOnlyLowConf] = useState(false);
 
   const load = () => {
@@ -266,6 +279,9 @@ export default function Analyses() {
           withRunId.run_id = d.run_id ?? d.runId;
         }
 
+        const pipelineId = withRunId?.pipeline_id ?? withRunId?.pipelineId ?? d.pipeline_id ?? d.pipelineId ?? d?.pipeline?.id;
+        const pipelineName = withRunId?.pipeline_name ?? withRunId?.pipelineName ?? d.pipeline_name ?? d.pipelineName ?? d?.pipeline?.name;
+
         return {
           id: d.id,
           pdfId: d.pdf_id ?? d.pdfId ?? d.file_id ?? 0,
@@ -274,6 +290,8 @@ export default function Analyses() {
           status: d.status ?? '',
           timestamp: d.timestamp ?? d.created_at ?? '',
           result: withRunId,
+          pipelineId,
+          pipelineName,
         };
       };
 
@@ -282,7 +300,7 @@ export default function Analyses() {
       setRunning(r);
       setDone(c);
     })
-    .catch(e => console.error('load analyses', e));
+    .catch(e => console.error('Analysen laden', e));
   };
 
   useEffect(load, []);
@@ -310,16 +328,15 @@ export default function Analyses() {
     const rows = filteredDone.map(e => {
       const run = normalizeRunShape(e.result);
       const ex = run?.extracted ?? {};
-      const dec = run?.decisions ?? {};
-      const flatEx = Object.fromEntries(Object.entries(ex).map(([k, v]: any) => [`final.${k}`, v?.value ?? '']));
-      const flatDec = Object.fromEntries(Object.entries(dec).map(([k, v]: any) => [`decision.${k}`, `${v.route ?? ''}${v.confidence != null ? ` (${(v.confidence).toFixed(2)})` : ''}`]));
+      const flatEx = Object.fromEntries(
+          Object.entries(ex).map(([k, v]: any) => [`final.${k}`, v?.value ?? ''])
+      );
       return {
         pdf: `PDF ${e.pdfId}`,
-        prompt: e.prompts.map(p => p.text).join(' | '),
-        overall_score: run?.overall_score ?? '',
+        pipeline: getPipelineLabel(e),
+        gesamtscore: run?.overall_score ?? '',
         ...flatEx,
-        ...flatDec,
-      };
+      } as Record<string, any>;
     });
     const ws = XLSXUtils.json_to_sheet(rows);
     const wb = XLSXUtils.book_new();
@@ -327,107 +344,90 @@ export default function Analyses() {
     writeFile(wb, 'analysen.xlsx');
   };
 
-  const renderList = (items: Entry[], finished: boolean) => (
-      <Paper sx={{ p: 2 }}>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Name der PDF</TableCell>
-              <TableCell>Prompts</TableCell>
-              {finished && <TableCell>Score</TableCell>}
-              {finished && <TableCell>Route</TableCell>}
-              {finished && finalCols.map(col => (<TableCell key={`col-${col}`}>{col}</TableCell>))}
-              {finished && <TableCell>Final</TableCell>}
-              {finished && <TableCell align="right">Details</TableCell>}
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {items.map(e => {
-              const run = normalizeRunShape(e.result);
-              const ex = run?.extracted || {};
-              return (
-                  <TableRow
-                      key={e.id}
-                      hover
-                      onClick={() => { if (finished) void openDetailsInNewTab(e); }}
-                      sx={{ cursor: finished ? 'pointer' : 'default' }}
-                  >
-                    <TableCell>{`PDF ${e.pdfId}`}</TableCell>
-                    <TableCell>
-                      {e.prompts.map((p, i) => (
-                          <Chip key={`p-${i}`} label={p.text} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
-                      ))}
-                      {finished && (run?.log ?? [])
-                      .filter((l: any) => l?.prompt_type === 'DecisionPrompt')
-                      .map((d: any, idx: number) => (
-                          <Chip key={`${d.seq_no ?? idx}`} label={`${d.seq_no ?? idx}: ${d.decision_key ?? ''}`} size="small" sx={{ ml: 0.5 }} />
-                      ))}
-                    </TableCell>
+  const renderList = (items: Entry[], finished: boolean) => {
+    const emptyColSpan = finished ? (1 /* PDF */ + 1 /* Pipeline */ + 1 /* Score */ + finalCols.length + 1 /* Details */) : (1 /* PDF */ + 1 /* Pipeline */);
+    return (
+        <Paper sx={{ p: 2 }}>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell>PDF</TableCell>
+                <TableCell>Pipeline</TableCell>
+                {finished && <TableCell>Gesamtscore</TableCell>}
+                {finished && finalCols.map(col => (
+                    <TableCell key={`col-${col}`}>{translateKeyHeader(col)}</TableCell>
+                ))}
+                {finished && <TableCell align="right">Details</TableCell>}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {items.map(e => {
+                const run = normalizeRunShape(e.result);
+                const ex = run?.extracted || {};
+                return (
+                    <TableRow
+                        key={e.id}
+                        hover
+                        onClick={() => { if (finished) void openDetailsInNewTab(e); }}
+                        sx={{ cursor: finished ? 'pointer' : 'default' }}
+                    >
+                      <TableCell>{`PDF ${e.pdfId}`}</TableCell>
+                      <TableCell>{getPipelineLabel(e)}</TableCell>
 
-                    {finished && (
-                        <TableCell>{typeof run?.overall_score === 'number' ? run.overall_score.toFixed(2) : ''}</TableCell>
-                    )}
-                    {finished && (
-                        <TableCell>
-                          {Object.values(run?.decisions ?? {}).length > 0
-                              ? Object.values(run.decisions as any).map((d: any, i: number) =>
-                                  <Chip key={`dec-${i}`} size="small" label={`${d.route ?? '—'}`} sx={{ mr: .5 }} />)
-                              : (run?.log ?? []).map((l: any) => l.route ?? 'root').join(' › ')
-                          }
-                        </TableCell>
-                    )}
+                      {finished && (
+                          <TableCell>{typeof run?.overall_score === 'number' ? run.overall_score.toFixed(2) : ''}</TableCell>
+                      )}
 
-                    {finished && finalCols.map(col => {
-                      const val = (ex as any)?.[col]?.value;
-                      const conf = (ex as any)?.[col]?.confidence;
-                      return (
-                          <TableCell key={`cell-${e.id}-${col}`}>
-                            {val !== undefined ? (
-                                <Tooltip title={typeof conf === 'number' ? `Confidence: ${(conf * 100).toFixed(0)}%` : ''}>
-                          <span>
-                            {String(val)}
-                            {typeof conf === 'number' && (
-                                <Typography component="span" variant="caption" sx={{ ml: 0.5, opacity: 0.7 }}>
-                                  ({conf.toFixed(2)})
-                                </Typography>
-                            )}
-                          </span>
-                                </Tooltip>
-                            ) : '—'}
+                      {finished && finalCols.map(col => {
+                        const val = (ex as any)?.[col]?.value;
+                        const conf = (ex as any)?.[col]?.confidence;
+                        return (
+                            <TableCell key={`cell-${e.id}-${col}`}>
+                              {val !== undefined ? (
+                                  <Tooltip title={typeof conf === 'number' ? `Konfidenz: ${(conf * 100).toFixed(0)}%` : ''}>
+                            <span>
+                              {String(val)}
+                              {typeof conf === 'number' && (
+                                  <Typography component="span" variant="caption" sx={{ ml: 0.5, opacity: 0.7 }}>
+                                    ({conf.toFixed(2)})
+                                  </Typography>
+                              )}
+                            </span>
+                                  </Tooltip>
+                              ) : '—'}
+                            </TableCell>
+                        );
+                      })}
+
+                      {finished && (
+                          <TableCell align="right">
+                            <IconButton size="small" onClick={(ev) => { ev.stopPropagation(); void openDetailsInNewTab(e); }} title="Details anzeigen">
+                              <VisibilityIcon fontSize="small" />
+                            </IconButton>
                           </TableCell>
-                      );
-                    })}
-
-                    {finished && <TableCell><FinalSnapshotCell result={run} /></TableCell>}
-
-                    {finished && (
-                        <TableCell align="right">
-                          <IconButton size="small" onClick={(ev) => { ev.stopPropagation(); void openDetailsInNewTab(e); }} title="Details">
-                            <VisibilityIcon fontSize="small" />
-                          </IconButton>
-                        </TableCell>
-                    )}
+                      )}
+                    </TableRow>
+                );
+              })}
+              {items.length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={emptyColSpan} align="center">
+                      <Typography>Keine Einträge</Typography>
+                    </TableCell>
                   </TableRow>
-              );
-            })}
-            {items.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={6 + finalCols.length} align="center">
-                    <Typography>Keine Einträge</Typography>
-                  </TableCell>
-                </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </Paper>
-  );
+              )}
+            </TableBody>
+          </Table>
+        </Paper>
+    );
+  };
 
   return (
       <Box>
         <PageHeader
             title="Analysen"
             breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Analysen' }]}
-            actions={<Button variant="contained" onClick={load}>Reload</Button>}
+            actions={<Button variant="contained" onClick={load}>Neu laden</Button>}
         />
 
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
@@ -444,22 +444,13 @@ export default function Analyses() {
                 <DatePicker label="Ende" value={end} onChange={d => setEnd(d)} slotProps={{ textField: { size: 'small' } }} />
                 <FormControlLabel
                     control={<Checkbox checked={onlyLowConf} onChange={(e) => setOnlyLowConf(e.target.checked)} />}
-                    label="Nur unsichere"
+                    label="Nur unsichere Werte"
                 />
-                <Button variant="outlined" onClick={exportExcel}>Excel Export</Button>
+                <Button variant="outlined" onClick={exportExcel}>Excel‑Export</Button>
               </Stack>
               {renderList(filteredDone, true)}
             </Box>
         )}
-
-        {/* optional Quick-Preview */}
-        <Drawer anchor="right" open={!!selected} onClose={() => setSelected(null)}>
-          {selected?.result && (
-              <Box sx={{ width: { xs: 320, sm: 460, md: 640 }, p: 2 }}>
-                <RunDetails run={normalizeRunShape(selected.result)} pdfUrl={selected.pdfUrl ?? ''} />
-              </Box>
-          )}
-        </Drawer>
       </Box>
   );
 }

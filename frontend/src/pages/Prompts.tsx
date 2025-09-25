@@ -6,23 +6,56 @@ import {
   Slider,
   Card,
   CardContent,
-  Select,
-  MenuItem,
-  FormControl,
-  InputLabel,
+  CardActions,
+  Chip,
+  Tooltip,
+  Stack,
+  Divider,
+  Typography,
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
+import SaveIcon from '@mui/icons-material/Save';
+import StarIcon from '@mui/icons-material/Star';
+import StarBorderIcon from '@mui/icons-material/StarBorder';
+import TextSnippetIcon from '@mui/icons-material/TextSnippet';
+import LeaderboardIcon from '@mui/icons-material/Leaderboard';
+import AltRouteIcon from '@mui/icons-material/AltRoute';
+import LabelOutlinedIcon from '@mui/icons-material/LabelOutlined';
 import PageHeader from '../components/PageHeader';
 
 type PromptType = 'ExtractionPrompt' | 'ScoringPrompt' | 'DecisionPrompt';
+
 interface Prompt {
   id: number;
   text: string;
   weight: number;
-  json_key?: string;
+  json_key?: string; // Backend-Feld bleibt bestehen – UI nennt es "Name"
   favorite: boolean;
   type: PromptType;
 }
+
+declare global {
+  interface Window {
+    __ENV__?: any;
+  }
+}
+
+const getBase = () =>
+    (window as any).__ENV__?.PROMPT_API_URL ||
+    import.meta.env?.VITE_PROMPT_API_URL ||
+    'http://localhost:8082';
+
+// Farblogik + Icons pro Typ
+const typeMeta = (t: PromptType) => {
+  switch (t) {
+    case 'ExtractionPrompt':
+      return { color: 'success' as const, label: 'Extraktion', icon: <TextSnippetIcon fontSize="small" /> };
+    case 'ScoringPrompt':
+      return { color: 'secondary' as const, label: 'Bewertung', icon: <LeaderboardIcon fontSize="small" /> };
+    case 'DecisionPrompt':
+      return { color: 'info' as const, label: 'Entscheidung', icon: <AltRouteIcon fontSize="small" /> };
+  }
+};
 
 export default function Prompts() {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
@@ -37,20 +70,20 @@ export default function Prompts() {
   }, [newType]);
 
   const canCreate =
-    newText.trim() !== '' &&
-    (newType !== 'ExtractionPrompt' || newJsonKey.trim() !== '');
+      newText.trim() !== '' &&
+      (newType !== 'ExtractionPrompt' || newJsonKey.trim() !== '');
 
   const load = () => {
-    fetch('http://localhost:8082/prompts')
-      .then(r => r.json())
-      .then(setPrompts)
-      .catch(e => console.error('load prompts', e));
+    fetch(`${getBase()}/prompts`)
+    .then((r) => r.json())
+    .then(setPrompts)
+    .catch((e) => console.error('Prompts laden', e));
   };
 
   useEffect(load, []);
 
   const create = () => {
-    fetch('http://localhost:8082/prompts', {
+    fetch(`${getBase()}/prompts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -58,183 +91,231 @@ export default function Prompts() {
         weight: newType === 'ExtractionPrompt' ? 1 : newWeight,
         json_key: newType === 'ExtractionPrompt' ? newJsonKey : undefined,
         type: newType,
+        favorite: false,
       }),
     })
-      .then(() => {
-        setNewText('');
-        setNewWeight(1);
-        setNewJsonKey('');
-        load();
-      })
-      .catch(e => console.error('create prompt', e));
+    .then(() => {
+      setNewText('');
+      setNewWeight(1);
+      setNewJsonKey('');
+      load();
+    })
+    .catch((e) => console.error('Prompt anlegen', e));
+  };
+
+  const save = (p: Prompt) => {
+    if (p.type === 'ExtractionPrompt' && !p.json_key?.trim()) return;
+    fetch(`${getBase()}/prompts/${p.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: p.text,
+        weight: p.type === 'ExtractionPrompt' ? 1 : p.weight,
+        json_key: p.type === 'ExtractionPrompt' ? p.json_key : undefined,
+        type: p.type,
+        favorite: p.favorite,
+      }),
+    }).then(load);
   };
 
   const del = (id: number) => {
-    fetch(`http://localhost:8082/prompts/${id}`, { method: 'DELETE' })
-      .then(load)
-      .catch(e => console.error('delete prompt', e));
+    fetch(`${getBase()}/prompts/${id}`, { method: 'DELETE' })
+    .then(load)
+    .catch((e) => console.error('Prompt löschen', e));
   };
 
   return (
-    <Box>
-      <PageHeader title="Prompts" />
-      <Button
-        component="a"
-        href="https://chatgpt.com/g/g-688d63e210008191972ad48f0b844319-prompt-optimierer"
-        target="_blank"
-        rel="noopener noreferrer"
-        variant="outlined"
-        sx={{ mb: 2 }}
-      >
-        Prompt-Optimierer (GPT) öffnen
-      </Button>
-      <Box sx={{ display: 'flex', gap: 2, mb: 2 }}>
-        <TextField value={newText} onChange={e => setNewText(e.target.value)} label="Text" fullWidth />
-        <FormControl sx={{ minWidth: 160 }}>
-          <InputLabel>Typ</InputLabel>
-          <Select label="Typ" value={newType} onChange={e => setNewType(e.target.value as PromptType)}>
-            <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
-            <MenuItem value="ScoringPrompt">ScoringPrompt</MenuItem>
-            <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
-          </Select>
-        </FormControl>
-        {newType === 'ExtractionPrompt' ? (
-          <TextField
-            label="JSON-Key"
-            value={newJsonKey}
-            onChange={e => setNewJsonKey(e.target.value)}
-            sx={{ width: 180 }}
-          />
-        ) : (
-          <Box sx={{ width: 180, display: 'flex', alignItems: 'center' }}>
-            <Slider
-              min={0}
-              max={5}
-              step={0.1}
-              value={newWeight}
-              onChange={(_, v) => setNewWeight(v as number)}
-              sx={{ mr: 1, flexGrow: 1 }}
-            />
-            <TextField
-              type="number"
-              size="small"
-              value={newWeight}
-              onChange={e => setNewWeight(parseFloat(e.target.value))}
-              inputProps={{ step: 1, min: 0, max: 10 }}
-              sx={{ width: 130 }}
-            />
-          </Box>
-        )}
-        <Button
-          variant="contained"
-          color={canCreate ? 'primary' : 'inherit'}
-          disabled={!canCreate}
-          onClick={create}
-        >
-          Add
-        </Button>
-      </Box>
-      {prompts.map(p => {
-        const canSave =
-          p.type !== 'ExtractionPrompt' || (p.json_key && p.json_key.trim().length > 0);
-        return (
-        <Card key={p.id} sx={{ mb: 1 }}>
-          <CardContent sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Box sx={{ flexGrow: 1 }}>{p.text}</Box>
-            <FormControl sx={{ minWidth: 160 }} size="small">
-              <InputLabel>Typ</InputLabel>
-              <Select
-                label="Typ"
-                value={p.type}
-                onChange={e =>
-                  setPrompts(ps =>
-                    ps.map(it =>
-                      it.id === p.id
-                        ? {
-                            ...it,
-                            type: e.target.value as PromptType,
-                            weight: e.target.value === 'ExtractionPrompt' ? 1 : it.weight,
-                          }
-                        : it
-                    )
-                  )
-                }
+      <Box>
+        <PageHeader
+            title="Prompts"
+            subtitle="Erstellen & verwalten von Prompt-Vorlagen"
+            tone="info"
+            icon={<TextSnippetIcon />}
+            breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Prompts' }]}
+            tag={`Anzahl: ${prompts.length}`}
+            actions={
+              <Button
+                  component="a"
+                  href="https://chatgpt.com/g/g-688d63e210008191972ad48f0b844319-prompt-optimierer"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  variant="outlined"
               >
-                <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
-                <MenuItem value="ScoringPrompt">ScoringPrompt</MenuItem>
-                <MenuItem value="DecisionPrompt">DecisionPrompt</MenuItem>
-              </Select>
-            </FormControl>
-            {p.type === 'ExtractionPrompt' ? (
-              <TextField
-                label="JSON-Key"
-                size="small"
-                value={p.json_key || ''}
-                onChange={e =>
-                  setPrompts(ps =>
-                    ps.map(it => (it.id === p.id ? { ...it, json_key: e.target.value } : it))
-                  )
-                }
-                sx={{ width: 180 }}
-              />
-            ) : (
-              <Box sx={{ width: 180, display: 'flex', alignItems: 'center' }}>
-                <Slider
-                  min={0}
-                  max={5}
-                  step={0.1}
-                  value={p.weight}
-                  onChange={(_, v) =>
-                    setPrompts(ps =>
-                      ps.map(it => (it.id === p.id ? { ...it, weight: v as number } : it))
-                    )
-                  }
-                  sx={{ mr: 1, flexGrow: 1 }}
-                />
-                <TextField
-                  type="number"
-                  size="small"
-                  value={p.weight}
-                  onChange={e =>
-                    setPrompts(ps =>
-                      ps.map(it =>
-                        it.id === p.id ? { ...it, weight: parseFloat(e.target.value) } : it
-                      )
-                    )
-                  }
-                  inputProps={{ step: 1, min: 0, max: 10 }}
-                  sx={{ width: 130 }}
-                />
+                Prompt-Optimierer öffnen
+              </Button>
+            }
+        />
+
+        {/* Neu-Formular */}
+        <Card sx={{ mb: 2, borderLeft: '5px solid', borderColor: 'info.main' }}>
+          <CardContent>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
+              <TextField value={newText} onChange={(e) => setNewText(e.target.value)} label="Text" fullWidth />
+
+              {/* Typ-Auswahl mit Chips */}
+              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+                {(['ExtractionPrompt', 'ScoringPrompt', 'DecisionPrompt'] as PromptType[]).map((t) => {
+                  const meta = typeMeta(t);
+                  const selected = newType === t;
+                  return (
+                      <Chip
+                          key={t}
+                          icon={meta.icon}
+                          label={meta.label}
+                          color={selected ? meta.color : 'default'}
+                          variant={selected ? 'filled' : 'outlined'}
+                          onClick={() => setNewType(t)}
+                          sx={{ cursor: 'pointer' }}
+                      />
+                  );
+                })}
               </Box>
-            )}
-            <Button
-              variant="outlined"
-              size="small"
-              disabled={!canSave}
-              onClick={() => {
-                if (p.type === 'ExtractionPrompt' && !p.json_key?.trim()) return;
-                fetch(`http://localhost:8082/prompts/${p.id}`, {
-                  method: 'PUT',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({
-                    text: p.text,
-                    weight: p.type === 'ExtractionPrompt' ? 1 : p.weight,
-                    json_key: p.type === 'ExtractionPrompt' ? p.json_key : undefined,
-                    type: p.type,
-                    favorite: p.favorite,
-                  }),
-                }).then(load);
-              }}
-            >
-              Save
-            </Button>
-            <Button size="small" onClick={() => del(p.id)}>
-              <DeleteIcon />
-            </Button>
+
+              {newType === 'ExtractionPrompt' ? (
+                  <TextField
+                      label="Name"
+                      value={newJsonKey}
+                      onChange={(e) => setNewJsonKey(e.target.value)}
+                      sx={{ width: { xs: '100%', md: 220 } }}
+                      helperText="Bezeichner für das extrahierte Feld"
+                  />
+              ) : (
+                  <Box sx={{ width: { xs: '100%', md: 280 } }}>
+                    <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                      Gewichtung
+                    </Typography>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Slider min={0} max={5} step={0.1} value={newWeight} onChange={(_, v) => setNewWeight(v as number)} sx={{ flex: 1 }} />
+                      <TextField
+                          type="number"
+                          size="small"
+                          value={newWeight}
+                          onChange={(e) => setNewWeight(parseFloat(e.target.value))}
+                          inputProps={{ step: 1, min: 0, max: 10 }}
+                          sx={{ width: 90 }}
+                      />
+                    </Stack>
+                  </Box>
+              )}
+
+              <Button variant="contained" disabled={!canCreate} onClick={create} startIcon={<SaveIcon />}>
+                Hinzufügen
+              </Button>
+            </Stack>
           </CardContent>
         </Card>
-        );
-      })}
-    </Box>
+
+        {/* Liste */}
+        <Stack spacing={1.25}>
+          {prompts.map((p) => {
+            const meta = typeMeta(p.type);
+            const canSave = p.type !== 'ExtractionPrompt' || (p.json_key && p.json_key.trim().length > 0);
+            return (
+                <Card key={p.id} sx={{ borderLeft: '5px solid', borderColor: `${meta.color}.main` }}>
+                  <CardContent>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
+                      {/* Typ-Chip + Favorit */}
+                      <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 220 }}>
+                        <Chip icon={meta.icon} label={meta.label} color={meta.color} size="small" />
+                        <Tooltip title={p.favorite ? 'Als nicht favorisiert markieren' : 'Als Favorit markieren'}>
+                          <Button
+                              size="small"
+                              variant={p.favorite ? 'contained' : 'outlined'}
+                              color={p.favorite ? 'warning' : 'inherit'}
+                              onClick={() => {
+                                const next = { ...p, favorite: !p.favorite };
+                                setPrompts((ps) => ps.map((it) => (it.id === p.id ? next : it)));
+                                save(next);
+                              }}
+                              startIcon={p.favorite ? <StarIcon /> : <StarBorderIcon />}
+                              sx={{ minWidth: 0, px: 1.25 }}
+                          >
+                            Favorit
+                          </Button>
+                        </Tooltip>
+                      </Stack>
+
+                      {/* Text */}
+                      <TextField
+                          label="Text"
+                          fullWidth
+                          value={p.text}
+                          onChange={(e) =>
+                              setPrompts((ps) => ps.map((it) => (it.id === p.id ? { ...it, text: e.target.value } : it)))
+                          }
+                      />
+
+                      {/* Name / Gewichtung */}
+                      {p.type === 'ExtractionPrompt' ? (
+                          <TextField
+                              label="Name"
+                              value={p.json_key || ''}
+                              onChange={(e) =>
+                                  setPrompts((ps) =>
+                                      ps.map((it) => (it.id === p.id ? { ...it, json_key: e.target.value } : it))
+                                  )
+                              }
+                              sx={{ width: { xs: '100%', md: 240 } }}
+                              InputProps={{ startAdornment: <LabelOutlinedIcon sx={{ mr: 1 }} /> }}
+                          />
+                      ) : (
+                          <Box sx={{ width: { xs: '100%', md: 300 } }}>
+                            <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
+                              Gewichtung
+                            </Typography>
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              <Slider
+                                  min={0}
+                                  max={5}
+                                  step={0.1}
+                                  value={p.weight}
+                                  onChange={(_, v) =>
+                                      setPrompts((ps) => ps.map((it) => (it.id === p.id ? { ...it, weight: v as number } : it)))
+                                  }
+                                  sx={{ flex: 1 }}
+                              />
+                              <TextField
+                                  type="number"
+                                  size="small"
+                                  value={p.weight}
+                                  onChange={(e) =>
+                                      setPrompts((ps) =>
+                                          ps.map((it) =>
+                                              it.id === p.id ? { ...it, weight: parseFloat(e.target.value) } : it
+                                          )
+                                      )
+                                  }
+                                  inputProps={{ step: 1, min: 0, max: 10 }}
+                                  sx={{ width: 90 }}
+                              />
+                            </Stack>
+                          </Box>
+                      )}
+                    </Stack>
+
+                    <Divider sx={{ my: 1.25 }} />
+
+                    {/* Sekundärinfos */}
+                    <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                      {p.type === 'ExtractionPrompt' && p.json_key && (
+                          <Chip size="small" icon={<LabelOutlinedIcon />} label={`Name: ${p.json_key}`} variant="outlined" />
+                      )}
+                      <Chip size="small" label={`ID: ${p.id}`} variant="outlined" />
+                    </Stack>
+                  </CardContent>
+
+                  <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
+                    <Button onClick={() => save(p)} variant="contained" size="small" startIcon={<SaveIcon />} disabled={!canSave}>
+                      Speichern
+                    </Button>
+                    <Button onClick={() => del(p.id)} size="small" startIcon={<DeleteIcon />}>
+                      Löschen
+                    </Button>
+                  </CardActions>
+                </Card>
+            );
+          })}
+        </Stack>
+      </Box>
   );
 }
