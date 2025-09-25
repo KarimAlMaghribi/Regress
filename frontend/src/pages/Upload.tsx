@@ -190,14 +190,6 @@ export default function Upload() {
         breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Upload' }]}
         actions={<Button variant="outlined" size="small" onClick={()=>load().catch(()=>{})}>Reload</Button>}
       />
-      <FormControl sx={{ mt:2, mb:2, minWidth:200 }}>
-        <InputLabel>Pipeline</InputLabel>
-        <Select label="Pipeline" value={pipelineId} onChange={e=>setPipelineId(e.target.value)} disabled={pipelines.length===0}>
-          {pipelines.map(p=> (
-            <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>
-          ))}
-        </Select>
-      </FormControl>
       <Paper
         component={motion.div}
         whileHover={{ scale: 1.03 }}
