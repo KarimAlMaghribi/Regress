@@ -6,10 +6,10 @@ import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew'; // NEU
 import dayjs, { Dayjs } from 'dayjs';
 import { PipelineRunResult } from '../types/pipeline';
 import RunDetails from '../components/RunDetails';
-import { FinalSnapshotCell } from '../components/final/FinalPills';
 
 declare global {
   interface Window { __ENV__?: any }
@@ -22,6 +22,12 @@ const WS_URL =
     import.meta.env.VITE_HISTORY_WS ||
     `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/histws`;
 
+function getPipelineApiBase(): string {
+  return RUNTIME.PIPELINE_API_URL || import.meta.env.VITE_PIPELINE_API_URL || '/pl';
+}
+
+const LS_PREFIX = 'run-view:'; // NEU
+
 interface HistoryEntry {
   id: number; // unique analysis id
   pdfId: number;
@@ -30,6 +36,8 @@ interface HistoryEntry {
   pdfUrl: string;
   prompt?: string | null;
   status?: string;
+  pipelineId?: string;
+  pipelineName?: string;
 }
 
 /** snake/camel normalisieren (nur was wir brauchen) */
@@ -45,16 +53,121 @@ function normalizeRun(run: any | undefined | null) {
   return n;
 }
 
+function extractPipelineFromAny(e: any): { id?: string; name?: string } {
+  const pick = (v: any) => (v != null ? String(v) : undefined);
+
+  const fromTopId = pick(e?.pipeline_id ?? e?.pipelineId ?? e?.pipeline?.id);
+  const fromTopName = e?.pipeline_name ?? e?.pipelineName ?? e?.pipeline?.name;
+
+  const r = normalizeRun(e?.result ?? e?.run);
+  const fromRunId = pick(r?.pipeline_id ?? r?.pipelineId ?? r?.pipeline?.id);
+  const fromRunName = r?.pipeline_name ?? r?.pipelineName ?? r?.pipeline?.name;
+
+  return {
+    id: fromTopId ?? fromRunId,
+    name: (typeof fromTopName === 'string' && fromTopName) ? fromTopName
+        : (typeof fromRunName === 'string' && fromRunName) ? fromRunName
+            : undefined,
+  };
+}
+
 function normalizeEntry(e: any): HistoryEntry {
+  const run = normalizeRun(e.result ?? e.run ?? undefined);
+  const { id: pipelineId, name: pipelineName } = extractPipelineFromAny({ ...e, result: run });
   return {
     id: e.id ?? Date.now() + Math.random(),
     pdfId: e.pdf_id ?? e.pdfId ?? e.file_id ?? 0,
     pdfUrl: e.pdfUrl ?? e.pdf_url ?? '',
     timestamp: e.timestamp ?? e.created_at ?? new Date().toISOString(),
-    result: normalizeRun(e.result ?? e.run ?? undefined),
+    result: run,
     prompt: e.prompt ?? null,
     status: e.status,
+    pipelineId,
+    pipelineName,
   };
+}
+
+async function fetchPipelineNameById(id: string): Promise<string | undefined> {
+  const api = getPipelineApiBase();
+  const candidates = [
+    `${api}/pipelines/${encodeURIComponent(id)}`,
+    `${api}/pipelines?id=${encodeURIComponent(id)}`,
+  ];
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (j && typeof j === 'object' && typeof j.name === 'string') return j.name;
+      if (Array.isArray(j)) {
+        const hit = j.find((p: any) => String(p?.id ?? p?.pipeline_id) === String(id));
+        if (hit && typeof hit.name === 'string') return hit.name;
+      }
+    } catch { /* ignore */ }
+  }
+  try {
+    const r = await fetch(`${api}/pipelines`, { headers: { Accept: 'application/json' } });
+    if (r.ok) {
+      const arr = await r.json();
+      if (Array.isArray(arr)) {
+        const hit = arr.find((p: any) => String(p?.id ?? p?.pipeline_id) === String(id));
+        if (hit && typeof hit.name === 'string') return hit.name;
+      }
+    }
+  } catch { /* ignore */ }
+  return undefined;
+}
+
+/** NEU: Öffnet RunDetailsPage in neuem Tab und legt Payload in localStorage ab */
+async function openRunDetailsPageInNewTab(entry: HistoryEntry) {
+  const key = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const run = normalizeRun(entry.result);
+
+  const toNum = (v: any): number | undefined => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+
+  let pdfId: number | undefined =
+      toNum(entry.pdfId) ??
+      toNum(run?.pdf_id) ??
+      toNum(run?.pdfId) ??
+      toNum((entry as any)?.result?.pdf_id) ??
+      undefined;
+
+  // Payload für Sofort-Render
+  const payload: any = { run, pdfUrl: entry.pdfUrl };
+  if (pdfId != null) payload.pdfId = pdfId;
+  try {
+    localStorage.setItem(`${LS_PREFIX}${key}`, JSON.stringify(payload));
+  } catch (e) {
+    console.warn('localStorage write failed', e);
+  }
+
+  // Optional: run_id bestimmen (falls vorhanden oder ableitbar)
+  let runId: string | undefined = run?.run_id ?? run?.id;
+  if (!runId && pdfId && entry.pipelineId) {
+    const api = getPipelineApiBase();
+    const url = `${api}/runs/latest?pdf_id=${encodeURIComponent(pdfId)}&pipeline_id=${encodeURIComponent(entry.pipelineId)}`;
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (r.ok) {
+        const j = await r.json();
+        if (j && typeof j === 'object') {
+          runId = j.run_id ?? j.id ?? runId;
+        }
+      }
+    } catch { /* ignore */ }
+  }
+
+  // URL bauen
+  const qp = new URLSearchParams();
+  if (pdfId != null) qp.set('pdf_id', String(pdfId));
+  if (entry.pdfUrl) qp.set('pdf_url', entry.pdfUrl);
+  if (runId) qp.set('run_id', runId);
+
+  const url = `/run-view/${key}` + (qp.toString() ? `?${qp.toString()}` : '');
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 export default function History() {
@@ -63,6 +176,7 @@ export default function History() {
   const [search, setSearch] = useState('');
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
+  const [pipelineNames, setPipelineNames] = useState<Record<string, string>>({});
 
   // Initial REST Load (running + completed)
   useEffect(() => {
@@ -88,6 +202,30 @@ export default function History() {
     };
     load();
   }, []);
+
+  // Pipeline-Namen nachladen, falls nur IDs vorhanden
+  useEffect(() => {
+    const missing = new Set<string>();
+    for (const e of entries) {
+      if (e.pipelineId && !e.pipelineName && !pipelineNames[e.pipelineId]) {
+        missing.add(e.pipelineId);
+      }
+    }
+    if (missing.size === 0) return;
+
+    (async () => {
+      const updates: Record<string, string> = {};
+      await Promise.all(
+          Array.from(missing).map(async (id) => {
+            const name = await fetchPipelineNameById(id);
+            if (name) updates[id] = name;
+          }),
+      );
+      if (Object.keys(updates).length) {
+        setPipelineNames(prev => ({ ...prev, ...updates }));
+      }
+    })();
+  }, [entries, pipelineNames]);
 
   // Live-Updates über WebSocket
   useEffect(() => {
@@ -138,6 +276,7 @@ export default function History() {
           e.prompt?.toLowerCase() ?? '',
           JSON.stringify(e.result ?? {}).toLowerCase(),
           String(e.pdfId),
+          e.pipelineName?.toLowerCase() ?? '',
         ].join(' ');
         if (!hay.includes(s)) return false;
       }
@@ -152,6 +291,13 @@ export default function History() {
   }, {});
   const groupKeys = Object.keys(groups).sort((a, b) => (a > b ? -1 : 1));
 
+  const getPipelineLabel = (e: HistoryEntry) => {
+    if (e.pipelineName) return e.pipelineName;
+    if (e.pipelineId && pipelineNames[e.pipelineId]) return pipelineNames[e.pipelineId];
+    // kein Fallback auf ID anzeigen
+    return '—';
+  };
+
   const cols: GridColDef<HistoryEntry>[] = [
     {
       field: 'timestamp',
@@ -160,16 +306,10 @@ export default function History() {
       valueGetter: p => dayjs(p.row.timestamp).format('HH:mm:ss'),
     },
     {
-      field: 'prompt',
-      headerName: 'Prompt',
+      field: 'pipeline',
+      headerName: 'Pipeline',
       flex: 1.2,
-      renderCell: params => (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap' }}>
-            {params.row.prompt && (
-                <Chip label={params.row.prompt} size="small" sx={{ mr: 0.5, mb: 0.5 }} />
-            )}
-          </Box>
-      ),
+      valueGetter: p => getPipelineLabel(p.row),
     },
     {
       field: 'status',
@@ -194,30 +334,23 @@ export default function History() {
       },
     },
     {
-      field: 'route',
-      headerName: 'Route',
-      flex: 1.2,
-      valueGetter: p => {
-        const r = normalizeRun(p.row.result);
-        return (r?.log ?? []).map((l: any) => l.route ?? 'root').join(' › ') || '';
-      },
-    },
-    {
-      field: 'final',
-      headerName: 'Final',
-      flex: 1.6,
-      sortable: false,
-      renderCell: params => <FinalSnapshotCell result={normalizeRun(params.row.result)} />,
-    },
-    {
       field: 'actions',
       headerName: '',
       sortable: false,
-      width: 60,
+      width: 110, // verbreitert für 2 Icons
       renderCell: params => (
-          <IconButton size="small" onClick={() => setSelected(params.row)}>
-            <VisibilityIcon fontSize="small" />
-          </IconButton>
+          <Stack direction="row" spacing={0.5}>
+            <IconButton size="small" title="Details anzeigen" onClick={() => setSelected(params.row)}>
+              <VisibilityIcon fontSize="small" />
+            </IconButton>
+            <IconButton
+                size="small"
+                title="In RunDetailsPage öffnen"
+                onClick={() => void openRunDetailsPageInNewTab(params.row)}
+            >
+              <OpenInNewIcon fontSize="small" />
+            </IconButton>
+          </Stack>
       ),
     },
   ];
