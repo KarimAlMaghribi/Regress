@@ -506,8 +506,8 @@ export default function Analyses() {
         />
 
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-          <Tab label={`Laufend (${running.length})`} />
           <Tab label={`Abgeschlossen (${done.length})`} />
+          <Tab label={`Laufend (${running.length})`} />
         </Tabs>
 
         {tab === 0 ? (
