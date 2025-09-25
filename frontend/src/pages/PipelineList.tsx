@@ -27,27 +27,7 @@ import ListAltIcon from '@mui/icons-material/ListAlt';
 import { usePipelineStore } from '../hooks/usePipelineStore';
 import { useNavigate } from 'react-router-dom';
 
-type Row = { id: string; name: string; overallScore?: number | null };
-
-function ScoreChip({ score }: { score?: number | null }) {
-  if (score == null || Number.isNaN(score)) {
-    return <Chip size="small" label="kein Score" variant="outlined" />;
-  }
-
-  let color: 'success' | 'warning' | 'error' = 'success';
-  let Icon = TrendingUpIcon;
-
-  if (score < 50) {
-    color = 'error';
-    Icon = TrendingDownIcon;
-  } else if (score < 80) {
-    color = 'warning';
-    Icon = TrendingFlatIcon;
-  }
-
-  const label = `${Math.round(score)}%`;
-  return <Chip size="small" color={color} icon={<Icon />} label={label} />;
-}
+type Row = { id: string; name: string;};
 
 function Toolbar({
                    onAdd,
@@ -180,20 +160,6 @@ export default function PipelineList() {
       ),
     },
     {
-      field: 'overallScore',
-      headerName: 'Score',
-      width: 140,
-      align: 'center',
-      headerAlign: 'center',
-      sortable: true,
-      renderCell: (params) => <ScoreChip score={params.value as number | null} />,
-      valueGetter: (params) =>
-          typeof params.row.overallScore === 'number'
-              ? params.row.overallScore
-              : null,
-      sortComparator: (v1, v2) => (v1 ?? -1) - (v2 ?? -1),
-    },
-    {
       field: 'actions',
       headerName: 'Aktionen',
       width: 140,
@@ -240,7 +206,6 @@ export default function PipelineList() {
             sx={{
               borderRadius: 2,
               '& .MuiDataGrid-columnHeaders': {
-                backgroundColor: 'grey.100',
                 borderTopLeftRadius: 8,
                 borderTopRightRadius: 8,
               },
