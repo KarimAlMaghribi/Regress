@@ -1,3 +1,4 @@
+// src/pages/RunDetailsPage.tsx
 import * as React from "react";
 import {useMemo} from "react";
 import {useParams, useSearchParams} from "react-router-dom";
@@ -32,10 +33,10 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import ArticleIcon from "@mui/icons-material/Article";  // Extraction
-import RuleIcon from "@mui/icons-material/Rule";        // Score
-import AltRouteIcon from "@mui/icons-material/AltRoute"; // Decision
-import AssessmentIcon from "@mui/icons-material/Assessment"; // Scoring header
+import ArticleIcon from "@mui/icons-material/Article";      // Extraction
+import RuleIcon from "@mui/icons-material/Rule";            // Score
+import AltRouteIcon from "@mui/icons-material/AltRoute";    // Decision
+import AssessmentIcon from "@mui/icons-material/Assessment";// Scoring header
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 
 import {type RunDetail, type RunStep, useRunDetails} from "../hooks/useRunDetails";
@@ -47,7 +48,7 @@ const asBool = (v: unknown) =>
     (typeof v === "boolean"
         ? v
         : typeof v === "object" && v !== null
-            ? (v as any).bool ?? (v as any).decision
+            ? ((v as any).bool ?? (v as any).decision)
             : undefined);
 
 function valOrObjValue(v: any) {
@@ -98,7 +99,7 @@ function ConfidenceBar({value}: { value?: number | null }) {
 function formatValue(val: any) {
   const v = valOrObjValue(val);
   if (v == null) return "—";
-  if (typeof v === "boolean") return v ? "Ja" : "Nein";
+  if (typeof v === "boolean") return v ? "✅ Ja" : "❌ Nein";
   if (typeof v === "number") return fmtNum(v);
   if (typeof v === "string") return v;
   try { return JSON.stringify(v); } catch { return String(v); }
@@ -107,7 +108,7 @@ function formatValue(val: any) {
 function EvidenceChip({page, pdfUrl}: { page?: number; pdfUrl?: string }) {
   if (!page) return <>—</>;
   const open = () => pdfUrl && window.open(`${pdfUrl}#page=${page}`, "_blank", "noopener,noreferrer");
-  return <Chip size="small" variant="outlined" label={`Seite ${page}`} onClick={open}/>;
+  return <Chip size="small" variant="outlined" label={`📄 Seite ${page}`} onClick={open}/>;
 }
 
 /** --------- main page --------- */
@@ -163,12 +164,14 @@ export default function RunDetailsPage() {
       <Container maxWidth="xl" sx={{py: 3}}>
         <HeaderBar detail={data} pdfUrl={pdfUrl}/>
 
-        {/* ALLES in voller Breite, klar gestapelt */}
+        {/* Alles in voller Breite, klar gestapelt */}
         <Stack spacing={2}>
           <SummaryCard detail={data} scoreSum={scoreSum}/>
           <ExtractionCard detail={data} pdfUrl={pdfUrl}/>
-          <ScoreBreakdownCard detail={data}/>
-          <DecisionCard detail={data}/>
+          {/* neu: Scoring & Decision inkl. Kandidaten */}
+          <ScoringVotesCard detail={data}/>
+          <DecisionVotesCard detail={data}/>
+          {/* Debug/Detail: alle Steps + Attempts */}
           <StepsWithAttempts detail={data} pdfUrl={pdfUrl}/>
         </Stack>
       </Container>
@@ -233,75 +236,17 @@ function SummaryCard({detail, scoreSum}: { detail: RunDetail; scoreSum: number }
               </Box>
             </Stack>
 
-            <Row label="Extrakte">{finalKeys.length} Felder</Row>
-            <Row label="Entscheidungen">{decKeys.length} Einträge</Row>
-            <Row label="Score-Regeln">{scKeys.length} Regeln • Summe: {fmtNum(scoreSum)}</Row>
+            <Row label="Extrakte">🧩 {finalKeys.length} Felder</Row>
+            <Row label="Entscheidungen">⚖️ {decKeys.length} Einträge</Row>
+            <Row label="Score-Regeln">🟢 {scKeys.length} Regeln • Summe: {fmtNum(scoreSum)}</Row>
             <Divider sx={{my: 1}}/>
-            <Row label="Start">{run.started_at ?? "—"}</Row>
-            <Row label="Ende">{run.finished_at ?? "—"}</Row>
-            {run.error && (
+            <Row label="Start">🕒 {detail.run.started_at ?? "—"}</Row>
+            <Row label="Ende">🏁 {detail.run.finished_at ?? "—"}</Row>
+            {detail.run.error && (
                 <Row label="Fehler">
-                  <Chip size="small" color="error" icon={<ErrorOutlineIcon/>} label={run.error}/>
+                  <Chip size="small" color="error" icon={<ErrorOutlineIcon/>} label={detail.run.error}/>
                 </Row>
             )}
-          </Stack>
-        </CardContent>
-      </Card>
-  );
-}
-
-function ScoreBreakdownCard({detail}: { detail: RunDetail }) {
-  const map = detail.run.final_scores ?? {};
-  const entries = useMemo(() => Object.entries(map), [map]);
-  if (!entries.length) return null;
-
-  return (
-      <Card variant="outlined">
-        <CardHeader title="Scoring (Beitrag je Regel)" subheader="Gewicht addiert bei finalem TRUE"/>
-        <CardContent>
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Regel</TableCell>
-                <TableCell width={120} align="right">Beitrag</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {entries.map(([k, v]) => (
-                  <TableRow key={k}>
-                    <TableCell>
-                      <Chip size="small" color={(v as number) > 0 ? "success" : "default"} label={k}/>
-                    </TableCell>
-                    <TableCell align="right">{fmtNum(typeof v === "number" ? v : 0)}</TableCell>
-                  </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-  );
-}
-
-function DecisionCard({detail}: { detail: RunDetail }) {
-  const map = detail.run.final_decisions ?? {};
-  const entries = useMemo(() => Object.entries(map), [map]);
-  if (!entries.length) return null;
-
-  return (
-      <Card variant="outlined">
-        <CardHeader title="Finale Entscheidungen" subheader="Routen/Ja-Nein"/>
-        <CardContent>
-          <Stack direction="row" gap={1} flexWrap="wrap">
-            {entries.map(([k, b]) => (
-                <Chip
-                    key={k}
-                    size="small"
-                    color={b ? "success" : "error"}
-                    icon={b ? <CheckCircleOutlineIcon/> : <ErrorOutlineIcon/>}
-                    label={`${k}: ${b ? "Ja" : "Nein"}`}
-                    variant={b ? "filled" : "outlined"}
-                />
-            ))}
           </Stack>
         </CardContent>
       </Card>
@@ -335,7 +280,7 @@ function ExtractionCard({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }
                 <TableCell>Feld</TableCell>
                 <TableCell>Wert</TableCell>
                 <TableCell width={180} align="right">Confidence</TableCell>
-                <TableCell width={110} align="right">Evidenz</TableCell>
+                <TableCell width={130} align="right">Evidenz</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
@@ -352,6 +297,114 @@ function ExtractionCard({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }
               })}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+  );
+}
+
+/** NEU: Kandidaten je Scoring-Step (✅ / ❌) */
+function ScoringVotesCard({detail}: { detail: RunDetail }) {
+  const scoreSteps = (detail.steps ?? []).filter(s => s.step_type === "Score");
+  if (!scoreSteps.length) return null;
+
+  return (
+      <Card variant="outlined">
+        <CardHeader title="Scoring-Ergebnisse" subheader="Kandidaten (Mehrheitsentscheidung)"/>
+        <CardContent>
+          <Stack spacing={2}>
+            {scoreSteps.map((s, idx) => (
+                <Box key={s.id}>
+                  <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
+                    <RuleIcon sx={{color: (s.final_value ? "success.main" : "error.main")}} fontSize="small"/>
+                    <Typography variant="subtitle2">
+                      {s.final_key ?? `Score-Regel ${idx+1}`} · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
+                    </Typography>
+                    <Box sx={{flex: 1}}/>
+                    <ConfidenceBar value={s.final_confidence}/>
+                  </Stack>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell width={56}>#</TableCell>
+                        <TableCell>Begründung</TableCell>
+                        <TableCell width={120}>Vote</TableCell>
+                        <TableCell width={90}>Final</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {(s.attempts ?? []).map((a, i) => {
+                        const vote = a.candidate_value === true ? "✅ Ja" : "❌ Nein";
+                        return (
+                            <TableRow key={a.id ?? i} hover>
+                              <TableCell>{a.attempt_no ?? i + 1}</TableCell>
+                              <TableCell>{a.candidate_key ?? "—"}</TableCell>
+                              <TableCell>{vote}</TableCell>
+                              <TableCell>
+                                {a.is_final ? <Chip size="small" color="success" label="final"/> :
+                                    <Chip size="small" variant="outlined" label="—"/>}
+                              </TableCell>
+                            </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </Box>
+            ))}
+          </Stack>
+        </CardContent>
+      </Card>
+  );
+}
+
+/** NEU: Kandidaten je Decision-Step (✅ / ❌) */
+function DecisionVotesCard({detail}: { detail: RunDetail }) {
+  const decisionSteps = (detail.steps ?? []).filter(s => s.step_type === "Decision");
+  if (!decisionSteps.length) return null;
+
+  return (
+      <Card variant="outlined">
+        <CardHeader title="Decision-Ergebnisse" subheader="Kandidaten (Mehrheitsentscheidung)"/>
+        <CardContent>
+          <Stack spacing={2}>
+            {decisionSteps.map((s, idx) => (
+                <Box key={s.id}>
+                  <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
+                    <AltRouteIcon sx={{color: (s.final_value ? "success.main" : "error.main")}} fontSize="small"/>
+                    <Typography variant="subtitle2">
+                      {s.final_key ?? `Decision ${idx+1}`} · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
+                    </Typography>
+                    <Box sx={{flex: 1}}/>
+                    <ConfidenceBar value={s.final_confidence}/>
+                  </Stack>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell width={56}>#</TableCell>
+                        <TableCell>Quelle</TableCell>
+                        <TableCell width={120}>Vote</TableCell>
+                        <TableCell width={90}>Final</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {(s.attempts ?? []).map((a, i) => {
+                        const vote = a.candidate_value === true ? "✅ Ja" : "❌ Nein";
+                        return (
+                            <TableRow key={a.id ?? i} hover>
+                              <TableCell>{a.attempt_no ?? i + 1}</TableCell>
+                              <TableCell>{a.candidate_key ?? "—"}</TableCell>
+                              <TableCell>{vote}</TableCell>
+                              <TableCell>
+                                {a.is_final ? <Chip size="small" color="success" label="final"/> :
+                                    <Chip size="small" variant="outlined" label="—"/>}
+                              </TableCell>
+                            </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </Box>
+            ))}
+          </Stack>
         </CardContent>
       </Card>
   );
@@ -408,7 +461,7 @@ function StepsWithAttempts({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: strin
                         <TableCell>Value</TableCell>
                         <TableCell width={180}>Confidence</TableCell>
                         <TableCell width={120}>Quelle</TableCell>
-                        <TableCell width={100}>Evidenz</TableCell>
+                        <TableCell width={120}>Evidenz</TableCell>
                         <TableCell width={90}>Final</TableCell>
                       </TableRow>
                     </TableHead>
@@ -421,7 +474,7 @@ function StepsWithAttempts({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: strin
                         const bool = asBool(a?.candidate_value);
                         const display =
                             typeof bool === "boolean"
-                                ? (bool ? "Ja" : "Nein")
+                                ? (bool ? "✅ Ja" : "❌ Nein")
                                 : formatValue(a?.candidate_value?.value ?? a?.candidate_value);
                         return (
                             <TableRow key={a.id ?? i} hover>

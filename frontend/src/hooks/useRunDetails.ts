@@ -9,8 +9,7 @@ export interface Attempt {
   id?: number | string;
   attempt_no?: number;
   candidate_key?: string;
-  // Für die UI: Seite sowohl flach (.page) als auch unter .source.page anbieten
-  candidate_value?: { value: any; page?: number; source?: { page?: number; quote?: string } } | any;
+  candidate_value?: any; // string | boolean | { value: any; page?: number; source?: { page?: number; quote?: string } }
   candidate_confidence?: number | null;
   source?: string | null;
   is_final?: boolean;
@@ -84,7 +83,7 @@ export function useRunDetails(
           } catch { return undefined; }
         };
 
-        // pdfId herleiten: opts → localStorage
+        // pdfId herleiten
         let candidatePdfId: number | undefined = opts?.pdfId;
         if (!candidatePdfId && opts?.storageKey) {
           try {
@@ -101,13 +100,13 @@ export function useRunDetails(
           } catch { /* ignore */ }
         }
 
-        // 1) bevorzugt: /hist/results/{pdf_id}
+        // 1) /hist/results/{pdf_id}
         let payload: any | undefined = undefined;
         if (candidatePdfId != null) {
           payload = await tryFetchJson(`${HIST}/results/${encodeURIComponent(candidatePdfId)}`);
         }
 
-        // 2) nur run_id → analyses?run_id → results/{pdf_id}
+        // 2) analyses?run_id → results/{pdf_id}
         if (!payload && runId) {
           const list = await tryFetchJson(`${HIST}/analyses?run_id=${encodeURIComponent(runId)}`);
           const first = Array.isArray(list) && list.length ? list[0] : undefined;
@@ -117,12 +116,12 @@ export function useRunDetails(
           }
         }
 
-        // 3) letzter Versuch: /analyses/{id}/detail
+        // 3) analyses/{id}/detail
         if (!payload && runId) {
           payload = await tryFetchJson(`${HIST}/analyses/${encodeURIComponent(runId)}/detail`);
         }
 
-        // 4) Fallback: LocalStorage kompletter Run
+        // 4) Fallback LocalStorage
         if (!payload && opts?.storageKey) {
           try {
             const raw = localStorage.getItem(opts.storageKey);
@@ -133,15 +132,12 @@ export function useRunDetails(
           } catch { /* ignore */ }
         }
 
-        if (!payload) {
-          throw new Error("Keine Run-Daten als JSON gefunden. (Die angefragten Endpunkte liefern HTML oder 4xx.)");
-        }
+        if (!payload) throw new Error("Keine Run-Daten als JSON gefunden. (Die angefragten Endpunkte liefern HTML oder 4xx.)");
 
         const normalized = toRunDetail(payload);
         if (!alive) return;
         setData(normalized);
 
-        // nützlich: persistieren (pdfId) für spätere Reiter
         try {
           if (opts?.storageKey) {
             localStorage.setItem(
@@ -173,9 +169,9 @@ export function useRunDetails(
   return { data, loading, error, scoreSum };
 }
 
-/* ============================== Transform / Consolidation ============================== */
+/* ============================== Konsolidierung & Utils ============================== */
 
-// sehr schlichte Stoppliste für offensichtliche Nicht-Werte
+// Stoppliste / Normalisierung
 const STOP_VALUES = new Set<string>([
   "", "-", "–", "—",
   "schadennummer", "schadenummer", "schaden-nummer", "schaden-nr", "schaden-nr.",
@@ -197,7 +193,6 @@ const slug = (s: string) =>
     .replace(/[^\p{Letter}\p{Number}]+/gu, "_")
     .replace(/^_+|_+$/g, "");
 
-// heuristik: "ist dieses string-fragment als leer/junk zu werten?"
 function isJunkValue(raw: any, finalKey?: string): boolean {
   if (raw == null) return true;
   if (typeof raw === "object") {
@@ -213,12 +208,7 @@ function isJunkValue(raw: any, finalKey?: string): boolean {
   return false;
 }
 
-type VoteBucket = {
-  normKey: string; // Kanon (z. B. digits-only)
-  prettyValues: string[];
-  votes: number;
-  quality: number; // 0..1
-};
+type VoteBucket = { normKey: string; prettyValues: string[]; votes: number; quality: number; };
 
 function qualityOf(value: string, finalKey?: string): number {
   const digits = ONLY_DIGITS(value);
@@ -231,11 +221,42 @@ function qualityOf(value: string, finalKey?: string): number {
   return 0.4;
 }
 
-/* ======= Konsolidierung aus Attempts (mit echten Batch-Seiten) ======= */
+function clamp01(n: number) {
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(0, Math.min(1, n));
+}
+
+function hashId(s: string, salt: number) {
+  let h = 2166136261 ^ salt;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+  }
+  return Math.abs(h);
+}
+
+function cryptoRandomId() {
+  try {
+    const buf = new Uint8Array(8);
+    (globalThis.crypto ?? (globalThis as any).msCrypto).getRandomValues(buf);
+    return Array.from(buf).map((b) => b.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return String(Math.random()).slice(2);
+  }
+}
+
+function toBoolLoose(v: any): boolean | undefined {
+  if (typeof v === "boolean") return v;
+  const s = String(v ?? "").toLowerCase();
+  if (["true", "wahr", "ja", "yes", "1"].includes(s)) return true;
+  if (["false", "falsch", "nein", "no", "0"].includes(s)) return false;
+  return undefined;
+}
+
+/* ======= Mehrheits-Konsolidierung ======= */
 
 function consolidateExtractionFromAttempts(attempts: Attempt[], key: string) {
   const buckets = new Map<string, VoteBucket>();
-
   const norm = (v: string) => {
     const d = ONLY_DIGITS(v);
     return d.length >= 6 ? d : SIMPLE_NORM(v);
@@ -245,9 +266,7 @@ function consolidateExtractionFromAttempts(attempts: Attempt[], key: string) {
     const raw = a?.candidate_value && typeof a.candidate_value === "object" && "value" in a.candidate_value
         ? (a.candidate_value as any).value
         : a?.candidate_value;
-
     if (isJunkValue(raw, key)) continue;
-
     const s = String(raw);
     const nk = norm(s);
     const q = qualityOf(s, key);
@@ -272,7 +291,7 @@ function consolidateExtractionFromAttempts(attempts: Attempt[], key: string) {
 
   const pretty = (() => {
     const digits = top.normKey.replace(/\D+/g, "");
-    if (digits.length >= 6) return digits; // kompakte Anzeige für IDs
+    if (digits.length >= 6) return digits; // kompakter bei IDs
     const counts = new Map<string, number>();
     for (const s of top.prettyValues) counts.set(s, (counts.get(s) ?? 0) + 1);
     return Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0][0];
@@ -281,7 +300,269 @@ function consolidateExtractionFromAttempts(attempts: Attempt[], key: string) {
   return { final_value: pretty, final_confidence: conf, winnerNorm: top.normKey };
 }
 
-/** ► Records → Attempts → Konsolidierung (Fallback-Weg ohne log) */
+/* ============================== Converter ============================== */
+
+function toRunDetail(payload: any): RunDetail {
+  const runCore: RunCore = {
+    id: String(payload?.run_id ?? payload?.id ?? cryptoRandomId()),
+    pipeline_id: payload?.pipeline_id ?? payload?.run?.pipeline_id ?? null,
+    pdf_id: payload?.pdf_id ?? payload?.run?.pdf_id ?? null,
+    status: payload?.status ?? payload?.run?.status ?? "finalized",
+    started_at: payload?.started_at ?? payload?.run?.started_at ?? null,
+    finished_at: payload?.finished_at ?? payload?.run?.finished_at ?? null,
+    overall_score:
+        typeof payload?.overall_score === "number"
+            ? payload.overall_score
+            : typeof payload?.run?.overall_score === "number"
+                ? payload.run.overall_score
+                : 0,
+    error: payload?.error ?? payload?.run?.error ?? null,
+    final_extraction: {},
+    final_decisions: {},
+    final_scores: payload?.final_scores ?? payload?.run?.final_scores ?? {},
+  };
+
+  const steps: RunStep[] = [];
+  const logArr: any[] = Array.isArray(payload?.log) ? payload.log : [];
+  let orderCounter = 0;
+
+  if (logArr.length) {
+    for (const entry of logArr) {
+      const ptype: StepType =
+          entry?.prompt_type === "ExtractionPrompt" ? "Extraction" :
+              entry?.prompt_type === "ScoringPrompt"   ? "Score" :
+                  entry?.prompt_type === "DecisionPrompt"  ? "Decision" : "Extraction";
+
+      const keySlug = slug(entry?.decision_key ?? entry?.result?.prompt_text ?? "step");
+
+      if (ptype === "Extraction") {
+        const res: any[] = Array.isArray(entry?.result?.results) ? entry.result.results : [];
+        const bat: any[] = Array.isArray(entry?.result?.batches) ? entry.result.batches : [];
+
+        const attempts: Attempt[] = res.map((r: any, i: number) => {
+          const pnos: number[] = Array.isArray(bat[i]?.pages) ? bat[i].pages : [];
+          const page = Number.isFinite(pnos?.[0]) ? (pnos[0] as number) + 1
+              : (typeof r?.source?.page === "number" && r.source.page > 0 ? r.source.page : undefined);
+          const quote = r?.source?.quote ?? entry?.result?.prompt_text ?? "(ohne Kontext)";
+          return {
+            id: `${keySlug}:${i+1}`,
+            attempt_no: i + 1,
+            candidate_key: quote,
+            candidate_value: page != null ? { value: r?.value ?? null, page, source: { page, quote } }
+                : { value: r?.value ?? null, source: { quote } },
+            candidate_confidence: null,
+            source: "llm",
+            is_final: false
+          };
+        });
+
+        const { final_value, final_confidence, winnerNorm } = consolidateExtractionFromAttempts(attempts, keySlug);
+        const norm = (v: string) => {
+          const d = ONLY_DIGITS(v);
+          return d.length >= 6 ? d : SIMPLE_NORM(v);
+        };
+        attempts.forEach(a => {
+          const val = a?.candidate_value?.value ?? a?.candidate_value;
+          a.is_final = winnerNorm != null && !isJunkValue(val, keySlug) && norm(String(val)) === winnerNorm;
+        });
+
+        runCore.final_extraction![keySlug] = final_value;
+
+        orderCounter++;
+        steps.push({
+          id: hashId(keySlug, orderCounter),
+          step_type: "Extraction",
+          status: "finalized",
+          order_index: entry?.seq_no ?? (orderCounter - 1),
+          definition: { json_key: keySlug },
+          final_key: keySlug,
+          final_value,
+          final_confidence,
+          started_at: payload?.started_at ?? null,
+          finished_at: payload?.finished_at ?? null,
+          attempts
+        });
+      }
+
+      if (ptype === "Score") {
+        const scores: any[] = Array.isArray(entry?.result?.scores) ? entry.result.scores : [];
+        const attempts: Attempt[] = scores.map((r: any, i: number) => ({
+          id: `${keySlug}:${i+1}`,
+          attempt_no: i + 1,
+          candidate_key: r?.source?.quote ?? entry?.result?.prompt_text ?? "(ohne Kontext)",
+          candidate_value: !!r?.result, // boolean
+          candidate_confidence: null,
+          source: "llm",
+          is_final: false
+        }));
+        // Mehrheit + Confidence
+        let t = 0, f = 0;
+        attempts.forEach(a => (a.candidate_value ? t++ : f++));
+        const total = t + f;
+        const consolidated = (typeof entry?.result?.consolidated?.result === "boolean")
+            ? entry.result.consolidated.result
+            : (t >= f);
+        const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
+        attempts.forEach(a => (a.is_final = a.candidate_value === consolidated));
+
+        // final decision in run
+        runCore.final_decisions![keySlug] = consolidated;
+
+        orderCounter++;
+        steps.push({
+          id: hashId(keySlug, orderCounter),
+          step_type: "Score",
+          status: "finalized",
+          order_index: entry?.seq_no ?? (orderCounter - 1),
+          definition: { json_key: keySlug },
+          final_key: keySlug,
+          final_value: consolidated,
+          final_confidence: confidence,
+          started_at: payload?.started_at ?? null,
+          finished_at: payload?.finished_at ?? null,
+          attempts
+        });
+      }
+
+      if (ptype === "Decision") {
+        // votes[] bevorzugt; Fallback: results[] / boolean / route
+        const votes: any[] = Array.isArray(entry?.result?.votes) ? entry.result.votes : [];
+        const alts: any[] = Array.isArray(entry?.result?.results) ? entry.result.results : [];
+
+        const rawItems = votes.length ? votes : alts;
+        const attempts: Attempt[] = rawItems.map((r: any, i: number) => {
+          const rawBool = typeof r?.boolean === "boolean" ? r.boolean : toBoolLoose(r?.value) ?? toBoolLoose(r?.route);
+          const key = r?.source?.quote ?? r?.prompt_text ?? entry?.result?.prompt_text ?? "(ohne Kontext)";
+          return {
+            id: `${keySlug}:${i+1}`,
+            attempt_no: i + 1,
+            candidate_key: key,
+            candidate_value: typeof rawBool === "boolean" ? rawBool : false, // unklar -> false
+            candidate_confidence: null,
+            source: r?.route ?? "llm",
+            is_final: false
+          };
+        });
+
+        let t = 0, f = 0;
+        attempts.forEach(a => (a.candidate_value ? t++ : f++));
+        const total = t + f;
+        const consolidated = t >= f;
+        const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
+        attempts.forEach(a => (a.is_final = a.candidate_value === consolidated));
+
+        runCore.final_decisions![keySlug] = consolidated;
+
+        orderCounter++;
+        steps.push({
+          id: hashId(keySlug, orderCounter),
+          step_type: "Decision",
+          status: "finalized",
+          order_index: entry?.seq_no ?? (orderCounter - 1),
+          definition: { json_key: keySlug },
+          final_key: keySlug,
+          final_value: consolidated,
+          final_confidence: confidence,
+          started_at: payload?.started_at ?? null,
+          finished_at: payload?.finished_at ?? null,
+          attempts
+        });
+      }
+    }
+  } else {
+    // Fallback: klassisch über Arrays
+    const extractionArr: any[] = Array.isArray(payload?.extraction) ? payload.extraction : [];
+    const groupsByKey = groupBy(extractionArr, (r) => slug(r?.json_key ?? r?.final_key ?? r?.prompt_text ?? "extraction"));
+    for (const [keySlug, items] of groupsByKey) {
+      orderCounter++;
+      const { final_value, final_confidence, attempts } = consolidateExtractionGroup(items, keySlug);
+      runCore.final_extraction![keySlug] = final_value;
+
+      steps.push({
+        id: hashId(keySlug, orderCounter),
+        step_type: "Extraction",
+        status: "finalized",
+        order_index: orderCounter - 1,
+        definition: { json_key: keySlug },
+        final_key: keySlug,
+        final_value,
+        final_confidence,
+        started_at: payload?.started_at ?? null,
+        finished_at: payload?.finished_at ?? null,
+        attempts
+      });
+    }
+
+    // Decision-Fallback
+    const decisionArr: any[] = Array.isArray(payload?.decision) ? payload.decision : [];
+    if (decisionArr.length) {
+      const dGroups = groupBy(decisionArr, (r) => slug(r?.json_key ?? r?.final_key ?? r?.prompt_text ?? "decision"));
+      for (const [keySlug, items] of dGroups) {
+        orderCounter++;
+        const { value, confidence, attempts } = consolidateDecisionGroup(items, keySlug);
+        runCore.final_decisions![keySlug] = value;
+
+        steps.push({
+          id: hashId(keySlug, orderCounter),
+          step_type: "Decision",
+          status: "finalized",
+          order_index: orderCounter - 1,
+          definition: { json_key: keySlug },
+          final_key: keySlug,
+          final_value: value,
+          final_confidence: confidence,
+          started_at: payload?.started_at ?? null,
+          finished_at: payload?.finished_at ?? null,
+          attempts
+        });
+      }
+    }
+
+    // Score-Fallback (aus payload.scoring → boolean-Mehrheit)
+    const scoringArr: any[] = Array.isArray(payload?.scoring) ? payload.scoring : [];
+    for (const s of scoringArr) {
+      const keySlug = slug(s?.prompt_text ?? "scoring");
+      const scores: any[] = Array.isArray(s?.scores) ? s.scores : [];
+      const attempts: Attempt[] = scores.map((x: any, i: number) => ({
+        id: `${keySlug}:${i+1}`,
+        attempt_no: i + 1,
+        candidate_key: x?.explanation ?? s?.prompt_text ?? "(ohne Kontext)",
+        candidate_value: !!x?.result,
+        candidate_confidence: null,
+        source: "llm",
+        is_final: false
+      }));
+      let t = 0, f = 0;
+      attempts.forEach(a => (a.candidate_value ? t++ : f++));
+      const total = t + f;
+      const consolidated = (typeof s?.consolidated?.result === "boolean") ? s.consolidated.result : (t >= f);
+      const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
+      attempts.forEach(a => (a.is_final = a.candidate_value === consolidated));
+
+      runCore.final_decisions![keySlug] = consolidated;
+
+      orderCounter++;
+      steps.push({
+        id: hashId(keySlug, orderCounter),
+        step_type: "Score",
+        status: "finalized",
+        order_index: orderCounter - 1,
+        definition: { json_key: keySlug },
+        final_key: keySlug,
+        final_value: consolidated,
+        final_confidence: confidence,
+        started_at: payload?.started_at ?? null,
+        finished_at: payload?.finished_at ?? null,
+        attempts
+      });
+    }
+  }
+
+  return { run: runCore, steps, raw: payload };
+}
+
+/* ======= Fallback-Konsolidierer (ohne log) ======= */
+
 function consolidateExtractionGroup(records: any[], finalKey: string) {
   const attempts: Attempt[] = [];
   let attemptNo = 0;
@@ -316,7 +597,7 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
       candidate_value: cv,
       candidate_confidence: null,
       source: r?.route ?? "llm",
-      is_final: false,
+      is_final: false
     });
   }
 
@@ -334,16 +615,7 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
   return { final_value, final_confidence, attempts };
 }
 
-/** Items → Boolean-Attempts → Mehrheitsentscheid (Fallback) */
 function consolidateDecisionGroup(items: any[], keySlug: string) {
-  const toBool = (v: any): boolean | undefined => {
-    if (typeof v === "boolean") return v;
-    const s = String(v ?? "").toLowerCase().trim();
-    if (["true", "wahr", "ja", "yes", "1"].includes(s)) return true;
-    if (["false", "falsch", "nein", "no", "0"].includes(s)) return false;
-    return undefined;
-  };
-
   const attempts: Attempt[] = [];
   let t = 0, f = 0, idx = 0;
 
@@ -351,7 +623,7 @@ function consolidateDecisionGroup(items: any[], keySlug: string) {
     idx++;
     const parsed = tryParseOpenAiRaw(r?.openai_raw);
     const v = typeof parsed?.value !== "undefined" ? parsed.value : r?.value;
-    const b = toBool(v);
+    const b = toBoolLoose(v);
     if (b === true) t++;
     if (b === false) f++;
 
@@ -359,7 +631,7 @@ function consolidateDecisionGroup(items: any[], keySlug: string) {
       id: r?.id ?? `${keySlug}:${idx}`,
       attempt_no: idx,
       candidate_key: parsed?.source?.quote ?? r?.prompt_text ?? "(ohne Kontext)",
-      candidate_value: typeof b === "boolean" ? b : String(v ?? "—"),
+      candidate_value: typeof b === "boolean" ? b : false,
       candidate_confidence: null,
       source: r?.route ?? "llm",
       is_final: false
@@ -367,153 +639,11 @@ function consolidateDecisionGroup(items: any[], keySlug: string) {
   }
 
   const total = t + f;
-  const result = t >= f; // Gleichstand -> true
-  const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
-
-  attempts.forEach(a => {
-    const vv = typeof a.candidate_value === "boolean"
-        ? a.candidate_value
-        : (() => {
-          const s = String(a.candidate_value ?? "").toLowerCase().trim();
-          if (["true", "wahr", "ja", "yes", "1"].includes(s)) return true;
-          if (["false", "falsch", "nein", "no", "0"].includes(s)) return false;
-          return undefined;
-        })();
-    a.is_final = typeof vv === "boolean" && vv === result;
-  });
-
-  return { value: result, confidence, attempts };
-}
-
-/** Für Log-basierte Score/Decision (wir haben schon Attempts) */
-function consolidateDecisionGroupLike(attempts: Attempt[]) {
-  let t = 0, f = 0;
-  attempts.forEach(a => {
-    const v = typeof a.candidate_value === "boolean" ? a.candidate_value : false;
-    if (v) t++; else f++;
-  });
-  const total = t + f;
   const result = t >= f;
   const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
-  attempts.forEach(a => a.is_final = (typeof a.candidate_value === "boolean") && a.candidate_value === result);
-  return { value: result, confidence };
+  attempts.forEach(a => (a.is_final = a.candidate_value === result));
+  return { value: result, confidence, attempts };
 }
-
-/* ============================== Main converter ============================== */
-
-function toRunDetail(payload: any): RunDetail {
-  const runCore: RunCore = {
-    id: String(payload?.run_id ?? payload?.id ?? cryptoRandomId()),
-    pipeline_id: payload?.pipeline_id ?? payload?.run?.pipeline_id ?? null,
-    pdf_id: payload?.pdf_id ?? payload?.run?.pdf_id ?? null,
-    status: payload?.status ?? payload?.run?.status ?? "finalized",
-    started_at: payload?.started_at ?? payload?.run?.started_at ?? null,
-    finished_at: payload?.finished_at ?? payload?.run?.finished_at ?? null,
-    overall_score:
-        typeof payload?.overall_score === "number"
-            ? payload.overall_score
-            : typeof payload?.run?.overall_score === "number"
-                ? payload.run.overall_score
-                : 0,
-    error: payload?.error ?? payload?.run?.error ?? null,
-    final_extraction: {},
-    final_decisions: {},
-    final_scores: payload?.final_scores ?? payload?.run?.final_scores ?? {},
-  };
-
-  const steps: RunStep[] = [];
-  const logArr: any[] = Array.isArray(payload?.log) ? payload.log : [];
-
-  let orderCounter = 0;
-
-  if (logArr.length) {
-    // ► Bevorzugt: Extraction aus log (batches → echte Seiten)
-    for (const entry of logArr) {
-      const ptype: StepType =
-          entry?.prompt_type === "ExtractionPrompt" ? "Extraction" :
-              entry?.prompt_type === "ScoringPrompt"   ? "Score" :
-                  entry?.prompt_type === "DecisionPrompt"  ? "Decision" : "Extraction";
-
-      if (ptype !== "Extraction") continue;
-
-      const keySlug = slug(entry?.decision_key ?? entry?.result?.prompt_text ?? "extraction");
-      const res: any[] = Array.isArray(entry?.result?.results) ? entry.result.results : [];
-      const bat: any[] = Array.isArray(entry?.result?.batches) ? entry.result.batches : [];
-
-      const attempts: Attempt[] = res.map((r: any, i: number) => {
-        const pnos: number[] = Array.isArray(bat[i]?.pages) ? bat[i].pages : [];
-        const page = Number.isFinite(pnos?.[0]) ? (pnos[0] as number) + 1
-            : (typeof r?.source?.page === "number" && r.source.page > 0 ? r.source.page : undefined);
-        const quote = r?.source?.quote ?? entry?.result?.prompt_text ?? "(ohne Kontext)";
-        return {
-          id: `${keySlug}:${i+1}`,
-          attempt_no: i + 1,
-          candidate_key: quote,
-          candidate_value: page != null ? { value: r?.value ?? null, page, source: { page, quote } }
-              : { value: r?.value ?? null, source: { quote } },
-          candidate_confidence: null,
-          source: "llm",
-          is_final: false
-        };
-      });
-
-      const { final_value, final_confidence, winnerNorm } = consolidateExtractionFromAttempts(attempts, keySlug);
-      const norm = (v: string) => {
-        const d = ONLY_DIGITS(v);
-        return d.length >= 6 ? d : SIMPLE_NORM(v);
-      };
-      attempts.forEach(a => {
-        const val = a?.candidate_value?.value ?? a?.candidate_value;
-        a.is_final = winnerNorm != null && !isJunkValue(val, keySlug) && norm(String(val)) === winnerNorm;
-      });
-
-      runCore.final_extraction![keySlug] = final_value;
-
-      orderCounter++;
-      steps.push({
-        id: hashId(keySlug, orderCounter),
-        step_type: "Extraction",
-        status: "finalized",
-        order_index: entry?.seq_no ?? (orderCounter - 1),
-        definition: { json_key: keySlug },
-        final_key: keySlug,
-        final_value,
-        final_confidence,
-        started_at: payload?.started_at ?? null,
-        finished_at: payload?.finished_at ?? null,
-        attempts
-      });
-    }
-  } else {
-    // ► Fallback: bisheriger Weg
-    const extractionArr: any[] = Array.isArray(payload?.extraction) ? payload.extraction : [];
-    const groupsByKey = groupBy(extractionArr, (r) => slug(r?.json_key ?? r?.final_key ?? r?.prompt_text ?? "extraction"));
-    for (const [keySlug, items] of groupsByKey) {
-      orderCounter++;
-      const { final_value, final_confidence, attempts } = consolidateExtractionGroup(items, keySlug);
-      runCore.final_extraction![keySlug] = final_value;
-
-      steps.push({
-        id: hashId(keySlug, orderCounter),
-        step_type: "Extraction",
-        status: "finalized",
-        order_index: orderCounter - 1,
-        definition: { json_key: keySlug },
-        final_key: keySlug,
-        final_value,
-        final_confidence,
-        started_at: payload?.started_at ?? null,
-        finished_at: payload?.finished_at ?? null,
-        attempts,
-      });
-    }
-  }
-
-  // Decision & Score bleiben unverändert (Page betrifft nur Extraction)
-  return { run: runCore, steps, raw: payload };
-}
-
-/* ============================== Small utils ============================== */
 
 function getHistoryBase(): string {
   const w = (window as any);
@@ -538,28 +668,4 @@ function tryParseOpenAiRaw(raw: any): any | undefined {
     if (typeof obj?.value !== "undefined" || typeof obj?.source !== "undefined") return obj;
   } catch { /* ignore */ }
   return undefined;
-}
-
-function clamp01(n: number) {
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
-}
-
-function hashId(s: string, salt: number) {
-  let h = 2166136261 ^ salt;
-  for (let i = 0; i < s.length; i++) {
-    h ^= s.charCodeAt(i);
-    h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
-  }
-  return Math.abs(h);
-}
-
-function cryptoRandomId() {
-  try {
-    const buf = new Uint8Array(8);
-    (globalThis.crypto ?? (globalThis as any).msCrypto).getRandomValues(buf);
-    return Array.from(buf).map((b) => b.toString(16).padStart(2, "0")).join("");
-  } catch {
-    return String(Math.random()).slice(2);
-  }
 }
