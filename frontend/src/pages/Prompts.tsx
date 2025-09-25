@@ -13,6 +13,8 @@ import {
   Divider,
   Typography,
 } from '@mui/material';
+import ToggleButton from '@mui/material/ToggleButton';
+import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 import StarIcon from '@mui/icons-material/Star';
@@ -152,24 +154,40 @@ export default function Prompts() {
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
               <TextField value={newText} onChange={(e) => setNewText(e.target.value)} label="Text" fullWidth />
 
-              {/* Typ-Auswahl mit Chips */}
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+              {/* Typ-Auswahl NUR Icons (mit Tooltip) */}
+              <ToggleButtonGroup
+                  exclusive
+                  value={newType}
+                  onChange={(_, val) => val && setNewType(val)}
+                  sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}
+              >
                 {(['ExtractionPrompt', 'ScoringPrompt', 'DecisionPrompt'] as PromptType[]).map((t) => {
                   const meta = typeMeta(t);
-                  const selected = newType === t;
                   return (
-                      <Chip
-                          key={t}
-                          icon={meta.icon}
-                          label={meta.label}
-                          color={selected ? meta.color : 'default'}
-                          variant={selected ? 'filled' : 'outlined'}
-                          onClick={() => setNewType(t)}
-                          sx={{ cursor: 'pointer' }}
-                      />
+                      <Tooltip key={t} title={meta.label}>
+                        <ToggleButton
+                            value={t}
+                            aria-label={meta.label}
+                            sx={{
+                              border: 1,
+                              borderColor: 'divider',
+                              p: 1,
+                              '&.Mui-selected': {
+                                bgcolor: (theme) => theme.palette[meta.color].light,
+                                color: (theme) => theme.palette[meta.color].contrastText,
+                                borderColor: (theme) => theme.palette[meta.color].main,
+                              },
+                              '&:hover': {
+                                borderColor: (theme) => theme.palette[meta.color].main,
+                              },
+                            }}
+                        >
+                          {meta.icon}
+                        </ToggleButton>
+                      </Tooltip>
                   );
                 })}
-              </Box>
+              </ToggleButtonGroup>
 
               {newType === 'ExtractionPrompt' ? (
                   <TextField
@@ -177,7 +195,6 @@ export default function Prompts() {
                       value={newJsonKey}
                       onChange={(e) => setNewJsonKey(e.target.value)}
                       sx={{ width: { xs: '100%', md: 220 } }}
-                      helperText="Bezeichner für das extrahierte Feld"
                   />
               ) : (
                   <Box sx={{ width: { xs: '100%', md: 280 } }}>
@@ -185,7 +202,14 @@ export default function Prompts() {
                       Gewichtung
                     </Typography>
                     <Stack direction="row" spacing={1} alignItems="center">
-                      <Slider min={0} max={5} step={0.1} value={newWeight} onChange={(_, v) => setNewWeight(v as number)} sx={{ flex: 1 }} />
+                      <Slider
+                          min={0}
+                          max={5}
+                          step={0.1}
+                          value={newWeight}
+                          onChange={(_, v) => setNewWeight(v as number)}
+                          sx={{ flex: 1 }}
+                      />
                       <TextField
                           type="number"
                           size="small"
@@ -199,7 +223,7 @@ export default function Prompts() {
               )}
 
               <Button variant="contained" disabled={!canCreate} onClick={create} startIcon={<SaveIcon />}>
-                Hinzufügen
+                {/* kein Label – nur Icon wie gewünscht */}
               </Button>
             </Stack>
           </CardContent>
@@ -251,9 +275,7 @@ export default function Prompts() {
                               label="Name"
                               value={p.json_key || ''}
                               onChange={(e) =>
-                                  setPrompts((ps) =>
-                                      ps.map((it) => (it.id === p.id ? { ...it, json_key: e.target.value } : it))
-                                  )
+                                  setPrompts((ps) => ps.map((it) => (it.id === p.id ? { ...it, json_key: e.target.value } : it)))
                               }
                               sx={{ width: { xs: '100%', md: 240 } }}
                               InputProps={{ startAdornment: <LabelOutlinedIcon sx={{ mr: 1 }} /> }}
@@ -280,9 +302,7 @@ export default function Prompts() {
                                   value={p.weight}
                                   onChange={(e) =>
                                       setPrompts((ps) =>
-                                          ps.map((it) =>
-                                              it.id === p.id ? { ...it, weight: parseFloat(e.target.value) } : it
-                                          )
+                                          ps.map((it) => (it.id === p.id ? { ...it, weight: parseFloat(e.target.value) } : it))
                                       )
                                   }
                                   inputProps={{ step: 1, min: 0, max: 10 }}
@@ -306,10 +326,10 @@ export default function Prompts() {
 
                   <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
                     <Button onClick={() => save(p)} variant="contained" size="small" startIcon={<SaveIcon />} disabled={!canSave}>
-                      Speichern
+                      {/* kein Label – nur Icon */}
                     </Button>
                     <Button onClick={() => del(p.id)} size="small" startIcon={<DeleteIcon />}>
-                      Löschen
+                      {/* kein Label – nur Icon */}
                     </Button>
                   </CardActions>
                 </Card>

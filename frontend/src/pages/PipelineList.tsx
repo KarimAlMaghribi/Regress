@@ -41,7 +41,6 @@ export default function PipelineList() {
   const columns: GridColDef[] = [
     { field: 'name', headerName: 'Name', flex: 1 },
     { field: 'id', headerName: 'ID', flex: 1 },
-    { field: 'overallScore', headerName: 'Score', flex: 0.5, valueGetter: p => p.row.overallScore?.toFixed(2) ?? '—' },
     {
       field: 'actions',
       headerName: 'Aktionen',
