@@ -43,6 +43,7 @@ import AssessmentIcon from "@mui/icons-material/Assessment"; // Summary
 import CloseIcon from "@mui/icons-material/Close";
 
 import {type RunDetail, type RunStep, useRunDetails} from "../hooks/useRunDetails";
+import {computeWeightedScore, ScoringWeightsCard} from "../components/ScoringWeightsCard";
 
 /* ===== helpers ===== */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
@@ -374,7 +375,7 @@ export default function RunDetailsPage() {
         <Stack spacing={2}>
           <SummaryCard detail={data} scoreSum={scoreSum}/>
           <ExtractionCard detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
-          <ScoringVotesCard detail={data} onOpenEvidence={openEvidence}/>
+          <ScoringWeightsCard detail={data} onOpenEvidence={openEvidence}/>
           <DecisionVotesCard detail={data} onOpenEvidence={openEvidence}/>
           <StepsWithAttempts detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
         </Stack>
@@ -424,28 +425,39 @@ function HeaderBar({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
   );
 }
 
-function SummaryCard({detail, scoreSum}: { detail: RunDetail; scoreSum: number }) {
-  const {run} = detail;
+function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number }) {
+  const { run } = detail;
   const finalKeys = Object.keys(run.final_extraction ?? {});
-  const decKeys = Object.keys(run.final_decisions ?? {});
-  const scKeys = Object.keys(run.final_scores ?? {});
+  const decKeys   = Object.keys(run.final_decisions ?? {});
+  const scKeys    = Object.keys(run.final_scores ?? {});
+
+  const weighted = scKeys.length > 0 ? computeWeightedScore(detail) : null;
+
+  const rawScore =
+      typeof weighted === "number"
+          ? weighted
+          : typeof run.overall_score === "number"
+              ? run.overall_score
+              : null;
+
+  const scoreValue = rawScore != null ? clamp01(rawScore) : null;
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Übersicht" subheader="Konsolidierte Ergebnisse & Score"/>
+        <CardHeader title="Übersicht" subheader="Konsolidierte Ergebnisse & Score" />
         <CardContent>
           <Stack spacing={1.25}>
             <Stack direction="row" alignItems="center" gap={1}>
-              <AssessmentIcon sx={{color: "success.main"}} fontSize="small"/>
-              <Typography variant="body2" sx={{minWidth: 150, color: "text.secondary"}}>Final
-                Score</Typography>
-              <Box sx={{flex: 1}}>
-                {typeof run.overall_score === "number" ? (
+              <AssessmentIcon sx={{ color: "success.main" }} fontSize="small" />
+              <Typography variant="body2" sx={{ minWidth: 150, color: "text.secondary" }}>
+                Final Score
+              </Typography>
+              <Box sx={{ flex: 1 }}>
+                {scoreValue != null ? (
                     <Stack direction="row" alignItems="center" gap={1}>
-                      <LinearProgress variant="determinate"
-                                      value={clamp01(run.overall_score) * 100}/>
-                      <Typography variant="caption" sx={{width: 40, textAlign: "right"}}>
-                        {fmtNum(run.overall_score)}
+                      <LinearProgress variant="determinate" value={scoreValue * 100} />
+                      <Typography variant="caption" sx={{ width: 40, textAlign: "right" }}>
+                        {fmtNum(scoreValue)}
                       </Typography>
                     </Stack>
                 ) : (
@@ -457,13 +469,15 @@ function SummaryCard({detail, scoreSum}: { detail: RunDetail; scoreSum: number }
             <Row label="Extrakte">🧩 {finalKeys.length} Felder</Row>
             <Row label="Entscheidungen">⚖️ {decKeys.length} Einträge</Row>
             <Row label="Score-Regeln">🟢 {scKeys.length} Regeln • Summe: {fmtNum(scoreSum)}</Row>
-            <Divider sx={{my: 1}}/>
+
+            <Divider sx={{ my: 1 }} />
+
             <Row label="Start">🕒 {detail.run.started_at ?? "—"}</Row>
             <Row label="Ende">🏁 {detail.run.finished_at ?? "—"}</Row>
+
             {detail.run.error && (
                 <Row label="Fehler">
-                  <Chip size="small" color="error" icon={<ErrorOutlineIcon/>}
-                        label={detail.run.error}/>
+                  <Chip size="small" color="error" icon={<ErrorOutlineIcon />} label={detail.run.error} />
                 </Row>
             )}
           </Stack>
@@ -528,70 +542,6 @@ function ExtractionCard({
               })}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
-  );
-}
-
-function ScoringVotesCard({detail, onOpenEvidence}: {
-  detail: RunDetail;
-  onOpenEvidence: (page?: number) => void
-}) {
-  const scoreSteps = (detail.steps ?? []).filter(s => s.step_type === "Score");
-  if (!scoreSteps.length) return null;
-
-  return (
-      <Card variant="outlined">
-        <CardHeader title="Scoring-Ergebnisse" subheader="Kandidaten (Mehrheit)"/>
-        <CardContent>
-          <Stack spacing={2}>
-            {scoreSteps.map((s, idx) => (
-                <Box key={s.id}>
-                  <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                    <RuleIcon sx={{color: (s.final_value ? "success.main" : "error.main")}}
-                              fontSize="small"/>
-                    <Typography variant="subtitle2">
-                      {s.final_key ?? `Score-Regel ${idx + 1}`} ·
-                      Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
-                    </Typography>
-                    <Box sx={{flex: 1}}/>
-                    <ConfidenceBar value={s.final_confidence}/>
-                  </Stack>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell width={56}>#</TableCell>
-                        <TableCell>Begründung</TableCell>
-                        <TableCell width={120}>Vote</TableCell>
-                        <TableCell width={120}>Evidenz</TableCell>
-                        <TableCell width={90}>Final</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {(s.attempts ?? []).map((a, i) => {
-                        const v = asBool(a.candidate_value);
-                        const page = getAttemptPage(a);
-                        return (
-                            <TableRow key={a.id ?? i} hover>
-                              <TableCell>{a.attempt_no ?? i + 1}</TableCell>
-                              <TableCell>{a.candidate_key ?? "—"}</TableCell>
-                              <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
-                              <TableCell>
-                                {page
-                                    ?
-                                    <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
-                                          onClick={() => onOpenEvidence(page)} clickable/>
-                                    : "—"}
-                              </TableCell>
-                              <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
-                            </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </Box>
-            ))}
-          </Stack>
         </CardContent>
       </Card>
   );
