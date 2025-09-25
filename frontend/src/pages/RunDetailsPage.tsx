@@ -44,6 +44,7 @@ import CloseIcon from "@mui/icons-material/Close";
 
 import {type RunDetail, type RunStep, useRunDetails} from "../hooks/useRunDetails";
 import {computeWeightedScore, ScoringWeightsCard} from "../components/ScoringWeightsCard";
+import PdfViewer from "../components/PdfViewer";
 
 /* ===== Helfer ===== */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
@@ -131,6 +132,8 @@ function formatValue(val: any) {
 
 /* ===== Evidence-Modal ===== */
 
+/* ===== Evidence-Modal ===== */
+
 function EvidenceModal({
                          open, onClose, page, pdfUrl, detail, onChangePage
                        }: {
@@ -141,6 +144,155 @@ function EvidenceModal({
   detail: RunDetail;
   onChangePage?: (p: number) => void;
 }) {
+  const current = page ?? 1;
+
+  const byPage = React.useMemo(() => {
+    const items = { extraction: [] as any[], scoring: [] as any[], decision: [] as any[] };
+
+    (detail.steps ?? []).forEach(s => {
+      (s.attempts ?? []).forEach(a => {
+        const p = getAttemptPage(a);
+        if (!page || p === page) {
+          const row = { step: s, attempt: a };
+          if (s.step_type === "Extraction") items.extraction.push(row);
+          else if (s.step_type === "Score") items.scoring.push(row);
+          else if (s.step_type === "Decision") items.decision.push(row);
+        }
+      });
+    });
+
+    const byKey = (r: any) => r.step.final_key ?? r.step.definition?.json_key ?? "";
+    items.extraction.sort((a, b) => byKey(a).localeCompare(byKey(b)));
+    items.scoring.sort((a, b) => byKey(a).localeCompare(byKey(b)));
+    items.decision.sort((a, b) => byKey(a).localeCompare(byKey(b)));
+    return items;
+  }, [detail, page]);
+
+  return (
+      <Dialog open={open} onClose={onClose} maxWidth="xl" fullWidth>
+        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+          📄 Seite
+          <IconButton
+              size="small"
+              onClick={() => onChangePage?.(Math.max(1, current - 1))}
+              disabled={current <= 1}
+          >
+            ‹
+          </IconButton>
+          <input
+              type="number"
+              value={current}
+              onChange={e => onChangePage?.(Math.max(1, Number(e.target.value) || 1))}
+              style={{ width: 64 }}
+          />
+          <IconButton size="small" onClick={() => onChangePage?.(current + 1)}>›</IconButton>
+          <Box sx={{ flex: 1 }} />
+          <IconButton size="small" onClick={onClose}><CloseIcon /></IconButton>
+        </DialogTitle>
+
+        <DialogContent dividers sx={{ p: 0 }}>
+          <Box sx={{ display: "flex", height: "80vh" }}>
+            {/* Links: PDF */}
+            <Box sx={{ flex: 1, minWidth: 0, borderRight: theme => `1px solid ${theme.palette.divider}` }}>
+              {pdfUrl ? (
+                  <PdfViewer
+                      url={pdfUrl}
+                      page={current}
+                      onPageChange={p => onChangePage?.(p)}   // ← Scroll im Viewer → synchronisiert rechte Seite
+                      mode="scroll"
+                      height="80vh"
+                  />
+              ) : (
+                  <Stack sx={{ height: "100%" }} alignItems="center" justifyContent="center">
+                    <Typography variant="body2" color="text.secondary">Kein PDF verfügbar</Typography>
+                  </Stack>
+              )}
+            </Box>
+
+            {/* Rechts: Ergebnisse für diese Seite */}
+            <Box sx={{ width: 480, p: 2, overflowY: "auto" }}>
+              <Typography variant="subtitle1" sx={{ mb: 1 }}>Ergebnisse auf dieser Seite</Typography>
+
+              {/* Extraktion */}
+              <Section title="🧩 Extraktion">
+                {byPage.extraction.length === 0 ? <EmptyLine /> :
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Feld</TableCell>
+                          <TableCell>Wert</TableCell>
+                          <TableCell width={60}>Final</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {byPage.extraction.map((r, i) => (
+                            <TableRow key={i} hover>
+                              <TableCell>{r.step.final_key ?? r.step.definition?.json_key ?? "—"}</TableCell>
+                              <TableCell>{formatValue(r.attempt.candidate_value)}</TableCell>
+                              <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
+                            </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>}
+              </Section>
+
+              {/* Bewertung (Scoring) */}
+              <Section title="🟢 Bewertung">
+                {byPage.scoring.length === 0 ? <EmptyLine /> :
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Regel</TableCell>
+                          <TableCell>Stimme</TableCell>
+                          <TableCell width={60}>Final</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {byPage.scoring.map((r, i) => {
+                          const v = asBool(r.attempt.candidate_value);
+                          return (
+                              <TableRow key={i} hover>
+                                <TableCell>{r.step.final_key ?? r.step.definition?.json_key ?? "—"}</TableCell>
+                                <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
+                                <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
+                              </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>}
+              </Section>
+
+              {/* Entscheidung */}
+              <Section title="⚖️ Entscheidung">
+                {byPage.decision.length === 0 ? <EmptyLine /> :
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell>Frage</TableCell>
+                          <TableCell>Stimme</TableCell>
+                          <TableCell width={60}>Final</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {byPage.decision.map((r, i) => {
+                          const v = asBool(r.attempt.candidate_value);
+                          return (
+                              <TableRow key={i} hover>
+                                <TableCell>{r.step.final_key ?? r.step.definition?.json_key ?? "—"}</TableCell>
+                                <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
+                                <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
+                              </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>}
+              </Section>
+            </Box>
+          </Box>
+        </DialogContent>
+      </Dialog>
+  );
+}
 
   const byPage = React.useMemo(() => {
     const items = {extraction: [] as any[], scoring: [] as any[], decision: [] as any[]};
@@ -186,10 +338,14 @@ function EvidenceModal({
             {/* Links: PDF */}
             <Box sx={{flex: 1, minWidth: 0, borderRight: theme => `1px solid ${theme.palette.divider}`}}>
               {pdfUrl ? (
-                  <iframe
-                      title="PDF"
-                      src={`${pdfUrl}#page=${page ?? 1}`}
-                      style={{width: "100%", height: "100%", border: 0}}
+                  <PdfViewer
+                      url={pdfUrl}
+                      page={currentPage}
+                      onPageChange={setCurrentPage}
+                      onNumPages={setTotalPages}
+                      highlight={selectedTextPosition ?? null}
+                      mode="scroll"
+                      height="80vh"
                   />
               ) : (
                   <Stack sx={{height: "100%"}} alignItems="center" justifyContent="center">
