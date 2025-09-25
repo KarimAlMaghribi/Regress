@@ -8,6 +8,72 @@ use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
 
+/* ======================= STRICT-JSON Guards (keine Füllwerte) ======================= */
+
+const EXTRACTION_GUARD_SUFFIX: &str = r#"
+IMPORTANT EXTRACTION CONTRACT (STRICT):
+
+Return STRICT JSON ONLY:
+{
+  "value": string|null,   // exact substring copied from DOCUMENT (after trivial whitespace fixes) or null if not present/unsure
+  "source": {
+    "page":  integer|null,  // 1-based page where the substring occurs, or null
+    "bbox":  [number,number,number,number], // use [0,0,0,0] if unknown
+    "quote": string|null    // <=120 chars, exact snippet from DOCUMENT around the value, or null
+  }
+}
+
+Rules:
+- Use ONLY content that appears in DOCUMENT. Do NOT invent text, pages or coordinates.
+- NO placeholders or generic labels (e.g. "Schadennummer", "Max Mustermann", "nicht angegeben").
+- If you are unsure or the answer is not present in DOCUMENT -> return {"value":null,"source":{"page":null,"bbox":[0,0,0,0],"quote":null}}.
+- Output JSON only. No prose, no markdown.
+"#;
+
+const SCORING_GUARD_PREFIX: &str = r#"
+You are a binary classifier that answers a Yes/No question about the given document.
+Use ONLY the provided DOCUMENT text. Do NOT invent content.
+
+Respond with ONE JSON object that matches exactly this schema:
+{
+  "result": true|false,
+  "source": {
+    "page":  integer,
+    "bbox":  [number,number,number,number],
+    "quote": "<exact snippet from the document>"
+  },
+  "explanation": "<short reason>"
+}
+
+Hard rules:
+- "quote" MUST be a verbatim substring of DOCUMENT. Do not fabricate quotes.
+- If you cannot support "true" with a verbatim quote, you MUST answer "false" and use a quote that justifies the negative/absence (if available), otherwise a neutral snippet closest to the relevant context.
+- JSON only. No markdown, no extra keys.
+"#;
+
+const DECISION_GUARD_PREFIX: &str = r#"
+You route a decision based ONLY on the provided document. Do NOT invent content.
+
+Return ONE JSON object:
+{
+  "answer":  true|false|null,  // null if undecided from DOCUMENT
+  "route":   string|null,      // optional; if you provide it, it must be "true" or "false" consistent with "answer"
+  "source": {
+    "page":  integer|null,
+    "bbox":  [number,number,number,number],
+    "quote": string|null
+  },
+  "explanation": "<short reason>"
+}
+
+Rules:
+- If unsure -> answer=null and source may be nulls. Do not fabricate evidence.
+- If you set "answer" to true/false, include a verbatim "quote" from DOCUMENT; page/bbox may be unknown -> use page=null and bbox=[0,0,0,0].
+- JSON only. No markdown, no extra keys.
+"#;
+
+/* ======================= Chat request payload ======================= */
+
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
@@ -28,29 +94,25 @@ fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
     }
 }
 
+/* --- robuster JSON-Parser: erst direkt, dann ggf. Code-Fence-Fallback --- */
 fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
-    let clean = s.trim().trim_start_matches("```json").trim_matches('`');
+    // 1) direkter Versuch
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+        return Ok(v);
+    }
+    // 2) fallback für ```json ... ```
+    let clean = s.trim().trim_start_matches("```json").trim_end_matches("```").trim();
     let val = serde_json::from_str(clean)?;
     Ok(val)
 }
 
+/* ======================= Scoring-Prompt (kompatibel, aber schärfer) ======================= */
+
 pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMessage> {
-    let system = r#"
-You are a binary classifier that answers Yes/No questions about the given
-document. Always respond with ONE JSON object that matches exactly this schema:
-{
-  \"result\": <true|false>,
-  \"source\": {
-    \"page\": <integer>,
-    \"bbox\": [<float>,<float>,<float>,<float>],
-    \"quote\": \"<exact snippet from the document>\"
-  },
-  \"explanation\": \"<short reason>\"
-}
-Do not add any keys, do not wrap the object in markdown.
-"#;
+    let system = SCORING_GUARD_PREFIX;
+    // Frage + Dokument explizit einbetten
     let user = format!(
-        "DOCUMENT:\n{}\n\nQUESTION (Yes/No): {}\n\nRespond with the JSON schema above.",
+        "DOCUMENT:\n{}\n\nQUESTION (Yes/No): {}\n\nRespond with the JSON schema above (STRICT).",
         document, question
     );
     vec![
@@ -59,35 +121,11 @@ Do not add any keys, do not wrap the object in markdown.
     ]
 }
 
-/// Send chat messages to OpenAI and return the assistant's answer.
+/* ======================= OpenAI Call ======================= */
+
+/// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
 ///
-/// Logs status, headers and raw body on failure.
-///
-/// # Example
-/// ```rust,no_run
-/// use awc::Client;
-/// use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
-/// use shared::openai_client::call_openai_chat;
-/// use actix_web::http::header;
-///
-/// #[actix_web::main]
-/// async fn main() {
-///     let client = Client::builder()
-///         .add_default_header((header::ACCEPT_ENCODING, "br, gzip, deflate"))
-///         .finish();
-///
-///     let messages = vec![ChatCompletionMessage {
-///         role: ChatCompletionMessageRole::User,
-///         content: Some("Hallo".to_string()),
-///         ..Default::default()
-///     }];
-///
-///     match call_openai_chat(&client, "gpt-4-turbo", messages).await {
-///         Ok(answer) => println!("Antwort: {}", answer),
-///         Err(e) => eprintln!("Fehler bei OpenAI: {}", e),
-///     }
-/// }
-/// ```
+/// Erzwingt response_format=json_object und loggt bei Fehlern Details.
 pub async fn call_openai_chat(
     client: &Client,
     model: &str,
@@ -148,6 +186,8 @@ pub async fn call_openai_chat(
     Ok(answer)
 }
 
+/* ======================= Fehler & DTOs ======================= */
+
 #[derive(thiserror::Error, Debug)]
 pub enum PromptError {
     #[error("extraction failed")]
@@ -173,14 +213,19 @@ pub struct OpenAiAnswer {
     pub raw: String,
 }
 
+/* ======================= Extraction (STRICT, mit Guard) ======================= */
+
 pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
-    let system = "You are an extraction engine. \
-             Return exactly ONE JSON object with the keys \
-             {\"value\": <extracted value>, \
-              \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2], \"quote\": \"<exact text span>\"}}";
-    let user = format!("{}\n{}", prompt, input);
+
+    // STRIKTER Guard: Dokument + Aufgabe + Contract
+    let system = "You are an extraction engine. Follow the contract strictly.";
+    let user = format!(
+        "DOCUMENT:\n{}\n\nTASK:\n{}\n\n{}",
+        input, prompt, EXTRACTION_GUARD_SUFFIX
+    );
+
     for i in 0..=3 {
         let msgs = vec![
             msg(ChatCompletionMessageRole::System, system),
@@ -188,13 +233,28 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
             if let Ok(v) = parse_json_block(&ans) {
+                // Erwartetes Format:
+                // { "value": <string|null>,
+                //   "source": { "page":<int|null>, "bbox":[f,f,f,f], "quote":<string|null> } }
+                let value = v.get("value").cloned();
+                let source = v
+                    .get("source")
+                    .and_then(|s| serde_json::from_value(s.clone()).ok())
+                    .map(|mut s: TextPosition| {
+                        // bbox absichern (falls Modell null liefert)
+                        let bbox = s.bbox;
+                        let valid = bbox.len() == 4;
+                        if !valid {
+                            s.bbox = [0.0, 0.0, 0.0, 0.0];
+                        }
+                        s
+                    });
+
                 return Ok(OpenAiAnswer {
                     boolean: None,
                     route: None,
-                    value: v.get("value").cloned(),
-                    source: v
-                        .get("source")
-                        .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                    value,
+                    source,
                     raw: v.to_string(),
                 });
             }
@@ -205,6 +265,8 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
+/* ======================= Scoring (beibehaltener Function-Call, aber strenger) ======================= */
+
 pub async fn score(
     prompt_id: i32,
     document: &str,
@@ -212,9 +274,11 @@ pub async fn score(
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let question = fetch_prompt(prompt_id).await?;
     let msgs = build_scoring_prompt(document, &question);
+
+    // Alte Funktionalität: Function Calling (erzwingt Schema)
     let schema = serde_json::json!({
       "name": "binary_answer",
-      "description": "Return exactly one object answering the Yes/No question.",
+      "description": "Return exactly one object answering the Yes/No question with a verbatim quote.",
       "parameters": {
         "type": "object",
         "properties": {
@@ -222,8 +286,8 @@ pub async fn score(
           "source": {
             "type":"object",
             "properties": {
-              "page": {"type":"integer"},
-              "bbox": {"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},
+              "page":  {"type":"integer"},
+              "bbox":  {"type":"array","items":{"type":"number"},"minItems":4,"maxItems":4},
               "quote": {"type":"string"}
             },
             "required": ["page","bbox","quote"]
@@ -233,6 +297,7 @@ pub async fn score(
         "required": ["result","source"]
       }
     });
+
     for i in 0..=3 {
         if let Ok(ans) = call_openai_chat(
             &client,
@@ -241,14 +306,18 @@ pub async fn score(
             Some(vec![schema.clone()]),
             Some(serde_json::json!({"name":"binary_answer"})),
         )
-        .await
+            .await
         {
             if let Ok(v) = parse_json_block(&ans) {
-                if let (Some(result), Some(source)) = (
+                if let (Some(result), Some(mut source)) = (
                     v.get("result").and_then(|b| b.as_bool()),
                     v.get("source")
-                        .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                        .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok()),
                 ) {
+                    // bbox absichern
+                    if source.bbox.len() != 4 {
+                        source.bbox = [0.0, 0.0, 0.0, 0.0];
+                    }
                     let explanation = v
                         .get("explanation")
                         .and_then(|e| e.as_str())
@@ -269,6 +338,8 @@ pub async fn score(
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
+/* ======================= Decision (STRICT, mit Guard) ======================= */
+
 pub async fn decide(
     prompt_id: i32,
     document: &str,
@@ -276,13 +347,15 @@ pub async fn decide(
 ) -> Result<OpenAiAnswer, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
-    let system = "Return ONE JSON object: {\"answer\": <true|false>, \"source\": {\"page\": <u32>, \"bbox\": [x1,y1,x2,y2], \"quote\": \"<exact text span>\"}, \"explanation\": \"<short reason>\"}";
+
+    let system = DECISION_GUARD_PREFIX;
     let user = format!(
-        "{}\n\nDOCUMENT:\n{}\n\nSTATE:\n{}",
+        "{}\n\nDOCUMENT:\n{}\n\nSTATE:\n{}\n\n(STRICT JSON, follow the contract.)",
         prompt,
         document,
         serde_json::to_string(state).unwrap_or_default()
     );
+
     for i in 0..=3 {
         let msgs = vec![
             msg(ChatCompletionMessageRole::System, system),
@@ -290,22 +363,33 @@ pub async fn decide(
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
             if let Ok(mut v) = parse_json_block(&ans) {
-                // ensure `route` is present for bool answers
+                // Normalisiere route, wenn nur answer geliefert wurde
+                let answer_bool = v.get("answer").and_then(|val| val.as_bool());
                 if v.get("route").is_none() {
-                    if let Some(ansb) = v.get("answer").and_then(|val| val.as_bool()) {
+                    if let Some(ansb) = answer_bool {
                         v["route"] = serde_json::Value::String(ansb.to_string());
                     }
                 }
+                let route = v
+                    .get("route")
+                    .and_then(|r| r.as_str())
+                    .map(|s| s.to_string());
+
+                let source = v
+                    .get("source")
+                    .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok())
+                    .map(|mut s| {
+                        if s.bbox.len() != 4 {
+                            s.bbox = [0.0, 0.0, 0.0, 0.0];
+                        }
+                        s
+                    });
+
                 return Ok(OpenAiAnswer {
-                    boolean: v.get("answer").and_then(|b| b.as_bool()),
-                    route: v
-                        .get("route")
-                        .and_then(|r| r.as_str())
-                        .map(|s| s.to_string()),
+                    boolean: answer_bool,
+                    route,
                     value: None,
-                    source: v
-                        .get("source")
-                        .and_then(|s| serde_json::from_value(s.clone()).ok()),
+                    source,
                     raw: v.to_string(),
                 });
             }
@@ -315,6 +399,8 @@ pub async fn decide(
     }
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
+
+/* ======================= Sonstiges ======================= */
 
 pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> {
     Ok(serde_json::json!(null))
