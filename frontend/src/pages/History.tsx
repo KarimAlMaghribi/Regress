@@ -6,7 +6,7 @@ import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew'; // NEU
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import dayjs, { Dayjs } from 'dayjs';
 import { PipelineRunResult } from '../types/pipeline';
 import RunDetails from '../components/RunDetails';
@@ -26,7 +26,7 @@ function getPipelineApiBase(): string {
   return RUNTIME.PIPELINE_API_URL || import.meta.env.VITE_PIPELINE_API_URL || '/pl';
 }
 
-const LS_PREFIX = 'run-view:'; // NEU
+const LS_PREFIX = 'run-view:';
 
 interface HistoryEntry {
   id: number; // unique analysis id
@@ -118,7 +118,7 @@ async function fetchPipelineNameById(id: string): Promise<string | undefined> {
   return undefined;
 }
 
-/** NEU: Öffnet RunDetailsPage in neuem Tab und legt Payload in localStorage ab */
+/** Öffnet RunDetailsPage in neuem Tab und legt Payload in localStorage ab */
 async function openRunDetailsPageInNewTab(entry: HistoryEntry) {
   const key = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const run = normalizeRun(entry.result);
@@ -305,6 +305,13 @@ export default function History() {
       flex: 0.6,
       valueGetter: p => dayjs(p.row.timestamp).format('HH:mm:ss'),
     },
+    // NEU: PDF-ID Spalte
+    {
+      field: 'pdfId',
+      headerName: 'PDF-ID',
+      width: 120,
+      valueGetter: p => String(p.row.pdfId ?? ''),
+    },
     {
       field: 'pipeline',
       headerName: 'Pipeline',
@@ -337,7 +344,7 @@ export default function History() {
       field: 'actions',
       headerName: '',
       sortable: false,
-      width: 110, // verbreitert für 2 Icons
+      width: 110, // zwei Icons
       renderCell: params => (
           <Stack direction="row" spacing={0.5}>
             <IconButton size="small" title="Details anzeigen" onClick={() => setSelected(params.row)}>
