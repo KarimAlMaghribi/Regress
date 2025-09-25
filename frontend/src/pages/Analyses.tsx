@@ -234,11 +234,54 @@ async function openDetailsInNewTab(entry: Entry) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-function getPipelineLabel(entry: Entry): string {
+/* -------- Pipeline-Name-Auflösung -------- */
+
+function extractPipelineIdAndName(entry: Entry): { id?: string; name?: string } {
   const r = normalizeRunShape(entry.result);
   const name = entry.pipelineName ?? r?.pipeline_name ?? r?.pipelineName ?? r?.pipeline?.name;
-  const id = entry.pipelineId ?? r?.pipeline_id ?? r?.pipelineId;
-  return name ?? (id ? `ID ${id}` : '—');
+  const idRaw = entry.pipelineId ?? r?.pipeline_id ?? r?.pipelineId ?? r?.pipeline?.id;
+  const id = idRaw != null ? String(idRaw) : undefined;
+  return { id, name };
+}
+
+async function fetchPipelineNameById(id: string): Promise<string | undefined> {
+  const api = getPipelineApiBase();
+  const candidates = [
+    `${api}/pipelines/${encodeURIComponent(id)}`,
+    `${api}/pipelines?id=${encodeURIComponent(id)}`,
+  ];
+  for (const url of candidates) {
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (!r.ok) continue;
+      const j = await r.json();
+      if (j && typeof j === 'object' && typeof j.name === 'string') return j.name;
+      if (Array.isArray(j)) {
+        const hit = j.find((p: any) => String(p?.id ?? p?.pipeline_id) === String(id));
+        if (hit && typeof hit.name === 'string') return hit.name;
+      }
+    } catch { /* ignore */ }
+  }
+  // Fallback: versuche komplette Liste
+  try {
+    const r = await fetch(`${api}/pipelines`, { headers: { Accept: 'application/json' } });
+    if (r.ok) {
+      const arr = await r.json();
+      if (Array.isArray(arr)) {
+        const hit = arr.find((p: any) => String(p?.id ?? p?.pipeline_id) === String(id));
+        if (hit && typeof hit.name === 'string') return hit.name;
+      }
+    }
+  } catch { /* ignore */ }
+  return undefined;
+}
+
+function getPipelineLabel(entry: Entry, nameMap?: Record<string, string>): string {
+  const { id, name } = extractPipelineIdAndName(entry);
+  if (name) return name;
+  if (id && nameMap && nameMap[id]) return nameMap[id];
+  // KEIN Fallback auf ID – gewünscht ist ausschließlich der Name
+  return '—';
 }
 
 /* -------- Seitenkomponente -------- */
@@ -250,6 +293,7 @@ export default function Analyses() {
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
   const [onlyLowConf, setOnlyLowConf] = useState(false);
+  const [pipelineNames, setPipelineNames] = useState<Record<string, string>>({});
 
   const load = () => {
     const base =
@@ -279,8 +323,14 @@ export default function Analyses() {
           withRunId.run_id = d.run_id ?? d.runId;
         }
 
-        const pipelineId = withRunId?.pipeline_id ?? withRunId?.pipelineId ?? d.pipeline_id ?? d.pipelineId ?? d?.pipeline?.id;
-        const pipelineName = withRunId?.pipeline_name ?? withRunId?.pipelineName ?? d.pipeline_name ?? d.pipelineName ?? d?.pipeline?.name;
+        const pidRaw =
+            withRunId?.pipeline_id ?? withRunId?.pipelineId ??
+            d.pipeline_id ?? d.pipelineId ?? d?.pipeline?.id;
+
+        const pipelineId = pidRaw != null ? String(pidRaw) : undefined;
+        const pipelineName =
+            withRunId?.pipeline_name ?? withRunId?.pipelineName ??
+            d.pipeline_name ?? d.pipelineName ?? d?.pipeline?.name;
 
         return {
           id: d.id,
@@ -299,9 +349,34 @@ export default function Analyses() {
       const c = doneData.map(map).sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
       setRunning(r);
       setDone(c);
+
+      // Namen für Einträge ohne Namen nachladen
+      void resolvePipelineNamesForEntries([...r, ...c]);
     })
     .catch(e => console.error('Analysen laden', e));
   };
+
+  async function resolvePipelineNamesForEntries(entries: Entry[]) {
+    // finde alle IDs ohne bekannten Namen
+    const missing = new Set<string>();
+    for (const e of entries) {
+      const { id, name } = extractPipelineIdAndName(e);
+      if (id && !name && !pipelineNames[id]) missing.add(id);
+    }
+    if (missing.size === 0) return;
+
+    const updates: Record<string, string> = {};
+    await Promise.all(
+        Array.from(missing).map(async (id) => {
+          const n = await fetchPipelineNameById(id);
+          if (n) updates[id] = n;
+        })
+    );
+
+    if (Object.keys(updates).length) {
+      setPipelineNames(prev => ({ ...prev, ...updates }));
+    }
+  }
 
   useEffect(load, []);
 
@@ -333,7 +408,7 @@ export default function Analyses() {
       );
       return {
         pdf: `PDF ${e.pdfId}`,
-        pipeline: getPipelineLabel(e),
+        pipeline: getPipelineLabel(e, pipelineNames),
         gesamtscore: run?.overall_score ?? '',
         ...flatEx,
       } as Record<string, any>;
@@ -372,7 +447,7 @@ export default function Analyses() {
                         sx={{ cursor: finished ? 'pointer' : 'default' }}
                     >
                       <TableCell>{`PDF ${e.pdfId}`}</TableCell>
-                      <TableCell>{getPipelineLabel(e)}</TableCell>
+                      <TableCell>{getPipelineLabel(e, pipelineNames)}</TableCell>
 
                       {finished && (
                           <TableCell>{typeof run?.overall_score === 'number' ? run.overall_score.toFixed(2) : ''}</TableCell>
@@ -446,7 +521,7 @@ export default function Analyses() {
                     control={<Checkbox checked={onlyLowConf} onChange={(e) => setOnlyLowConf(e.target.checked)} />}
                     label="Nur unsichere Werte"
                 />
-                <Button variant="outlined" onClick={exportExcel}>Excel‑Export</Button>
+                <Button variant="outlined" onClick={exportExcel}>Excel-Export</Button>
               </Stack>
               {renderList(filteredDone, true)}
             </Box>
