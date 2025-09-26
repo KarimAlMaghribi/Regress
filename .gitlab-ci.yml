@@ -8,7 +8,6 @@ workflow:
 
 variables:
   DOCKER_HOST: "tcp://docker:2375"
-  DOCKER_DRIVER: "overlay2"
   DOCKER_TLS_CERTDIR: ""
   DOCKER_BUILDKIT: "1"
   BUILDKIT_PROGRESS: "plain"
@@ -29,13 +28,22 @@ ci_noop:
   image: docker:24
   services:
     - name: docker:24-dind
+      alias: docker
       command: ["--tls=false", "--registry-mirror=https://mirror.gcr.io"]
   before_script:
+    # Warten bis der Docker-Daemon erreichbar ist
+    - |
+      i=0
+      until docker version >/dev/null 2>&1; do
+        i=$((i+1)); if [ $i -gt 60 ]; then echo "Docker daemon nicht erreichbar"; exit 1; fi
+        echo "Warte auf Docker Daemon …"; sleep 2
+      done
     # Login private Registry
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
-    # Optional: Login Docker Hub (erhöht Pull-Limits -> verhindert 429)
-    - if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
-      echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin ;
+    # Optional: Docker Hub Login (hebt Pull-Limits an, verhindert 429)
+    - |
+      if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
+        echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin
       fi
     - apk add --no-cache bash coreutils
     - docker buildx create --use || docker buildx use default
@@ -165,15 +173,24 @@ build_migrations_image:
   image: docker:24
   services:
     - name: docker:24-dind
+      alias: docker
       command: ["--tls=false", "--registry-mirror=https://mirror.gcr.io"]
   variables:
     IMAGE_NAME: "migrations"
     DOCKERFILE: "migrations/Dockerfile"
   before_script:
+    # Warten bis der Docker-Daemon erreichbar ist
+    - |
+      i=0
+      until docker version >/dev/null 2>&1; do
+        i=$((i+1)); if [ $i -gt 60 ]; then echo "Docker daemon nicht erreichbar"; exit 1; fi
+        echo "Warte auf Docker Daemon …"; sleep 2
+      done
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
-    # Optional: Docker Hub Login auch hier (Basisimage postgres o.Ä.)
-    - if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
-      echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin ;
+    # Optional: Docker Hub Login auch hier (Basisimage postgres etc.)
+    - |
+      if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
+        echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin
       fi
     - docker buildx create --use || docker buildx use default
     - mkdir -p "$CACHE_DIR"
