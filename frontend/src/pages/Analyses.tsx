@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Tabs, Tab, Paper, Button, Typography,
   Table, TableHead, TableRow, TableCell, TableBody,
-  Stack, IconButton, FormControlLabel, Checkbox, Tooltip
+  Stack, FormControlLabel, Checkbox, Tooltip
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
@@ -10,6 +10,8 @@ import { utils as XLSXUtils, writeFile } from 'xlsx';
 import PageHeader from '../components/PageHeader';
 import { PipelineRunResult } from '../types/pipeline';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import { useSearchParams } from 'react-router-dom';
+import TenantFilter from '../components/TenantFilter';
 
 declare global { interface Window { __ENV__?: any } }
 
@@ -24,6 +26,7 @@ interface Entry {
   result?: PipelineRunResult | any;
   pipelineId?: string;
   pipelineName?: string;
+  tenantName?: string;  // << NEU: vom Backend-View geliefert
 }
 
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
@@ -262,7 +265,7 @@ async function fetchPipelineNameById(id: string): Promise<string | undefined> {
       }
     } catch { /* ignore */ }
   }
-  // Fallback: versuche komplette Liste
+  // Fallback: komplette Liste
   try {
     const r = await fetch(`${api}/pipelines`, { headers: { Accept: 'application/json' } });
     if (r.ok) {
@@ -280,7 +283,7 @@ function getPipelineLabel(entry: Entry, nameMap?: Record<string, string>): strin
   const { id, name } = extractPipelineIdAndName(entry);
   if (name) return name;
   if (id && nameMap && nameMap[id]) return nameMap[id];
-  // KEIN Fallback auf ID – gewünscht ist ausschließlich der Name
+  // KEIN Fallback auf ID
   return '—';
 }
 
@@ -295,15 +298,30 @@ export default function Analyses() {
   const [onlyLowConf, setOnlyLowConf] = useState(false);
   const [pipelineNames, setPipelineNames] = useState<Record<string, string>>({});
 
+  const [params, setParams] = useSearchParams();
+  const tenant = params.get('tenant') ?? undefined;
+  const setTenant = (t?: string) => {
+    const p = new URLSearchParams(params);
+    if (t) p.set('tenant', t); else p.delete('tenant');
+    setParams(p, { replace: true });
+  };
+
   const load = () => {
     const base =
         (window as any).__ENV__?.HISTORY_URL ||
         import.meta.env.VITE_HISTORY_URL ||
         '/hist';
 
+    const urlFor = (status: 'running' | 'completed') => {
+      const u = new URL(`${base}/analyses`, window.location.origin);
+      u.searchParams.set('status', status);
+      if (tenant) u.searchParams.set('tenant', tenant);
+      return u.toString();
+    };
+
     Promise.all([
-      fetch(`${base}/analyses?status=running`).then(r => r.json()),
-      fetch(`${base}/analyses?status=completed`).then(r => r.json()),
+      fetch(urlFor('running')).then(r => r.json()),
+      fetch(urlFor('completed')).then(r => r.json()),
     ])
     .then(([runningData, doneData]: [any[], any[]]) => {
       const map = (d: any): Entry => {
@@ -342,6 +360,7 @@ export default function Analyses() {
           result: withRunId,
           pipelineId,
           pipelineName,
+          tenantName: d.tenant_name ?? d.tenantName, // << NEU
         };
       };
 
@@ -378,16 +397,25 @@ export default function Analyses() {
     }
   }
 
-  useEffect(load, []);
+  useEffect(load, [tenant]);
+
+  const filteredRunning = useMemo(() => {
+    if (!tenant) return running;
+    const s = tenant.toLowerCase();
+    return running.filter(e => (e.tenantName ?? '').toLowerCase().includes(s));
+  }, [running, tenant]);
 
   const filteredDoneByDate = useMemo(() => {
-    return done.filter(e => {
+    const base = (!tenant)
+        ? done
+        : done.filter(e => (e.tenantName ?? '').toLowerCase().includes(tenant.toLowerCase()));
+    return base.filter(e => {
       const ts = dayjs(e.timestamp);
       if (start && ts.isBefore(start, 'day')) return false;
       if (end && ts.isAfter(end, 'day')) return false;
       return true;
     });
-  }, [done, start, end]);
+  }, [done, start, end, tenant]);
 
   const filteredDone = useMemo(() => {
     if (!onlyLowConf) return filteredDoneByDate;
@@ -410,6 +438,7 @@ export default function Analyses() {
         pdf: `PDF ${e.pdfId}`,
         pipeline: getPipelineLabel(e, pipelineNames),
         gesamtscore: run?.overall_score ?? '',
+        tenant: e.tenantName ?? '',
         ...flatEx,
       } as Record<string, any>;
     });
@@ -420,7 +449,9 @@ export default function Analyses() {
   };
 
   const renderList = (items: Entry[], finished: boolean) => {
-    const emptyColSpan = finished ? (1 /* PDF */ + 1 /* Pipeline */ + 1 /* Score */ + finalCols.length + 1 /* Details */) : (1 /* PDF */ + 1 /* Pipeline */);
+    const emptyColSpan = finished
+        ? (1 /* PDF */ + 1 /* Pipeline */ + 1 /* Score */ + finalCols.length + 1 /* Details */)
+        : (1 /* PDF */ + 1 /* Pipeline */);
     return (
         <Paper sx={{ p: 2 }}>
           <Table size="small">
@@ -476,9 +507,14 @@ export default function Analyses() {
 
                       {finished && (
                           <TableCell align="right">
-                            <IconButton size="small" onClick={(ev) => { ev.stopPropagation(); void openDetailsInNewTab(e); }} title="Details anzeigen">
-                              <VisibilityIcon fontSize="small" />
-                            </IconButton>
+                            <Button
+                                size="small"
+                                onClick={(ev) => { ev.stopPropagation(); void openDetailsInNewTab(e); }}
+                                title="Details anzeigen"
+                                startIcon={<VisibilityIcon fontSize="small" />}
+                            >
+                              Details
+                            </Button>
                           </TableCell>
                       )}
                     </TableRow>
@@ -505,13 +541,18 @@ export default function Analyses() {
             actions={<Button variant="contained" onClick={load}>Neu laden</Button>}
         />
 
+        {/* Tenant-Filter */}
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2, alignItems: 'center' }}>
+          <TenantFilter value={tenant} onChange={setTenant} />
+        </Stack>
+
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
-          <Tab label={`Abgeschlossen (${done.length})`} />
-          <Tab label={`Laufend (${running.length})`} />
+          <Tab label={`Laufend (${filteredRunning.length})`} />
+          <Tab label={`Abgeschlossen (${filteredDone.length})`} />
         </Tabs>
 
         {tab === 0 ? (
-            renderList(running, false)
+            renderList(filteredRunning, false)
         ) : (
             <Box>
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2, alignItems: 'center' }}>

@@ -113,6 +113,44 @@ pub struct PipelineConfig {
     pub steps: Vec<PipelineStep>,
 }
 
+/// Repräsentiert einen Mandanten.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Tenant {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// Request zum Anlegen eines Mandanten.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateTenantRequest {
+    pub name: String,
+}
+
+/// Response nach dem Anlegen eines Mandanten.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreateTenantResponse {
+    pub id: Uuid,
+    pub name: String,
+}
+
+/// Optionaler Upload-Request, falls du JSON für Metadaten nutzt.
+/// (Bei Multipart-Uploads kannst du `tenant_id` als Feld mitsenden.)
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateUploadRequest {
+    pub pipeline_id: Option<Uuid>,
+    pub tenant_id: Uuid, // Upload wird genau einem Tenant zugeordnet
+}
+
+/// Optional: Upload-DTO (Response)
+#[derive(Debug, Clone, Serialize)]
+pub struct UploadDto {
+    pub id: i64,
+    pub pdf_id: Option<i32>,
+    pub pipeline_id: Option<Uuid>,
+    pub status: String,
+    pub tenant_id: Uuid,
+}
+
 fn default_true() -> bool {
     true
 }

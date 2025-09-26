@@ -10,6 +10,8 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import dayjs, { Dayjs } from 'dayjs';
 import { PipelineRunResult } from '../types/pipeline';
 import RunDetails from '../components/RunDetails';
+import { useSearchParams } from 'react-router-dom';
+import TenantFilter from '../components/TenantFilter';
 
 declare global {
   interface Window { __ENV__?: any }
@@ -38,6 +40,7 @@ interface HistoryEntry {
   status?: string;
   pipelineId?: string;
   pipelineName?: string;
+  tenantName?: string; // << NEU
 }
 
 /** snake/camel normalisieren (nur was wir brauchen) */
@@ -84,6 +87,7 @@ function normalizeEntry(e: any): HistoryEntry {
     status: e.status,
     pipelineId,
     pipelineName,
+    tenantName: e.tenant_name ?? e.tenantName, // << NEU
   };
 }
 
@@ -178,13 +182,28 @@ export default function History() {
   const [end, setEnd] = useState<Dayjs | null>(null);
   const [pipelineNames, setPipelineNames] = useState<Record<string, string>>({});
 
+  const [params, setParams] = useSearchParams();
+  const tenant = params.get('tenant') ?? undefined;
+  const setTenant = (t?: string) => {
+    const p = new URLSearchParams(params);
+    if (t) p.set('tenant', t); else p.delete('tenant');
+    setParams(p, { replace: true });
+  };
+
   // Initial REST Load (running + completed)
   useEffect(() => {
     const load = async () => {
       try {
+        const urlFor = (status: 'running' | 'completed') => {
+          const u = new URL(`${BASE_HIST}/analyses`, window.location.origin);
+          u.searchParams.set('status', status);
+          if (tenant) u.searchParams.set('tenant', tenant);
+          return u.toString();
+        };
+
         const [rRunning, rCompleted] = await Promise.all([
-          fetch(`${BASE_HIST}/analyses?status=running`).then(r => r.json()),
-          fetch(`${BASE_HIST}/analyses?status=completed`).then(r => r.json()),
+          fetch(urlFor('running')).then(r => r.json()),
+          fetch(urlFor('completed')).then(r => r.json()),
         ]);
         const initial = [...rRunning, ...rCompleted].map(normalizeEntry);
         initial.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
@@ -201,7 +220,7 @@ export default function History() {
       }
     };
     load();
-  }, []);
+  }, [tenant]);
 
   // Pipeline-Namen nachladen, falls nur IDs vorhanden
   useEffect(() => {
@@ -270,6 +289,12 @@ export default function History() {
       const ts = dayjs(e.timestamp);
       if (start && ts.isBefore(start, 'day')) return false;
       if (end && ts.isAfter(end, 'day')) return false;
+
+      if (tenant) {
+        const tn = (e.tenantName ?? '').toLowerCase();
+        if (!tn.includes(tenant.toLowerCase())) return false;
+      }
+
       if (search) {
         const s = search.toLowerCase();
         const hay = [
@@ -277,12 +302,13 @@ export default function History() {
           JSON.stringify(e.result ?? {}).toLowerCase(),
           String(e.pdfId),
           e.pipelineName?.toLowerCase() ?? '',
+          e.tenantName?.toLowerCase() ?? '',
         ].join(' ');
         if (!hay.includes(s)) return false;
       }
       return true;
     });
-  }, [entries, start, end, search]);
+  }, [entries, start, end, search, tenant]);
 
   const groups = filtered.reduce<Record<string, HistoryEntry[]>>((acc, cur) => {
     const day = dayjs(cur.timestamp).format('YYYY-MM-DD');
@@ -305,7 +331,7 @@ export default function History() {
       flex: 0.6,
       valueGetter: p => dayjs(p.row.timestamp).format('HH:mm:ss'),
     },
-    // NEU: PDF-ID Spalte
+    // PDF-ID Spalte
     {
       field: 'pdfId',
       headerName: 'PDF-ID',
@@ -317,6 +343,12 @@ export default function History() {
       headerName: 'Pipeline',
       flex: 1.2,
       valueGetter: p => getPipelineLabel(p.row),
+    },
+    {
+      field: 'tenant',
+      headerName: 'Tenant',
+      flex: 0.8,
+      valueGetter: p => p.row.tenantName ?? '—',
     },
     {
       field: 'status',
@@ -370,6 +402,7 @@ export default function History() {
           <TextField label="Suche" size="small" value={search} onChange={e => setSearch(e.target.value)} />
           <DatePicker label="Start" value={start} onChange={d => setStart(d)} slotProps={{ textField: { size: 'small' } }} />
           <DatePicker label="Ende" value={end} onChange={d => setEnd(d)} slotProps={{ textField: { size: 'small' } }} />
+          <TenantFilter value={tenant} onChange={setTenant} />
         </Stack>
 
         {groupKeys.map(day => (
