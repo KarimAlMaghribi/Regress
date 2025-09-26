@@ -29,23 +29,24 @@ ci_noop:
   services:
     - name: docker:24-dind
       alias: docker
-      command: ["--tls=false", "--registry-mirror=https://mirror.gcr.io"]
+      privileged: true
+      command: ["--host=tcp://0.0.0.0:2375", "--tls=false", "--registry-mirror=https://mirror.gcr.io"]
   before_script:
     # Warten bis der Docker-Daemon erreichbar ist
     - |
+      apk add --no-cache bash coreutils curl
       i=0
-      until docker version >/dev/null 2>&1; do
+      until docker version >/dev/null 2>&1 || curl -fsS http://docker:2375/_ping >/dev/null 2>&1; do
         i=$((i+1)); if [ $i -gt 60 ]; then echo "Docker daemon nicht erreichbar"; exit 1; fi
         echo "Warte auf Docker Daemon …"; sleep 2
       done
     # Login private Registry
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
-    # Optional: Docker Hub Login (hebt Pull-Limits an, verhindert 429)
+    # Optional: Docker Hub Login (hebt Pull-Limits an)
     - |
       if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
         echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin
       fi
-    - apk add --no-cache bash coreutils
     - docker buildx create --use || docker buildx use default
     - mkdir -p "$CACHE_DIR"
   script:
@@ -174,20 +175,22 @@ build_migrations_image:
   services:
     - name: docker:24-dind
       alias: docker
-      command: ["--tls=false", "--registry-mirror=https://mirror.gcr.io"]
+      privileged: true
+      command: ["--host=tcp://0.0.0.0:2375", "--tls=false", "--registry-mirror=https://mirror.gcr.io"]
   variables:
     IMAGE_NAME: "migrations"
     DOCKERFILE: "migrations/Dockerfile"
   before_script:
     # Warten bis der Docker-Daemon erreichbar ist
     - |
+      apk add --no-cache bash coreutils curl
       i=0
-      until docker version >/dev/null 2>&1; do
+      until docker version >/dev/null 2>&1 || curl -fsS http://docker:2375/_ping >/dev/null 2>&1; do
         i=$((i+1)); if [ $i -gt 60 ]; then echo "Docker daemon nicht erreichbar"; exit 1; fi
         echo "Warte auf Docker Daemon …"; sleep 2
       done
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
-    # Optional: Docker Hub Login auch hier (Basisimage postgres etc.)
+    # Optional: Docker Hub Login auch hier (Basisimages)
     - |
       if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
         echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin
