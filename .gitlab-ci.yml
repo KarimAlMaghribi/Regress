@@ -7,9 +7,11 @@ workflow:
     - when: always
 
 variables:
+  DOCKER_HOST: "tcp://docker:2375"
+  DOCKER_DRIVER: "overlay2"
   DOCKER_TLS_CERTDIR: ""
-  DOCKER_BUILDKIT: 1
-  BUILDKIT_PROGRESS: plain
+  DOCKER_BUILDKIT: "1"
+  BUILDKIT_PROGRESS: "plain"
   IMAGE_TAG: "latest"
   CACHE_DIR: ".buildx-cache"
 
@@ -25,11 +27,13 @@ ci_noop:
 .docker-build: &docker-build
   stage: build
   image: docker:24
-  services: [ docker:24-dind ]
+  services:
+    - name: docker:24-dind
+      command: ["--tls=false", "--registry-mirror=https://mirror.gcr.io"]
   before_script:
     # Login private Registry
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
-    # NEU: Login Docker Hub (erhöht Pull-Limits -> verhindert 429)
+    # Optional: Login Docker Hub (erhöht Pull-Limits -> verhindert 429)
     - if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
       echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin ;
       fi
@@ -159,13 +163,15 @@ build_frontend:
 build_migrations_image:
   stage: build
   image: docker:24
-  services: [ docker:24-dind ]
+  services:
+    - name: docker:24-dind
+      command: ["--tls=false", "--registry-mirror=https://mirror.gcr.io"]
   variables:
     IMAGE_NAME: "migrations"
     DOCKERFILE: "migrations/Dockerfile"
   before_script:
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
-    # NEU: Docker Hub Login auch hier (Basisimage postgres)
+    # Optional: Docker Hub Login auch hier (Basisimage postgres o.Ä.)
     - if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
       echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin ;
       fi
