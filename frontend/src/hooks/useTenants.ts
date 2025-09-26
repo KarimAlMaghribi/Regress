@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState } from 'react';
 
 export type Tenant = { id: string; name: string };
 
@@ -11,11 +11,11 @@ export function useTenants() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/tenants");
+      const res = await fetch('/tenants');
       if (!res.ok) throw new Error(await res.text());
       setItems(await res.json());
     } catch (e: any) {
-      setError(e.message || "Fehler beim Laden der Mandanten");
+      setError(e.message || 'Fehler beim Laden der Mandanten');
     } finally {
       setLoading(false);
     }

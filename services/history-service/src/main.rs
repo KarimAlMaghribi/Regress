@@ -9,6 +9,7 @@ use rdkafka::{
     ClientConfig, Message,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use shared::config::Settings;
 use shared::dto::PipelineRunResult;
 use std::collections::HashMap;
@@ -156,6 +157,8 @@ struct HistoryEntry {
     status: String,
     score: Option<f64>,
     result_label: Option<String>,
+    // NEU: optionaler Tenant-Name (nur gesetzt, wenn aus View selektiert)
+    tenant_name: Option<String>,
 }
 
 #[derive(Clone)]
@@ -206,6 +209,24 @@ fn row_to_entry(r: Row) -> HistoryEntry {
         status: r.get(6),
         score: r.get(7),
         result_label: r.get(8),
+        tenant_name: None,
+    }
+}
+
+// Mapping für Selektierungen aus der View (enthält zusätzlich tenant_name)
+fn row_to_entry_with_tenant(r: Row) -> HistoryEntry {
+    HistoryEntry {
+        id: r.get(0),
+        pdf_id: r.get(1),
+        pipeline_id: r.get(2),
+        prompt: None,
+        result: r.get(3),
+        pdf_url: r.get(4),
+        timestamp: r.get(5),
+        status: r.get(6),
+        score: r.get(7),
+        result_label: r.get(8),
+        tenant_name: r.get(9), // tenant_name
     }
 }
 
@@ -268,6 +289,100 @@ async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntr
             Err(e) => {
                 error!(%e, "latest_by_status_db(all): query failed");
                 vec![]
+            }
+        }
+    }
+}
+
+// NEU: gleiche Logik wie oben, aber über die View v_analysis_history_with_tenant + Tenant-Filter
+async fn latest_by_status_with_tenant_db(
+    db: &Db,
+    status: Option<String>,
+    tenant_like: Option<String>,
+) -> Vec<HistoryEntry> {
+    match (tenant_like, status) {
+        (Some(t), Some(s)) => {
+            let sql = r#"
+                SELECT * FROM (
+                  SELECT DISTINCT ON (pdf_id)
+                         id, pdf_id, pipeline_id, state AS result,
+                         pdf_url, timestamp, status, score, label AS result_label,
+                         tenant_name
+                  FROM v_analysis_history_with_tenant
+                  WHERE tenant_name ILIKE '%' || $1 || '%'
+                    AND status = $2
+                  ORDER BY pdf_id, timestamp DESC
+                ) AS t
+                ORDER BY timestamp DESC
+            "#;
+            match db.query(sql, &[&t, &s]).await {
+                Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
+                Err(e) => {
+                    error!(%e, "latest_by_status_with_tenant_db(t,s): query failed");
+                    vec![]
+                }
+            }
+        }
+        (Some(t), None) => {
+            let sql = r#"
+                SELECT * FROM (
+                  SELECT DISTINCT ON (pdf_id)
+                         id, pdf_id, pipeline_id, state AS result,
+                         pdf_url, timestamp, status, score, label AS result_label,
+                         tenant_name
+                  FROM v_analysis_history_with_tenant
+                  WHERE tenant_name ILIKE '%' || $1 || '%'
+                  ORDER BY pdf_id, timestamp DESC
+                ) AS t
+                ORDER BY timestamp DESC
+            "#;
+            match db.query(sql, &[&t]).await {
+                Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
+                Err(e) => {
+                    error!(%e, "latest_by_status_with_tenant_db(t): query failed");
+                    vec![]
+                }
+            }
+        }
+        (None, Some(s)) => {
+            let sql = r#"
+                SELECT * FROM (
+                  SELECT DISTINCT ON (pdf_id)
+                         id, pdf_id, pipeline_id, state AS result,
+                         pdf_url, timestamp, status, score, label AS result_label,
+                         tenant_name
+                  FROM v_analysis_history_with_tenant
+                  WHERE status = $1
+                  ORDER BY pdf_id, timestamp DESC
+                ) AS t
+                ORDER BY timestamp DESC
+            "#;
+            match db.query(sql, &[&s]).await {
+                Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
+                Err(e) => {
+                    error!(%e, "latest_by_status_with_tenant_db(s): query failed");
+                    vec![]
+                }
+            }
+        }
+        (None, None) => {
+            let sql = r#"
+                SELECT * FROM (
+                  SELECT DISTINCT ON (pdf_id)
+                         id, pdf_id, pipeline_id, state AS result,
+                         pdf_url, timestamp, status, score, label AS result_label,
+                         tenant_name
+                  FROM v_analysis_history_with_tenant
+                  ORDER BY pdf_id, timestamp DESC
+                ) AS t
+                ORDER BY timestamp DESC
+            "#;
+            match db.query(sql, &[]).await {
+                Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
+                Err(e) => {
+                    error!(%e, "latest_by_status_with_tenant_db(all): query failed");
+                    vec![]
+                }
             }
         }
     }
@@ -373,7 +488,9 @@ async fn analyses(
     query: web::Query<HashMap<String, String>>,
 ) -> impl Responder {
     let status = query.get("status").cloned();
-    let items = latest_by_status_db(&state.db, status).await;
+    let tenant_like = query.get("tenant").cloned();
+    // Neu: immer die View-basierten Ergebnisse liefern (inkl. optionalem Tenant-Filter)
+    let items = latest_by_status_with_tenant_db(&state.db, status, tenant_like).await;
     HttpResponse::Ok().json(items)
 }
 
@@ -401,6 +518,50 @@ async fn health(state: web::Data<AppState>) -> impl Responder {
     match state.db.ping().await {
         Ok(_) => HttpResponse::Ok().body("OK"),
         Err(e) => HttpResponse::ServiceUnavailable().body(format!("db not ok: {e}")),
+    }
+}
+
+// NEU: Tenants auflisten
+async fn tenants_list(state: web::Data<AppState>) -> impl Responder {
+    match state.db.query("SELECT id, name FROM tenants ORDER BY name ASC", &[]).await {
+        Ok(rows) => {
+            let out: Vec<_> = rows.into_iter()
+                .map(|r| json!({"id": r.get::<_, Uuid>(0), "name": r.get::<_, String>(1)}))
+                .collect();
+            HttpResponse::Ok().json(out)
+        }
+        Err(e) => {
+            error!(%e, "tenants_list: db error");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+// NEU: Tenant anlegen (idempotent per UNIQUE name)
+#[derive(Deserialize)]
+struct CreateTenantBody { name: String }
+
+async fn tenants_create(state: web::Data<AppState>, body: web::Json<CreateTenantBody>) -> impl Responder {
+    let nm = body.name.trim();
+    if nm.is_empty() {
+        return HttpResponse::BadRequest().body("name must not be empty");
+    }
+    match state.db.query_opt(
+        "INSERT INTO tenants (name) VALUES ($1)
+         ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id, name",
+        &[&nm],
+    ).await {
+        Ok(Some(row)) => {
+            let id: Uuid = row.get(0);
+            let name: String = row.get(1);
+            HttpResponse::Created().json(json!({"id": id, "name": name}))
+        }
+        Ok(None) => HttpResponse::InternalServerError().finish(),
+        Err(e) => {
+            error!(%e, "tenants_create: db error");
+            HttpResponse::InternalServerError().finish()
+        }
     }
 }
 
@@ -517,6 +678,7 @@ async fn start_kafka(
                                         status: "running".into(),
                                         score: None,
                                         result_label: None,
+                                        tenant_name: None,
                                     };
                                     let _ = tx.send(entry);
                                 }
@@ -539,6 +701,7 @@ async fn start_kafka(
                                         status: "completed".into(),
                                         score: data.overall_score.map(|f| f as f64),
                                         result_label: None,
+                                        tenant_name: None,
                                     };
 
                                     let id = insert_result_db(&db, &entry).await;
@@ -577,7 +740,7 @@ async fn main() -> std::io::Result<()> {
     // NoTLS + Auto-Reconnect
     let db = Db::new(settings.database_url.clone()).await;
 
-    // Schema sicherstellen
+    // Schema sicherstellen (nur History-Tabelle – Tenants/Views kommen aus Migrationen)
     ensure_schema_db(&db).await;
 
     let (tx, _) = tokio::sync::broadcast::channel(100);
@@ -601,8 +764,12 @@ async fn main() -> std::io::Result<()> {
             .route("/classifications", web::get().to(classifications))
             .route("/analyses", web::get().to(analyses))
             .route("/results/{id}", web::get().to(result))
+            // WebSocket (Root)
             .route("/", web::get().to(ws_index))
             .route("/health", web::get().to(health))
+            // NEU: Tenants-API
+            .route("/tenants", web::get().to(tenants_list))
+            .route("/tenants", web::post().to(tenants_create))
     })
         .bind(("0.0.0.0", port))?
         .run()

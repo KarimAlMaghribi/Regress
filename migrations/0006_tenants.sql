@@ -1,19 +1,18 @@
 -- migrations/0006_tenants.sql
 SET search_path TO public;
 
--- 1) Basis: Tenants-Tabelle (UUID + Name)
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- A) Tenants-Stammdaten
 CREATE TABLE IF NOT EXISTS tenants (
                                        id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name       TEXT NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
--- 2) uploads um tenant_id erweitern
+-- B) uploads um tenant_id erweitern (bestehende Daten werden gemappt)
 ALTER TABLE uploads ADD COLUMN IF NOT EXISTS tenant_id UUID;
 
--- 2a) Default-Tenant anlegen & bestehende uploads mappen
 DO $$
 DECLARE v_id UUID;
 BEGIN
@@ -27,7 +26,6 @@ SET tenant_id = COALESCE(tenant_id, v_id)
 WHERE tenant_id IS NULL;
 END$$;
 
--- 2b) FK + NOT NULL scharf schalten
 DO $$
 BEGIN
   IF NOT EXISTS (
@@ -42,12 +40,12 @@ END$$;
 
 ALTER TABLE uploads ALTER COLUMN tenant_id SET NOT NULL;
 
--- 3) Indizes
+-- C) Indizes für Joins/Filter
 CREATE INDEX IF NOT EXISTS idx_uploads_tenant       ON uploads(tenant_id, id);
 CREATE INDEX IF NOT EXISTS idx_uploads_pdf_pipe_tnt ON uploads(pdf_id, pipeline_id, tenant_id);
 
--- 4) Views für Abfragen mit Tenant-Name (für /analyses, /history)
---    Zuordnung per "jüngstem" Upload (höchste uploads.id) je (pdf_id, pipeline_id)
+-- D) Views: Tenant zu pipeline_runs / analysis_history projizieren
+--    "Jüngster" Upload pro (pdf_id, pipeline_id)
 CREATE OR REPLACE VIEW v_pipeline_runs_with_tenant AS
 SELECT
     pr.*,

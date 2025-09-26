@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
-use tokio_postgres::Client;
-use uuid::Uuid;
 use serde_json::Value;
-use sqlx::{PgPool};
-use sqlx::types::Json;
+use tokio_postgres::{types::ToSql, Client};
+use uuid::Uuid;
 
 /// Fetch raw PDF bytes from the `merged_pdfs` table.
 ///
@@ -20,83 +18,81 @@ pub async fn fetch_pdf(db: &Client, id: i32) -> Result<Vec<u8>> {
     Ok(row.get(0))
 }
 
-/// Mandant anlegen (idempotent per UNIQUE name).
-pub async fn create_tenant(pool: &PgPool, req: &CreateTenantRequest) -> sqlx::Result<Tenant> {
-    let rec = sqlx::query!(
-        r#"INSERT INTO tenants (name) VALUES ($1)
-           ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
-           RETURNING id, name"#,
-        req.name
+/// Create or upsert a tenant by name and return (id, name).
+pub async fn create_tenant(db: &Client, name: &str) -> Result<(Uuid, String)> {
+    let row = db.query_one(
+        "INSERT INTO tenants (name) VALUES ($1)
+         ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
+         RETURNING id, name",
+        &[&name],
     )
-        .fetch_one(pool)
-        .await?;
-
-    Ok(Tenant { id: rec.id, name: rec.name })
+        .await
+        .context("create_tenant")?;
+    Ok((row.get(0), row.get(1)))
 }
 
-/// Alle Mandanten alphabetisch.
-pub async fn list_tenants(pool: &PgPool) -> sqlx::Result<Vec<Tenant>> {
-    let rows = sqlx::query!(r#"SELECT id, name FROM tenants ORDER BY name ASC"#)
-        .fetch_all(pool)
-        .await?;
-
-    Ok(rows.into_iter().map(|r| Tenant { id: r.id, name: r.name }).collect())
+/// List tenants (id, name), ordered by name.
+pub async fn list_tenants(db: &Client) -> Result<Vec<(Uuid, String)>> {
+    let rows = db
+        .query("SELECT id, name FROM tenants ORDER BY name ASC", &[])
+        .await
+        .context("list_tenants")?;
+    Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
 }
 
-/// Analysen (pipeline_runs) als JSON-Zeilen aus View v_pipeline_runs_with_tenant,
-/// optional gefiltert nach tenant_name (ILIKE).
+async fn query_json_vec(db: &Client, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Value>> {
+    let rows = db.query(sql, params).await.context("db query_json_vec")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for row in rows {
+        let txt: String = row.get(0);
+        let v: Value = serde_json::from_str(&txt).context("parse json from db")?;
+        out.push(v);
+    }
+    Ok(out)
+}
+
+/// Query analyses from v_pipeline_runs_with_tenant with optional filters.
 pub async fn list_analyses_with_tenant_json(
-    pool: &PgPool,
-    tenant_like: Option<String>,
-    status: Option<String>,
+    db: &Client,
+    tenant_like: Option<&str>,
+    status: Option<&str>,
     limit: i64,
     offset: i64,
-) -> sqlx::Result<Vec<Value>> {
-    let rows = sqlx::query_as::<_, (Json<Value>,)>(
+) -> Result<Vec<Value>> {
+    query_json_vec(
+        db,
         r#"
-        SELECT to_jsonb(v.*) AS data
+        SELECT (to_jsonb(v.*))::text AS data
           FROM v_pipeline_runs_with_tenant v
          WHERE ($1::text IS NULL OR v.tenant_name ILIKE '%' || $1 || '%')
            AND ($2::text IS NULL OR v.status = $2)
          ORDER BY v.created_at DESC
          LIMIT $3 OFFSET $4
-        "#
+        "#,
+        &[&tenant_like, &status, &limit, &offset],
     )
-        .bind(tenant_like)
-        .bind(status)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?;
-
-    Ok(rows.into_iter().map(|(Json(v),)| v).collect())
+        .await
 }
 
-/// History (analysis_history) als JSON-Zeilen aus View v_analysis_history_with_tenant,
-/// optional gefiltert nach tenant_name (ILIKE).
+/// Query history from v_analysis_history_with_tenant with optional filters.
 pub async fn list_history_with_tenant_json(
-    pool: &PgPool,
-    tenant_like: Option<String>,
-    status: Option<String>,
+    db: &Client,
+    tenant_like: Option<&str>,
+    status: Option<&str>,
     limit: i64,
     offset: i64,
-) -> sqlx::Result<Vec<Value>> {
-    let rows = sqlx::query_as::<_, (Json<Value>,)>(
+) -> Result<Vec<Value>> {
+    query_json_vec(
+        db,
         r#"
-        SELECT to_jsonb(v.*) AS data
+        SELECT (to_jsonb(v.*))::text AS data
           FROM v_analysis_history_with_tenant v
          WHERE ($1::text IS NULL OR v.tenant_name ILIKE '%' || $1 || '%')
            AND ($2::text IS NULL OR v.status = $2)
-         ORDER BY "timestamp" DESC NULLS LAST
+         ORDER BY v."timestamp" DESC NULLS LAST
          LIMIT $3 OFFSET $4
-        "#
+        "#,
+        &[&tenant_like, &status, &limit, &offset],
     )
-        .bind(tenant_like)
-        .bind(status)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(pool)
-        .await?;
-
-    Ok(rows.into_iter().map(|(Json(v),)| v).collect())
+        .await
 }

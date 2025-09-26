@@ -1,30 +1,56 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Box, Paper, Stack, TextField, Button, Typography, List, ListItem, ListItemText } from "@mui/material";
-import { useTenants } from "../hooks/useTenants";
+
+type Tenant = { id: string; name: string };
+
+function getHistoryBase(): string {
+  const w = (window as any);
+  return w?.__ENV__?.HISTORY_URL || import.meta.env.VITE_HISTORY_URL || "/hist";
+}
 
 export default function TenantsPage() {
-  const { items, loading, error, reload } = useTenants();
+  const [items, setItems] = useState<Tenant[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState("");
+
+  const base = getHistoryBase();
+
+  const load = async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${base}/tenants`);
+      if (!res.ok) throw new Error(await res.text());
+      setItems(await res.json());
+    } catch (e: any) {
+      setError(e.message || "Fehler beim Laden der Mandanten");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { load(); }, [base]);
 
   const create = async () => {
     if (!name.trim()) return;
-    const res = await fetch("/tenants", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
-    if (res.ok) {
+    try {
+      const res = await fetch(`${base}/tenants`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) throw new Error(await res.text());
       setName("");
-      reload();
-    } else {
-      alert(await res.text());
+      await load();
+    } catch (e: any) {
+      alert(e.message || "Fehler beim Anlegen des Mandanten");
     }
   };
 
   return (
       <Box p={2}>
         <Typography variant="h5" gutterBottom>Mandanten</Typography>
-
         <Paper sx={{ p: 2, mb: 2 }}>
           <Stack direction="row" spacing={2}>
             <TextField
@@ -38,7 +64,6 @@ export default function TenantsPage() {
             </Button>
           </Stack>
         </Paper>
-
         <Paper sx={{ p: 2 }}>
           <Typography variant="subtitle1" gutterBottom>Vorhandene Mandanten</Typography>
           {loading && <Typography>Lade …</Typography>}
