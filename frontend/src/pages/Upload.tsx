@@ -64,26 +64,35 @@ export default function Upload() {
   });
 
   const ingest = useMemo(() => {
+    // In der Praxis wird VITE_INGEST_URL auf "/ingest" oder "http://host:8081" gesetzt
     return (import.meta.env.VITE_INGEST_URL || 'http://localhost:8081') as string;
   }, []);
 
   const upload = () => {
     if (!files.length || !tenantId) return;
+
     const form = new FormData();
     files.forEach(f => form.append('file', f));
     if (pipelineId) form.append('pipeline_id', pipelineId);
-    form.append('tenant_id', tenantId); // <<< WICHTIG: Tenant an den Server übergeben
+    form.append('tenant_id', tenantId); // im Body
 
-    fetch(`${ingest}/upload`, { method: 'POST', body: form })
+    // Zusätzlich: Header + Query-Param -> Backend kann tenant_id sofort verwenden
+    const url = `${ingest.replace(/\/$/, '')}/upload?tenant_id=${encodeURIComponent(tenantId)}`;
+
+    fetch(url, {
+      method: 'POST',
+      headers: { 'X-Tenant-ID': tenantId },
+      body: form,
+    })
     .then(async r => {
       if (!r.ok) {
-        const text = await r.text();
+        const text = await r.text().catch(() => '');
         throw new Error(text || `HTTP ${r.status}`);
       }
       return r.json();
     })
     .then(d => {
-      setMessage(`Upload erfolgreich. ID: ${d.id}`);
+      setMessage(`Upload erfolgreich. ID: ${d.id ?? ''}`.trim());
       setFiles([]);
       load();
     })
@@ -93,7 +102,7 @@ export default function Upload() {
   };
 
   const deletePdf = (id: number) => {
-    fetch(`${ingest}/pdf/${id}`, { method: 'DELETE' })
+    fetch(`${ingest.replace(/\/$/, '')}/pdf/${id}`, { method: 'DELETE' })
     .then(() => load().catch(()=>{}))
     .catch(e => console.error('delete pdf', e));
   };
