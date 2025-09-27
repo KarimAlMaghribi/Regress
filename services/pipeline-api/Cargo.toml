@@ -10,7 +10,7 @@ serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "macros", "uuid"] }
+sqlx = { version = "0.7.4", features = ["runtime-tokio-rustls", "postgres", "macros", "uuid"] }
 shared = { path = "../../shared" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid = { version = "1", features = ["serde", "v4"] }

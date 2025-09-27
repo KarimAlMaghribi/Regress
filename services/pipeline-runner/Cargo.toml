@@ -12,7 +12,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 rdkafka = { version = "0.36", features = ["tokio"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "uuid"] }
+sqlx = { version = "0.7.4", features = ["runtime-tokio-rustls", "postgres", "uuid"] }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 rhai = { workspace = true }
 anyhow = "1"
