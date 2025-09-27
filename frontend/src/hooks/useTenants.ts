@@ -1,6 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState } from "react";
 
 export type Tenant = { id: string; name: string };
+
+function getHistoryBase(): string {
+  const w = (window as any);
+  return w?.__ENV__?.HISTORY_URL || import.meta.env.VITE_HISTORY_URL || "/hist";
+}
 
 export function useTenants() {
   const [items, setItems] = useState<Tenant[]>([]);
@@ -11,11 +16,11 @@ export function useTenants() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/tenants');
+      const res = await fetch(`${getHistoryBase()}/tenants`);
       if (!res.ok) throw new Error(await res.text());
       setItems(await res.json());
     } catch (e: any) {
-      setError(e.message || 'Fehler beim Laden der Mandanten');
+      setError(e.message || "Fehler beim Laden der Mandanten");
     } finally {
       setLoading(false);
     }
