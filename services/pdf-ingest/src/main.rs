@@ -2,7 +2,7 @@ use actix_cors::Cors;
 use actix_multipart::Multipart;
 use actix_web::http::header;
 use actix_web::web::Bytes;
-use actix_web::{web, App, Error, HttpResponse, HttpServer, Responder};
+use actix_web::{web, App, Error, HttpRequest, HttpResponse, HttpServer, Responder};
 use futures_util::StreamExt as _;
 use rdkafka::producer::{FutureProducer, FutureRecord};
 use rdkafka::ClientConfig;
@@ -19,7 +19,7 @@ use std::str::FromStr;
 use tokio_postgres::NoTls;
 
 use lopdf::{Bookmark, Document, Object, ObjectId};
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use zip::ZipArchive;
 
 async fn health() -> impl Responder {
@@ -31,6 +31,12 @@ struct UploadEntry {
     id: i32,
     pdf_id: Option<i32>,
     status: String,
+}
+
+#[derive(Deserialize)]
+struct UploadQuery {
+    tenant_id: Option<Uuid>,
+    pipeline_id: Option<Uuid>,
 }
 
 fn ensure_sslmode_disable(url: &str) -> String {
@@ -174,6 +180,8 @@ fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
 }
 
 async fn upload(
+    req: HttpRequest,
+    q: web::Query<UploadQuery>,
     mut payload: Multipart,
     db: web::Data<Pool>,
     producer: web::Data<FutureProducer>,
@@ -184,19 +192,47 @@ async fn upload(
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
 
-    // Upload-Row anlegen
+    // --- Tenant ermitteln ---
+    // 1) aus Query ?tenant_id=...  2) aus Header X-Tenant-ID  3) Fallback: tenants.name='Default'
+    let tenant_id = if let Some(t) = q.tenant_id {
+        t
+    } else if let Some(h) = req.headers().get("X-Tenant-ID") {
+        let s = h
+            .to_str()
+            .map_err(|_| actix_web::error::ErrorBadRequest("invalid X-Tenant-ID header"))?;
+        Uuid::parse_str(s)
+            .map_err(|_| actix_web::error::ErrorBadRequest("invalid X-Tenant-ID value"))?
+    } else {
+        // Fallback auf 'Default' (nur wenn vorhanden)
+        match client
+            .query_opt("SELECT id FROM tenants WHERE name='Default' LIMIT 1", &[])
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?
+        {
+            Some(row) => row.get::<_, Uuid>(0),
+            None => {
+                return Err(actix_web::error::ErrorBadRequest(
+                    "tenant_id missing and no 'Default' tenant found",
+                ))
+            }
+        }
+    };
+
+    // optional: pipeline_id aus Query, falls nicht im Body übergeben wird
+    let mut files: Vec<(Vec<u8>, String)> = Vec::new();
+    let mut pipeline_id: Option<String> = q.pipeline_id.map(|u| u.to_string());
+
+    // Upload-Row mit tenant_id anlegen (status=merging)
     let upload_id: i32 = client
         .query_one(
-            "INSERT INTO uploads (status) VALUES ('merging') RETURNING id",
-            &[],
+            "INSERT INTO uploads (tenant_id, status) VALUES ($1, 'merging') RETURNING id",
+            &[&tenant_id],
         )
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?
         .get(0);
 
-    let mut files: Vec<(Vec<u8>, String)> = Vec::new();
-    let mut pipeline_id: Option<String> = None;
-
+    // Multipart parsen (Dateien + evtl. pipeline_id Feld)
     while let Some(item) = payload.next().await {
         let mut field = item?;
         match field.name() {
@@ -321,7 +357,7 @@ async fn upload(
         pdf_id: id,
         pipeline_id: pid,
     })
-    .unwrap();
+        .unwrap();
 
     let _ = producer
         .send(
@@ -502,6 +538,10 @@ async fn main() -> std::io::Result<()> {
                 &[],
             )
             .await;
+        // NEU: tenant_id-Spalte sicherstellen (falls Migration in frischer DB noch nicht lief)
+        let _ = client
+            .execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS tenant_id UUID", &[])
+            .await;
     }
 
     // Kafka Producer
@@ -532,9 +572,9 @@ async fn main() -> std::io::Result<()> {
             .route("/pdf/{id}", web::delete().to(delete_pdf))
             .route("/health", web::get().to(health))
     })
-    .bind(("0.0.0.0", 8081))?
-    .run()
-    .await
+        .bind(("0.0.0.0", 8081))?
+        .run()
+        .await
 }
 
 #[cfg(test)]
@@ -602,7 +642,7 @@ mod tests {
                             .route("/pdf/{id}", web::get().to(super::get_pdf))
                             .route("/pdf/{id}", web::delete().to(super::delete_pdf)),
                     )
-                    .await;
+                        .await;
 
                     let req = test::TestRequest::get().uri("/pdf/1").to_request();
                     let resp = test::call_and_read_body(&app, req).await;
@@ -657,9 +697,9 @@ mod tests {
                     let app = test::init_service(
                         App::new()
                             .app_data(web::Data::new(pool.clone()))
-                            .route("/uploads/{id}/extract", web::get().to(super::get_extract)),
+                            .route("/uploads/1/extract", web::get().to(super::get_extract)),
                     )
-                    .await;
+                        .await;
 
                     let req = test::TestRequest::get()
                         .uri("/uploads/1/extract")
