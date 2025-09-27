@@ -40,7 +40,8 @@ interface HistoryEntry {
   status?: string;
   pipelineId?: string;
   pipelineName?: string;
-  tenantName?: string; // << NEU
+  tenantName?: string;
+  pdfNames?: string[]; // NEU
 }
 
 /** snake/camel normalisieren (nur was wir brauchen) */
@@ -77,6 +78,18 @@ function extractPipelineFromAny(e: any): { id?: string; name?: string } {
 function normalizeEntry(e: any): HistoryEntry {
   const run = normalizeRun(e.result ?? e.run ?? undefined);
   const { id: pipelineId, name: pipelineName } = extractPipelineFromAny({ ...e, result: run });
+
+  // NEU: pdf_names verarbeiten (Array oder JSON-String)
+  let pdfNames: string[] = [];
+  const rawNames = e.pdf_names ?? e.pdfNames;
+  try {
+    if (Array.isArray(rawNames)) pdfNames = rawNames as string[];
+    else if (typeof rawNames === 'string' && rawNames.trim().length) {
+      const parsed = JSON.parse(rawNames);
+      if (Array.isArray(parsed)) pdfNames = parsed;
+    }
+  } catch { /* ignore parse errors */ }
+
   return {
     id: e.id ?? Date.now() + Math.random(),
     pdfId: e.pdf_id ?? e.pdfId ?? e.file_id ?? 0,
@@ -87,7 +100,8 @@ function normalizeEntry(e: any): HistoryEntry {
     status: e.status,
     pipelineId,
     pipelineName,
-    tenantName: e.tenant_name ?? e.tenantName, // << NEU
+    tenantName: e.tenant_name ?? e.tenantName,
+    pdfNames,
   };
 }
 
@@ -139,7 +153,6 @@ async function openRunDetailsPageInNewTab(entry: HistoryEntry) {
       toNum((entry as any)?.result?.pdf_id) ??
       undefined;
 
-  // Payload für Sofort-Render
   const payload: any = { run, pdfUrl: entry.pdfUrl };
   if (pdfId != null) payload.pdfId = pdfId;
   try {
@@ -148,7 +161,7 @@ async function openRunDetailsPageInNewTab(entry: HistoryEntry) {
     console.warn('localStorage write failed', e);
   }
 
-  // Optional: run_id bestimmen (falls vorhanden oder ableitbar)
+  // Optional: run_id bestimmen
   let runId: string | undefined = run?.run_id ?? run?.id;
   if (!runId && pdfId && entry.pipelineId) {
     const api = getPipelineApiBase();
@@ -164,7 +177,6 @@ async function openRunDetailsPageInNewTab(entry: HistoryEntry) {
     } catch { /* ignore */ }
   }
 
-  // URL bauen
   const qp = new URLSearchParams();
   if (pdfId != null) qp.set('pdf_id', String(pdfId));
   if (entry.pdfUrl) qp.set('pdf_url', entry.pdfUrl);
@@ -209,7 +221,6 @@ export default function History() {
         initial.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
         setEntries(initial);
 
-        // pdfId aus Query übernehmen und Drawer öffnen
         const pdfIdParam = new URLSearchParams(location.search).get('pdfId');
         if (pdfIdParam) {
           const wanted = initial.find(e => String(e.pdfId) === pdfIdParam);
@@ -303,6 +314,7 @@ export default function History() {
           String(e.pdfId),
           e.pipelineName?.toLowerCase() ?? '',
           e.tenantName?.toLowerCase() ?? '',
+          (e.pdfNames ?? []).join(' ').toLowerCase(), // NEU: Dateinamen einbeziehen
         ].join(' ');
         if (!hay.includes(s)) return false;
       }
@@ -331,12 +343,18 @@ export default function History() {
       flex: 0.6,
       valueGetter: p => dayjs(p.row.timestamp).format('HH:mm:ss'),
     },
-    // PDF-ID Spalte
     {
       field: 'pdfId',
       headerName: 'PDF-ID',
       width: 120,
       valueGetter: p => String(p.row.pdfId ?? ''),
+    },
+    // NEU: erste Datei anzeigen
+    {
+      field: 'datei',
+      headerName: 'Datei',
+      flex: 1.0,
+      valueGetter: p => p.row.pdfNames?.[0] ?? '—',
     },
     {
       field: 'pipeline',
@@ -399,7 +417,7 @@ export default function History() {
         <PageHeader title="History" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'History' }]} />
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2 }}>
-          <TextField label="Suche" size="small" value={search} onChange={e => setSearch(e.target.value)} />
+          <TextField label="Suche (inkl. PDF-Name)" size="small" value={search} onChange={e => setSearch(e.target.value)} />
           <DatePicker label="Start" value={start} onChange={d => setStart(d)} slotProps={{ textField: { size: 'small' } }} />
           <DatePicker label="Ende" value={end} onChange={d => setEnd(d)} slotProps={{ textField: { size: 'small' } }} />
           <TenantFilter value={tenant} onChange={setTenant} />

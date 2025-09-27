@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Tabs, Tab, Paper, Button, Typography,
   Table, TableHead, TableRow, TableCell, TableBody,
-  Stack, FormControlLabel, Checkbox, Tooltip
+  Stack, FormControlLabel, Checkbox, Tooltip, TextField
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
@@ -26,7 +26,8 @@ interface Entry {
   result?: PipelineRunResult | any;
   pipelineId?: string;
   pipelineName?: string;
-  tenantName?: string;  // << NEU: vom Backend-View geliefert
+  tenantName?: string;  // vom Backend-View geliefert
+  pdfNames?: string[];  // NEU: Dateinamen (aus View)
 }
 
 const PREFERRED_KEYS = ['sender', 'iban', 'bic', 'totalAmount', 'amount', 'customerNumber', 'contract_valid'];
@@ -84,7 +85,6 @@ function translateKeyHeader(key: string): string {
 
 /* -------- Backend-Auflösung (run_id & Konsolidat) -------- */
 
-/** Versucht eine run_id über mehrere Endpunkte zu ermitteln */
 async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<string | undefined> {
   const direct = normalized?.run_id ?? normalized?.id ?? normalized?.runId;
   if (typeof direct === 'string') return direct;
@@ -119,7 +119,6 @@ async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<str
   return undefined;
 }
 
-/** Holt direkt ein konsolidiertes DTO über pdf_id + pipeline_id */
 async function fetchConsolidatedRun(normalized: any, entry: Entry): Promise<any | undefined> {
   const api = getPipelineApiBase();
   const pdfId = normalized?.pdf_id ?? entry.pdfId;
@@ -306,6 +305,9 @@ export default function Analyses() {
     setParams(p, { replace: true });
   };
 
+  // NEU: PDF-Name Filter (clientseitig)
+  const [pdfName, setPdfName] = useState<string>('');
+
   const load = () => {
     const base =
         (window as any).__ENV__?.HISTORY_URL ||
@@ -350,6 +352,17 @@ export default function Analyses() {
             withRunId?.pipeline_name ?? withRunId?.pipelineName ??
             d.pipeline_name ?? d.pipelineName ?? d?.pipeline?.name;
 
+        // NEU: pdf_names vom Backend (kann JSON-String oder Array sein)
+        let pdfNames: string[] = [];
+        const rawNames = d.pdf_names ?? d.pdfNames;
+        try {
+          if (Array.isArray(rawNames)) pdfNames = rawNames as string[];
+          else if (typeof rawNames === 'string' && rawNames.trim().length) {
+            const parsed = JSON.parse(rawNames);
+            if (Array.isArray(parsed)) pdfNames = parsed;
+          }
+        } catch { /* ignore parse errors */ }
+
         return {
           id: d.id,
           pdfId: d.pdf_id ?? d.pdfId ?? d.file_id ?? 0,
@@ -360,7 +373,8 @@ export default function Analyses() {
           result: withRunId,
           pipelineId,
           pipelineName,
-          tenantName: d.tenant_name ?? d.tenantName, // << NEU
+          tenantName: d.tenant_name ?? d.tenantName,
+          pdfNames,
         };
       };
 
@@ -400,22 +414,34 @@ export default function Analyses() {
   useEffect(load, [tenant]);
 
   const filteredRunning = useMemo(() => {
-    if (!tenant) return running;
-    const s = tenant.toLowerCase();
-    return running.filter(e => (e.tenantName ?? '').toLowerCase().includes(s));
-  }, [running, tenant]);
+    let base = running;
+    if (tenant) {
+      const s = tenant.toLowerCase();
+      base = base.filter(e => (e.tenantName ?? '').toLowerCase().includes(s));
+    }
+    if (pdfName.trim()) {
+      const s = pdfName.toLowerCase();
+      base = base.filter(e => (e.pdfNames ?? []).some(n => n.toLowerCase().includes(s)));
+    }
+    return base;
+  }, [running, tenant, pdfName]);
 
   const filteredDoneByDate = useMemo(() => {
-    const base = (!tenant)
+    let base = (!tenant)
         ? done
         : done.filter(e => (e.tenantName ?? '').toLowerCase().includes(tenant.toLowerCase()));
-    return base.filter(e => {
+    base = base.filter(e => {
       const ts = dayjs(e.timestamp);
       if (start && ts.isBefore(start, 'day')) return false;
       if (end && ts.isAfter(end, 'day')) return false;
       return true;
     });
-  }, [done, start, end, tenant]);
+    if (pdfName.trim()) {
+      const s = pdfName.toLowerCase();
+      base = base.filter(e => (e.pdfNames ?? []).some(n => n.toLowerCase().includes(s)));
+    }
+    return base;
+  }, [done, start, end, tenant, pdfName]);
 
   const filteredDone = useMemo(() => {
     if (!onlyLowConf) return filteredDoneByDate;
@@ -436,6 +462,7 @@ export default function Analyses() {
       );
       return {
         pdf: `PDF ${e.pdfId}`,
+        dateiname: e.pdfNames?.[0] ?? '',
         pipeline: getPipelineLabel(e, pipelineNames),
         gesamtscore: run?.overall_score ?? '',
         tenant: e.tenantName ?? '',
@@ -450,14 +477,15 @@ export default function Analyses() {
 
   const renderList = (items: Entry[], finished: boolean) => {
     const emptyColSpan = finished
-        ? (1 /* PDF */ + 1 /* Pipeline */ + 1 /* Score */ + finalCols.length + 1 /* Details */)
-        : (1 /* PDF */ + 1 /* Pipeline */);
+        ? (1 /* PDF */ + 1 /* Datei */ + 1 /* Pipeline */ + 1 /* Score */ + finalCols.length + 1 /* Details */)
+        : (1 /* PDF */ + 1 /* Datei */ + 1 /* Pipeline */);
     return (
         <Paper sx={{ p: 2 }}>
           <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>PDF</TableCell>
+                <TableCell>Datei</TableCell>
                 <TableCell>Pipeline</TableCell>
                 {finished && <TableCell>Gesamtscore</TableCell>}
                 {finished && finalCols.map(col => (
@@ -478,6 +506,7 @@ export default function Analyses() {
                         sx={{ cursor: finished ? 'pointer' : 'default' }}
                     >
                       <TableCell>{`PDF ${e.pdfId}`}</TableCell>
+                      <TableCell>{e.pdfNames?.[0] ?? '—'}</TableCell>
                       <TableCell>{getPipelineLabel(e, pipelineNames)}</TableCell>
 
                       {finished && (
@@ -511,8 +540,7 @@ export default function Analyses() {
                                 size="small"
                                 onClick={(ev) => { ev.stopPropagation(); void openDetailsInNewTab(e); }}
                                 title="Details anzeigen"
-                                startIcon={<VisibilityIcon fontSize="small" />}
-                            >
+                                startIcon={<VisibilityIcon fontSize="small" />}>
                               Details
                             </Button>
                           </TableCell>
@@ -541,9 +569,16 @@ export default function Analyses() {
             actions={<Button variant="contained" onClick={load}>Neu laden</Button>}
         />
 
-        {/* Tenant-Filter */}
+        {/* Filterzeile */}
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2, alignItems: 'center' }}>
           <TenantFilter value={tenant} onChange={setTenant} />
+          <TextField
+              label="PDF-Name"
+              size="small"
+              value={pdfName}
+              onChange={(e) => setPdfName(e.target.value)}
+              placeholder="z. B. rechnung_123.pdf"
+          />
         </Stack>
 
         <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2 }}>
