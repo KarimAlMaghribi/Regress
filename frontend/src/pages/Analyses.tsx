@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Tabs, Tab, Paper, Button, Typography,
   Table, TableHead, TableRow, TableCell, TableBody,
-  Stack, FormControlLabel, Checkbox, Tooltip, TextField
+  Stack, FormControlLabel, Checkbox, Tooltip, TextField, LinearProgress
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
@@ -109,7 +109,7 @@ async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<str
         if (typeof json.run_id === 'string') return json.run_id;
         if (typeof json.id === 'string') return json.id;
         if (Array.isArray(json) && json[0]) {
-          const first = json[0];
+          const first = json[0] as any;
           if (typeof first?.run_id === 'string') return first.run_id;
           if (typeof first?.id === 'string') return first.id;
         }
@@ -284,6 +284,30 @@ function getPipelineLabel(entry: Entry, nameMap?: Record<string, string>): strin
   if (id && nameMap && nameMap[id]) return nameMap[id];
   // KEIN Fallback auf ID
   return '—';
+}
+
+/* -------- Score-Zelle (hervorgehoben) -------- */
+
+function ScoreCell({ score }: { score?: number }) {
+  if (typeof score !== 'number') return <>—</>;
+  const pct = Math.max(0, Math.min(1, score)) * 100;
+  return (
+      <Box sx={{ minWidth: 140 }}>
+        <Typography variant="body2" sx={{ fontWeight: 800, mb: 0.5 }}>
+          {score.toFixed(3)}
+        </Typography>
+        <LinearProgress
+            variant="determinate"
+            value={pct}
+            sx={{
+              height: 8,
+              borderRadius: 6,
+              '& .MuiLinearProgress-bar': { borderRadius: 6 },
+            }}
+        />
+        <Typography variant="caption" sx={{ opacity: 0.7 }}>{pct.toFixed(0)}%</Typography>
+      </Box>
+  );
 }
 
 /* -------- Seitenkomponente -------- */
@@ -510,7 +534,9 @@ export default function Analyses() {
                       <TableCell>{getPipelineLabel(e, pipelineNames)}</TableCell>
 
                       {finished && (
-                          <TableCell>{typeof run?.overall_score === 'number' ? run.overall_score.toFixed(2) : ''}</TableCell>
+                          <TableCell>
+                            <ScoreCell score={typeof run?.overall_score === 'number' ? run.overall_score : undefined} />
+                          </TableCell>
                       )}
 
                       {finished && finalCols.map(col => {
