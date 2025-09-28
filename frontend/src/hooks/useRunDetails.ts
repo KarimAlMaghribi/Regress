@@ -1,4 +1,3 @@
-// src/hooks/useRunDetails.ts
 import * as React from "react";
 
 /* ============================== Types ============================== */
@@ -404,6 +403,16 @@ function toRunDetail(payload: any): RunDetail {
     final_scores: payload?.final_scores ?? payload?.run?.final_scores ?? {},
   };
 
+  // Boolean -> number Normalisierung für final_scores (falls Backend bools liefert)
+  if (runCore.final_scores) {
+    for (const k of Object.keys(runCore.final_scores)) {
+      const v = (runCore.final_scores as any)[k];
+      if (typeof v === "boolean") {
+        (runCore.final_scores as any)[k] = v ? 1 : 0;
+      }
+    }
+  }
+
   const steps: RunStep[] = [];
   const logArr: any[] = Array.isArray(payload?.log) ? payload.log : [];
   let orderCounter = 0;
@@ -467,7 +476,8 @@ function toRunDetail(payload: any): RunDetail {
               winnerNorm != null && !isJunkValue(val, keySlug) && norm(String(val)) === winnerNorm;
         });
 
-        runCore.final_extraction![keySlug] = final_value;
+        // <-- WICHTIG: finale Extraktion inkl. confidence speichern
+        runCore.final_extraction![keySlug] = { value: final_value, confidence: final_confidence };
 
         orderCounter++;
         steps.push({
@@ -514,8 +524,7 @@ function toRunDetail(payload: any): RunDetail {
           return typeof v === "boolean";
         });
 
-        let t = 0,
-            f = 0;
+        let t = 0, f = 0;
         attempts.forEach((a) => {
           const v =
               typeof a.candidate_value === "object"
@@ -537,7 +546,8 @@ function toRunDetail(payload: any): RunDetail {
           a.is_final = v === consolidated;
         });
 
-        runCore.final_decisions![keySlug] = consolidated;
+        // <-- WICHTIG: Score in final_scores (1/0), NICHT als Decision
+        runCore.final_scores![keySlug] = consolidated ? 1 : 0;
 
         orderCounter++;
         steps.push({
@@ -598,8 +608,7 @@ function toRunDetail(payload: any): RunDetail {
           return typeof v === "boolean";
         });
 
-        let t = 0,
-            f = 0;
+        let t = 0, f = 0;
         attempts.forEach((a) => {
           const v =
               typeof a.candidate_value === "object"
@@ -648,7 +657,9 @@ function toRunDetail(payload: any): RunDetail {
     for (const [keySlug, items] of groupsByKey) {
       orderCounter++;
       const { final_value, final_confidence, attempts } = consolidateExtractionGroup(items, keySlug);
-      runCore.final_extraction![keySlug] = final_value;
+
+      // <-- Finale Extraktion inkl. confidence
+      runCore.final_extraction![keySlug] = { value: final_value, confidence: final_confidence };
 
       steps.push({
         id: hashId(keySlug, orderCounter),
@@ -709,8 +720,7 @@ function toRunDetail(payload: any): RunDetail {
       }));
       const attempts = attemptsRaw.filter((a) => typeof a.candidate_value === "boolean");
 
-      let t = 0,
-          f = 0;
+      let t = 0, f = 0;
       attempts.forEach((a) => (a.candidate_value ? t++ : f++));
       const total = t + f;
       const consolidated =
@@ -718,7 +728,8 @@ function toRunDetail(payload: any): RunDetail {
       const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
       attempts.forEach((a) => (a.is_final = a.candidate_value === consolidated));
 
-      runCore.final_decisions![keySlug] = consolidated;
+      // <-- WICHTIG: Score in final_scores (1/0), NICHT als Decision
+      runCore.final_scores![keySlug] = consolidated ? 1 : 0;
 
       orderCounter++;
       steps.push({
@@ -806,9 +817,7 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
 
 function consolidateDecisionGroup(items: any[], keySlug: string) {
   const attemptsRaw: Attempt[] = [];
-  let t = 0,
-      f = 0,
-      idx = 0;
+  let t = 0, f = 0, idx = 0;
 
   for (const r of items) {
     idx++;

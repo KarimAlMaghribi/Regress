@@ -194,6 +194,29 @@ async fn ensure_schema_db(db: &Db) {
         &[],
     ).await;
 
+    // NEU: Start/Ende-Spalten hinzufügen
+    let _ = db.execute(
+        "ALTER TABLE analysis_history \
+         ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
+        &[],
+    ).await;
+    let _ = db.execute(
+        "ALTER TABLE analysis_history \
+         ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
+        &[],
+    ).await;
+
+    // Backfill: started_at := timestamp; finished_at := timestamp wenn completed
+    let _ = db.execute(
+        "UPDATE analysis_history SET started_at = COALESCE(started_at, timestamp)",
+        &[],
+    ).await;
+    let _ = db.execute(
+        "UPDATE analysis_history \
+         SET finished_at = CASE WHEN status='completed' THEN COALESCE(finished_at, timestamp) ELSE finished_at END",
+        &[],
+    ).await;
+
     info!("database schema ensured");
 }
 
@@ -396,8 +419,9 @@ async fn mark_pending_db(
     timestamp: DateTime<Utc>,
 ) -> i32 {
     match db.query_opt(
-        "INSERT INTO analysis_history (pdf_id, pipeline_id, pdf_url, timestamp, status) \
-         VALUES ($1,$2,$3,$4,'running') RETURNING id",
+        // started_at direkt auf timestamp setzen
+        "INSERT INTO analysis_history (pdf_id, pipeline_id, pdf_url, timestamp, status, started_at) \
+         VALUES ($1,$2,$3,$4,'running',$4) RETURNING id",
         &[&pdf_id, &pipeline_id, &pdf_url, &timestamp],
     ).await {
         Ok(Some(row)) => row.get(0),
@@ -421,8 +445,9 @@ async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
         Ok(Some(row)) => {
             let id: i32 = row.get(0);
             if let Err(e) = db.execute(
+                // finished_at beim Abschluss setzen
                 "UPDATE analysis_history \
-                 SET state=$2, pdf_url=$3, timestamp=$4, status='completed', score=$5, label=$6 \
+                 SET state=$2, pdf_url=$3, timestamp=$4, status='completed', score=$5, label=$6, finished_at=$4 \
                  WHERE id=$1",
                 &[
                     &id,
@@ -439,9 +464,10 @@ async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
         }
         Ok(None) => {
             match db.query_opt(
+                // Fallback: direkt completed eintragen – Start/Ende = timestamp
                 "INSERT INTO analysis_history \
-                 (pdf_id, pipeline_id, state, pdf_url, timestamp, status, score, label) \
-                 VALUES ($1,$2,$3,$4,$5,'completed',$6,$7) RETURNING id",
+                 (pdf_id, pipeline_id, state, pdf_url, timestamp, status, score, label, started_at, finished_at) \
+                 VALUES ($1,$2,$3,$4,$5,'completed',$6,$7,$5,$5) RETURNING id",
                 &[
                     &entry.pdf_id,
                     &entry.pipeline_id,
@@ -487,9 +513,25 @@ async fn analyses(
     state: web::Data<AppState>,
     query: web::Query<HashMap<String, String>>,
 ) -> impl Responder {
+    // NEU: run_id-Suche (liefert Liste mit max. 1 Eintrag, kompatibel zum Frontend)
+    if let Some(rid) = query.get("run_id") {
+        match state.db.query_opt(
+            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
+             FROM analysis_history WHERE state->>'run_id' = $1 ORDER BY timestamp DESC LIMIT 1",
+            &[rid],
+        ).await {
+            Ok(Some(row)) => return HttpResponse::Ok().json(vec![row_to_entry(row)]),
+            Ok(None) => return HttpResponse::Ok().json(Vec::<HistoryEntry>::new()),
+            Err(e) => {
+                error!(%e, "analyses(run_id): db error");
+                return HttpResponse::InternalServerError().finish();
+            }
+        }
+    }
+
     let status = query.get("status").cloned();
     let tenant_like = query.get("tenant").cloned();
-    // Neu: immer die View-basierten Ergebnisse liefern (inkl. optionalem Tenant-Filter)
+    // View-basierte Ergebnisse (inkl. optionalem Tenant-Filter)
     let items = latest_by_status_with_tenant_db(&state.db, status, tenant_like).await;
     HttpResponse::Ok().json(items)
 }
@@ -497,13 +539,37 @@ async fn analyses(
 async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Responder {
     let pdf_id = path.into_inner();
     match state.db.query_opt(
-        "SELECT state FROM analysis_history \
+        // Meta-Felder mit selektieren
+        "SELECT state, started_at, finished_at, status, pipeline_id, pdf_id \
+         FROM analysis_history \
          WHERE pdf_id=$1 AND status='completed' \
          ORDER BY timestamp DESC LIMIT 1",
         &[&pdf_id],
     ).await {
         Ok(Some(r)) => {
-            let value: serde_json::Value = r.get(0);
+            let mut value: serde_json::Value = r.get(0);
+            let started_at: Option<DateTime<Utc>> = r.get(1);
+            let finished_at: Option<DateTime<Utc>> = r.get(2);
+            let status: String = r.get(3);
+            let pipeline_id: Uuid = r.get(4);
+            let pdf_id_val: i32 = r.get(5);
+
+            // sicherstellen, dass wir ein Object haben
+            if !value.is_object() {
+                value = json!({ "payload": value });
+            }
+            if let Some(map) = value.as_object_mut() {
+                if let Some(dt) = started_at {
+                    map.insert("started_at".into(), serde_json::to_value(dt).unwrap_or_default());
+                }
+                if let Some(dt) = finished_at {
+                    map.insert("finished_at".into(), serde_json::to_value(dt).unwrap_or_default());
+                }
+                map.insert("status".into(), serde_json::Value::String(status));
+                map.insert("pipeline_id".into(), serde_json::Value::String(pipeline_id.to_string()));
+                map.insert("pdf_id".into(), serde_json::Value::from(pdf_id_val));
+            }
+
             HttpResponse::Ok().json(value)
         }
         Ok(None) => HttpResponse::NotFound().finish(),
@@ -740,7 +806,7 @@ async fn main() -> std::io::Result<()> {
     // NoTLS + Auto-Reconnect
     let db = Db::new(settings.database_url.clone()).await;
 
-    // Schema sicherstellen (nur History-Tabelle – Tenants/Views kommen aus Migrationen)
+    // Schema sicherstellen (inkl. started_at/finished_at Backfill)
     ensure_schema_db(&db).await;
 
     let (tx, _) = tokio::sync::broadcast::channel(100);
