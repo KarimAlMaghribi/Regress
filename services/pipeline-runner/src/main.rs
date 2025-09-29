@@ -4,7 +4,9 @@ use rdkafka::{
     ClientConfig, Message,
 };
 use serde_json::{json, Value};
-use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TextPosition};
+use shared::dto::{
+    PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TextPosition, TernaryLabel,
+};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -209,7 +211,7 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
-                // Für den Runner weiterhin deserialisieren – aber mit Clone, damit wir unten noch im JSON lesen können
+                // Runner-konforme Deserialisierung (Clone, damit wir unten noch im JSON lesen können)
                 let cfg: PipelineConfig =
                     match serde_json::from_value::<PipelineConfig>(config_json.clone()) {
                         Ok(c) => c,
@@ -219,7 +221,7 @@ async fn app_main() -> anyhow::Result<()> {
                         }
                     };
 
-                // Pro-Scoring-Step Konfiguration aus dem JSON ziehen (promptId/prompt_id)
+                // Per-Scoring-Step Konfiguration (promptId → config)
                 let mut scoring_cfg: HashMap<i32, Value> = HashMap::new();
                 if let Some(steps) = config_json.get("steps").and_then(|v| v.as_array()) {
                     for s in steps {
@@ -315,6 +317,10 @@ async fn app_main() -> anyhow::Result<()> {
                         let mut final_extraction_map = serde_json::Map::new();
                         let mut final_scores_map     = serde_json::Map::new();
                         let mut final_decisions_map  = serde_json::Map::new();
+
+                        // Zusätzlich: typisierte Maps für das Event
+                        let mut final_scores_hm: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
+                        let mut final_score_labels_hm: std::collections::HashMap<String, TernaryLabel> = std::collections::HashMap::new();
 
                         // 2) Final-Extraction je prompt_id
                         let mut by_pid: BTreeMap<i32, Vec<&PromptResult>> = BTreeMap::new();
@@ -435,7 +441,6 @@ async fn app_main() -> anyhow::Result<()> {
                                             "unsure" => 0.0,
                                             _ => if res_bool { 1.0 } else { -1.0 },
                                         };
-                                        // Gewicht (wenn strength fehlt → 1.0)
                                         let w = (0.6_f64*1.0 + 0.4_f64*conf).clamp(0.0, 1.0);
 
                                         // Filter anwenden
@@ -513,6 +518,11 @@ async fn app_main() -> anyhow::Result<()> {
                                 let score_tri: f64 = if agg.tri_wsum > 0.0 { (agg.tri_sum / agg.tri_wsum).clamp(-1.0, 1.0) }
                                 else if result_bool { 1.0 } else { -1.0 };
                                 let label = if score_tri >= yes_thr { "yes" } else if score_tri <= no_thr { "no" } else { "unsure" };
+                                let lbl_enum = match label {
+                                    "yes" => TernaryLabel::yes,
+                                    "no" => TernaryLabel::no,
+                                    _ => TernaryLabel::unsure,
+                                };
 
                                 let explanation = if result_bool {
                                     agg.explanations_true.into_iter().find(|s| !s.trim().is_empty())
@@ -556,8 +566,11 @@ async fn app_main() -> anyhow::Result<()> {
                                 }
                                 seq += 1;
 
-                                // Für pipeline_runs + Overall sammeln
+                                // Für pipeline_runs + Overall + Event sammeln
                                 final_scores_map.insert(key.clone(), json!(score_tri));
+                                final_scores_hm.insert(key.clone(), score_tri as f32);
+                                final_score_labels_hm.insert(key.clone(), lbl_enum);
+
                                 overall_inputs_tri.push((score_tri as f32, confidence));
                                 overall_inputs_bool.push((result_bool, confidence));
                             }
@@ -581,6 +594,12 @@ async fn app_main() -> anyhow::Result<()> {
 
                                 let score_tri = vnum;
                                 let label = if score_tri >= yes_thr { "yes" } else if score_tri <= no_thr { "no" } else { "unsure" };
+                                let lbl_enum = match label {
+                                    "yes" => TernaryLabel::yes,
+                                    "no" => TernaryLabel::no,
+                                    _ => TernaryLabel::unsure,
+                                };
+
                                 let key = format!("score_{}", pid);
                                 let confidence = 0.5_f32;
 
@@ -614,7 +633,10 @@ async fn app_main() -> anyhow::Result<()> {
                                 }
                                 seq += 1;
 
-                                final_scores_map.insert(key, json!(score_tri));
+                                final_scores_map.insert(key.clone(), json!(score_tri));
+                                final_scores_hm.insert(key.clone(), score_tri as f32);
+                                final_score_labels_hm.insert(key.clone(), lbl_enum);
+
                                 overall_inputs_tri.push((score_tri as f32, confidence));
                                 overall_inputs_bool.push((r.result, confidence));
                             }
@@ -819,7 +841,8 @@ async fn app_main() -> anyhow::Result<()> {
                             }
                             if sum_w > 0.0 { (sum_v / sum_w).clamp(0.0, 1.0) } else { 0.0 }
                         } else {
-                            runner::compute_overall_score(&overall_inputs_bool)
+                            // FIX: Option<f32> → f32
+                            runner::compute_overall_score(&overall_inputs_bool).unwrap_or(0.0)
                         };
 
                         // 3b) pipeline_runs updaten (inkl. final_* Maps)
@@ -859,12 +882,17 @@ async fn app_main() -> anyhow::Result<()> {
                             scoring: outcome.scoring,
                             decision: outcome.decision,
                             log: outcome.log,
+                            // NEU/ausgefüllt:
+                            final_scores: Some(final_scores_hm),
+                            final_score_labels: Some(final_score_labels_hm),
+                            status: Some("finished".to_string()),
+                            started_at: None,
+                            finished_at: None,
                         };
 
                         if let Ok(mut result_json) = serde_json::to_value(&result) {
                             result_json["run_id"] = json!(run_id.to_string());
-                            // (Optional) Es wäre möglich, hier final_scores/final_decisions einzublenden,
-                            // aber die History-/UI-Endpunkte ziehen sie bereits aus der DB.
+                            // (Optional) final_scores/final_decisions stehen bereits in DB – Event kann reduziert bleiben
                             if let Ok(payload) = serde_json::to_string(&result_json) {
                                 let _ = producer
                                     .send(
