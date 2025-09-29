@@ -10,6 +10,15 @@ pub enum PromptType {
     DecisionPrompt,
 }
 
+/// Tri-State Label für Scoring (neu)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TernaryLabel {
+    yes,
+    no,
+    unsure,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UploadRequest {
     pub file_name: String,
@@ -40,12 +49,34 @@ pub struct TextPosition {
     pub quote: Option<String>,
 }
 
+/// Einzelnes Scoring-Resultat (per Batch/Attempt ODER konsolidiert).
+/// Abwärtskompatibel: `result` (bool) bleibt erhalten.
+/// Neu: `vote` (Tri-State), `strength`, `confidence`, `score` (-1..+1), `label` (Tri-State, z. B. fürs konsolidierte Ergebnis).
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ScoringResult {
     pub prompt_id: i32,
+
+    /// Abwärtskompatibles Boolean (true == yes). Bei `unsure` i. d. R. false.
     pub result: bool,
+
     pub source: TextPosition,
     pub explanation: String,
+
+    /// Neu / optional:
+    #[serde(default)]
+    pub vote: Option<TernaryLabel>,       // yes | no | unsure (bei Attempts)
+
+    #[serde(default)]
+    pub strength: Option<f32>,            // 0..1 (Evidenzstärke der Stimme)
+
+    #[serde(default)]
+    pub confidence: Option<f32>,          // 0..1 (Antwortsicherheit der Stimme)
+
+    #[serde(default)]
+    pub score: Option<f32>,               // -1..+1 (z. B. konsolidierter Wert)
+
+    #[serde(default)]
+    pub label: Option<TernaryLabel>,      // yes|no|unsure (z. B. konsolidiert)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -84,10 +115,27 @@ pub struct PipelineRunResult {
 
     pub extracted: std::collections::HashMap<String, serde_json::Value>,
 
-    pub extraction: Vec<PromptResult>,
+    /// Konsolidierte Scoring-Ergebnisse (ein Eintrag je Regel)
     pub scoring: Vec<ScoringResult>,
+
+    pub extraction: Vec<PromptResult>,
     pub decision: Vec<PromptResult>,
     pub log: Vec<RunStep>,
+
+    /// Neu / optional: finale Scores je Regel (−1..+1) und zugehörige Tri-State Labels
+    #[serde(default)]
+    pub final_scores: Option<std::collections::HashMap<String, f32>>,
+
+    #[serde(default)]
+    pub final_score_labels: Option<std::collections::HashMap<String, TernaryLabel>>,
+
+    /// Optional: Metadaten (werden oft vom history-service ergänzt)
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub finished_at: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -125,8 +173,7 @@ pub struct CreateTenantRequest {
     pub name: String,
 }
 
-/// (Optional) Upload-Request: falls du JSON-Metadaten empfängst.
-/// Bei Multipart-Upload bitte das Feld "tenant_id" zusätzlich mitsenden.
+/// (Optional) Upload-Request
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateUploadRequest {
     pub pipeline_id: Option<Uuid>,

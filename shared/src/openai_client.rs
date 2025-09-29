@@ -1,4 +1,4 @@
-use crate::dto::TextPosition;
+use crate::dto::{TextPosition, TernaryLabel};
 use actix_web::http::header;
 use awc::Client;
 use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
@@ -30,24 +30,27 @@ Rules:
 - Output JSON only. No prose, no markdown.
 "#;
 
+/// Tri-State Scoring Guard (YES/NO/UNSURE) – striktes JSON
 const SCORING_GUARD_PREFIX: &str = r#"
-You are a binary classifier that answers a Yes/No question about the given document.
-Use ONLY the provided DOCUMENT text. Do NOT invent content.
+You are a tri-state classifier that decides a Yes/No/Unsure question based ONLY on DOCUMENT.
+Do NOT invent content. Always return STRICT JSON that matches this single-object schema:
 
-Respond with ONE JSON object that matches exactly this schema:
 {
-  "result": true|false,
+  "vote": "yes" | "no" | "unsure",
+  "strength": number,      // 0..1, how strongly the evidence supports your vote
+  "confidence": number,    // 0..1, how certain you are about your classification
   "source": {
-    "page":  integer,
-    "bbox":  [number,number,number,number],
-    "quote": "<exact snippet from the document>"
+    "page":  integer,      // 1-based page index with the most relevant quote
+    "bbox":  [number,number,number,number], // use [0,0,0,0] if unknown
+    "quote": string        // verbatim snippet from DOCUMENT supporting your vote
   },
-  "explanation": "<short reason>"
+  "explanation": string    // short reason (1-2 sentences)
 }
 
 Hard rules:
 - "quote" MUST be a verbatim substring of DOCUMENT. Do not fabricate quotes.
-- If you cannot support "true" with a verbatim quote, you MUST answer "false" and use a quote that justifies the negative/absence (if available), otherwise a neutral snippet closest to the relevant context.
+- If evidence is inconclusive, use vote="unsure" with a neutral/closest quote.
+- strength/confidence MUST be in [0,1]. Use your best judgement (they are not the same).
 - JSON only. No markdown, no extra keys.
 "#;
 
@@ -106,13 +109,13 @@ fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
     Ok(val)
 }
 
-/* ======================= Scoring-Prompt (kompatibel, aber schärfer) ======================= */
+/* ======================= Scoring-Prompt (Tri-State) ======================= */
 
 pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMessage> {
     let system = SCORING_GUARD_PREFIX;
     // Frage + Dokument explizit einbetten
     let user = format!(
-        "DOCUMENT:\n{}\n\nQUESTION (Yes/No): {}\n\nRespond with the JSON schema above (STRICT).",
+        "DOCUMENT:\n{}\n\nQUESTION (Tri-state Yes/No/Unsure): {}\n\nRespond with the JSON schema above (STRICT).",
         document, question
     );
     vec![
@@ -124,7 +127,6 @@ pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletio
 /* ======================= OpenAI Call ======================= */
 
 /// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
-///
 /// Erzwingt response_format=json_object und loggt bei Fehlern Details.
 pub async fn call_openai_chat(
     client: &Client,
@@ -265,7 +267,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
-/* ======================= Scoring (beibehaltener Function-Call, aber strenger) ======================= */
+/* ======================= Scoring (Tri-State mit Function-Call) ======================= */
 
 pub async fn score(
     prompt_id: i32,
@@ -275,14 +277,16 @@ pub async fn score(
     let question = fetch_prompt(prompt_id).await?;
     let msgs = build_scoring_prompt(document, &question);
 
-    // Alte Funktionalität: Function Calling (erzwingt Schema)
+    // Tri-State Function Calling: zwingt vote/strength/confidence/source/explanation
     let schema = serde_json::json!({
-      "name": "binary_answer",
-      "description": "Return exactly one object answering the Yes/No question with a verbatim quote.",
+      "name": "ternary_answer",
+      "description": "Return exactly one object with tri-state vote (yes/no/unsure), strength, confidence and a verbatim quote.",
       "parameters": {
         "type": "object",
         "properties": {
-          "result": {"type":"boolean"},
+          "vote": {"type":"string","enum":["yes","no","unsure"]},
+          "strength": {"type":"number","minimum":0,"maximum":1},
+          "confidence": {"type":"number","minimum":0,"maximum":1},
           "source": {
             "type":"object",
             "properties": {
@@ -294,7 +298,7 @@ pub async fn score(
           },
           "explanation": {"type":"string"}
         },
-        "required": ["result","source"]
+        "required": ["vote","strength","confidence","source","explanation"]
       }
     });
 
@@ -304,32 +308,61 @@ pub async fn score(
             "gpt-4o",
             msgs.clone(),
             Some(vec![schema.clone()]),
-            Some(serde_json::json!({"name":"binary_answer"})),
+            Some(serde_json::json!({"name":"ternary_answer"})),
         )
             .await
         {
             if let Ok(v) = parse_json_block(&ans) {
-                if let (Some(result), Some(mut source)) = (
-                    v.get("result").and_then(|b| b.as_bool()),
-                    v.get("source")
-                        .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok()),
-                ) {
-                    // bbox absichern
-                    if source.bbox.len() != 4 {
-                        source.bbox = [0.0, 0.0, 0.0, 0.0];
+                // Robust fallback: akzeptiere ggf. legacy {result:boolean,...}
+                let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
+                let vote_opt = match vote_str {
+                    "yes" => Some(TernaryLabel::yes),
+                    "no" => Some(TernaryLabel::no),
+                    "unsure" => Some(TernaryLabel::unsure),
+                    _ => None,
+                };
+
+                let legacy_bool = v.get("result").and_then(|b| b.as_bool());
+                let result_bool = vote_opt
+                    .map(|vl| matches!(vl, TernaryLabel::yes))
+                    .or(legacy_bool)
+                    .unwrap_or(false);
+
+                let mut source: Option<TextPosition> = v
+                    .get("source")
+                    .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok());
+                if let Some(s) = source.as_mut() {
+                    if s.bbox.len() != 4 {
+                        s.bbox = [0.0, 0.0, 0.0, 0.0];
                     }
-                    let explanation = v
-                        .get("explanation")
-                        .and_then(|e| e.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    return Ok(crate::dto::ScoringResult {
-                        prompt_id,
-                        result,
-                        source,
-                        explanation,
+                } else {
+                    // notfalls neutral
+                    source = Some(TextPosition {
+                        page: 0,
+                        bbox: [0.0, 0.0, 0.0, 0.0],
+                        quote: None,
                     });
                 }
+
+                let strength = v.get("strength").and_then(|x| x.as_f64()).map(|f| f as f32);
+                let confidence = v.get("confidence").and_then(|x| x.as_f64()).map(|f| f as f32);
+                let explanation = v
+                    .get("explanation")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                return Ok(crate::dto::ScoringResult {
+                    prompt_id,
+                    result: result_bool,
+                    source: source.unwrap(),
+                    explanation,
+                    vote: vote_opt,
+                    strength,
+                    confidence,
+                    score: None,      // konsolidierter Score wird im runner berechnet
+                    label: None,      // konsolidiertes Label wird im runner gesetzt
+                });
             }
         }
         let wait = 100 * (1u64 << i).min(8);

@@ -5,7 +5,9 @@ use futures::{stream, StreamExt};
 use serde_json::{json, Value as JsonValue};
 use tracing::{info, warn};
 
-use shared::dto::{PipelineConfig, PromptResult, PromptType, RunStep, ScoringResult, TextPosition};
+use shared::dto::{
+    PipelineConfig, PromptResult, PromptType, RunStep, ScoringResult, TernaryLabel, TextPosition,
+};
 use shared::openai_client as ai;
 
 #[derive(Clone, Debug)]
@@ -83,20 +85,20 @@ pub async fn execute_with_pages(
                             &cfg_clone,
                             &prompt_text_for_log,
                         )
-                        .await
-                        .unwrap_or_else(|e| PromptResult {
-                            prompt_id,
-                            prompt_type: PromptType::ExtractionPrompt,
-                            prompt_text: prompt_text_for_log.clone(),
-                            value: None,
-                            boolean: None,
-                            route: None,
-                            weight: None,
-                            source: None,
-                            openai_raw: String::new(),
-                            json_key: None,
-                            error: Some(format!("extract failed: {e}")),
-                        })
+                            .await
+                            .unwrap_or_else(|e| PromptResult {
+                                prompt_id,
+                                prompt_type: PromptType::ExtractionPrompt,
+                                prompt_text: prompt_text_for_log.clone(),
+                                value: None,
+                                boolean: None,
+                                route: None,
+                                weight: None,
+                                source: None,
+                                openai_raw: String::new(),
+                                json_key: None,
+                                error: Some(format!("extract failed: {e}")),
+                            })
                     }
                 });
 
@@ -157,6 +159,11 @@ pub async fn execute_with_pages(
                                     quote: None,
                                 },
                                 explanation: format!("score failed: {e}"),
+                                vote: Some(TernaryLabel::unsure),
+                                strength: Some(0.0),
+                                confidence: Some(0.0),
+                                score: None,
+                                label: None,
                             })
                     }
                 });
@@ -166,7 +173,7 @@ pub async fn execute_with_pages(
                     .collect()
                     .await;
 
-                // Mehrheitsentscheidung über Batches
+                // Tri-State Konsolidierung über Batches (gewichtete Summe)
                 let consolidated = consolidate_scoring(&batch_scores);
                 scoring_all.push(consolidated.clone());
 
@@ -224,20 +231,20 @@ pub async fn execute_with_pages(
                             &no_key,
                             &prompt_text_for_log,
                         )
-                        .await
-                        .unwrap_or_else(|e| PromptResult {
-                            prompt_id,
-                            prompt_type: PromptType::DecisionPrompt,
-                            prompt_text: prompt_text_for_log.clone(),
-                            value: None,
-                            boolean: None,
-                            route: Some(no_key.clone()),
-                            weight: None,
-                            source: None,
-                            openai_raw: String::new(),
-                            json_key: None,
-                            error: Some(format!("decision failed: {e}")),
-                        })
+                            .await
+                            .unwrap_or_else(|e| PromptResult {
+                                prompt_id,
+                                prompt_type: PromptType::DecisionPrompt,
+                                prompt_text: prompt_text_for_log.clone(),
+                                value: None,
+                                boolean: None,
+                                route: Some(no_key.clone()),
+                                weight: None,
+                                source: None,
+                                openai_raw: String::new(),
+                                json_key: None,
+                                error: Some(format!("decision failed: {e}")),
+                            })
                     }
                 });
 
@@ -441,7 +448,7 @@ async fn call_extract_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::extract(prompt_id, text),
         )
-        .await;
+            .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -495,7 +502,7 @@ async fn call_score_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::score(prompt_id, text),
         )
-        .await;
+            .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -541,7 +548,7 @@ async fn call_decide_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::decide(prompt_id, text, &state),
         )
-        .await;
+            .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -611,6 +618,18 @@ async fn call_decide_with_retries(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("decision failed")))
 }
 
+/* --------------------- Tri-State Konsolidierung für Scoring --------------------- */
+
+fn clamp01f(x: f32) -> f32 {
+    if !x.is_finite() { return 0.0; }
+    x.max(0.0).min(1.0)
+}
+
+/// Konsolidiert eine Liste von ScoringResult (Batches) zu einem gewichteten Tri-State Ergebnis.
+/// - map vote yes->+w, no->-w, unsure->0
+/// - w = 0.6*strength + 0.4*confidence (Fallbacks: strength=1.0 bei vorhandenem vote, confidence=0.5)
+/// - finale Score s = (yesW - noW) / (yesW + noW) in [-1,1]
+/// - Label: s>=+0.6 => yes, s<=-0.6 => no, sonst unsure
 fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
     if v.is_empty() {
         return ScoringResult {
@@ -622,24 +641,97 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
                 quote: None,
             },
             explanation: "no scores".into(),
+            vote: Some(TernaryLabel::unsure),
+            strength: Some(0.0),
+            confidence: Some(0.0),
+            score: Some(0.0),
+            label: Some(TernaryLabel::unsure),
         };
     }
-    let mut trues = 0usize;
-    let mut falses = 0usize;
+
+    let pid = v[0].prompt_id;
+
+    let mut yes_w: f32 = 0.0;
+    let mut no_w: f32 = 0.0;
+
     for s in v {
-        if s.result {
-            trues += 1
-        } else {
-            falses += 1
+        let vote = s.vote.or_else(|| {
+            // Fallback aus legacy-boolean
+            if s.result { Some(TernaryLabel::yes) } else { Some(TernaryLabel::no) }
+        }).unwrap_or(TernaryLabel::unsure);
+
+        let strength = s.strength.unwrap_or_else(|| {
+            match vote {
+                TernaryLabel::yes | TernaryLabel::no => 1.0, // wenn Stimme da, standardmäßig "normal stark"
+                TernaryLabel::unsure => 0.0,
+            }
+        });
+        let confidence = s.confidence.unwrap_or(0.5);
+
+        let w = 0.6 * clamp01f(strength) + 0.4 * clamp01f(confidence);
+
+        match vote {
+            TernaryLabel::yes => yes_w += w,
+            TernaryLabel::no =>  no_w += w,
+            TernaryLabel::unsure => {}
         }
     }
-    let majority = trues >= falses;
-    let base = &v[0];
+
+    let total = yes_w + no_w;
+    let (score, label) = if total > 0.0 {
+        let s = (yes_w - no_w) / total; // -1..+1
+        let lbl = if s >= 0.60 {
+            TernaryLabel::yes
+        } else if s <= -0.60 {
+            TernaryLabel::no
+        } else {
+            TernaryLabel::unsure
+        };
+        (s, lbl)
+    } else {
+        // Keine gewichteten Stimmen → Mehrheit rein numerisch
+        let mut trues = 0usize;
+        let mut falses = 0usize;
+        for s in v {
+            if s.result { trues += 1 } else { falses += 1 }
+        }
+        let majority_yes = trues >= falses;
+        let s = if trues + falses > 0 { // normierter Ersatzscore
+            let total_n = (trues + falses) as f32;
+            (trues as f32 - falses as f32) / total_n
+        } else { 0.0 };
+        let lbl = if majority_yes { TernaryLabel::yes } else { TernaryLabel::no };
+        (s, lbl)
+    };
+
+    // Quelle: nimm die erste Quelle, die zum finalen Label passt, sonst die erste
+    let mut chosen_src: Option<TextPosition> = None;
+    for s in v {
+        if let Some(vv) = s.vote {
+            if vv == label {
+                chosen_src = Some(s.source.clone());
+                break;
+            }
+        } else if (label == TernaryLabel::yes && s.result) || (label == TernaryLabel::no && !s.result) {
+            chosen_src = Some(s.source.clone());
+            break;
+        }
+    }
+    let source = chosen_src.unwrap_or_else(|| v[0].source.clone());
+
     ScoringResult {
-        prompt_id: base.prompt_id,
-        result: majority,
-        source: base.source.clone(),
-        explanation: format!("majority vote: true={} false={}", trues, falses),
+        prompt_id: pid,
+        result: matches!(label, TernaryLabel::yes), // bool Kompatibilität
+        source,
+        explanation: format!(
+            "weighted vote: yes_w={:.3} no_w={:.3} -> score={:.3} label={:?}",
+            yes_w, no_w, score, label
+        ),
+        vote: Some(label),         // konsolidiertes Label
+        strength: None,
+        confidence: Some((yes_w.max(no_w) / (total.max(1e-6))).min(1.0)), // grobe Konfidenz
+        score: Some(score),
+        label: Some(label),
     }
 }
 

@@ -6,6 +6,7 @@ use rdkafka::{
 use serde_json::{json, Value};
 use shared::dto::{PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TextPosition};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::task::LocalSet;
 use tracing::{error, info, warn};
@@ -92,11 +93,14 @@ async fn app_main() -> anyhow::Result<()> {
             started_at TIMESTAMPTZ DEFAULT now(),
             finished_at TIMESTAMPTZ,
             status TEXT DEFAULT 'running',
-            overall_score REAL
+            overall_score REAL,
+            final_extraction JSONB,
+            final_scores JSONB,
+            final_decisions JSONB
         )",
     )
-    .execute(&pool)
-    .await;
+        .execute(&pool)
+        .await;
 
     let _ = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipeline_run_steps (
@@ -117,8 +121,8 @@ async fn app_main() -> anyhow::Result<()> {
             PRIMARY KEY (run_id, seq_no)
         )",
     )
-    .execute(&pool)
-    .await;
+        .execute(&pool)
+        .await;
 
     // neue Spalten nachziehen (idempotent)
     let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS is_final  BOOLEAN NOT NULL DEFAULT FALSE").execute(&pool).await;
@@ -205,14 +209,30 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
+                // Für den Runner weiterhin deserialisieren – aber mit Clone, damit wir unten noch im JSON lesen können
                 let cfg: PipelineConfig =
-                    match serde_json::from_value::<PipelineConfig>(config_json) {
+                    match serde_json::from_value::<PipelineConfig>(config_json.clone()) {
                         Ok(c) => c,
                         Err(e) => {
                             warn!(%e, "invalid pipeline config json");
                             continue;
                         }
                     };
+
+                // Pro-Scoring-Step Konfiguration aus dem JSON ziehen (promptId/prompt_id)
+                let mut scoring_cfg: HashMap<i32, Value> = HashMap::new();
+                if let Some(steps) = config_json.get("steps").and_then(|v| v.as_array()) {
+                    for s in steps {
+                        let t = s.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+                        if t == "ScoringPrompt" {
+                            let pid = s.get("promptId").and_then(|v| v.as_i64())
+                                .or_else(|| s.get("prompt_id").and_then(|v| v.as_i64()));
+                            if let Some(pid64) = pid {
+                                scoring_cfg.insert(pid64 as i32, s.get("config").cloned().unwrap_or(Value::Null));
+                            }
+                        }
+                    }
+                }
 
                 // Textseiten laden
                 let pages: Vec<(i32, String)> = match sqlx::query(
@@ -223,9 +243,9 @@ async fn app_main() -> anyhow::Result<()> {
                     ORDER BY page_no
                     "#,
                 )
-                .bind(evt.pdf_id)
-                .fetch_all(&pool)
-                .await
+                    .bind(evt.pdf_id)
+                    .fetch_all(&pool)
+                    .await
                 {
                     Ok(rows) => rows
                         .into_iter()
@@ -291,8 +311,12 @@ async fn app_main() -> anyhow::Result<()> {
                             seq += 1;
                         }
 
-                        // 2) Final-Extraction je prompt_id
                         use std::collections::BTreeMap;
+                        let mut final_extraction_map = serde_json::Map::new();
+                        let mut final_scores_map     = serde_json::Map::new();
+                        let mut final_decisions_map  = serde_json::Map::new();
+
+                        // 2) Final-Extraction je prompt_id
                         let mut by_pid: BTreeMap<i32, Vec<&PromptResult>> = BTreeMap::new();
                         for r in &outcome.extraction {
                             by_pid.entry(r.prompt_id as i32).or_default().push(r);
@@ -343,15 +367,17 @@ async fn app_main() -> anyhow::Result<()> {
                             {
                                 warn!(%e, %run_id, seq, final_key=%key, "failed to insert final extraction");
                             }
+                            // Für pipeline_runs sammeln
+                            final_extraction_map.insert(key.clone(), result.clone());
+
                             seq += 1;
                         }
 
-                        let mut overall_inputs: Vec<(bool, f32)> = Vec::new();
+                        let mut overall_inputs_bool: Vec<(bool, f32)> = Vec::new();
+                        let mut overall_inputs_tri:  Vec<(f32, f32)> = Vec::new(); // (score -1..+1, weight 0..1)
 
-                        // 2b) Final-Scoring je prompt_id
+                        // 2b) Final-Scoring je prompt_id (Tri-State + optionale Filter/Schwellen)
                         {
-                            use std::collections::BTreeMap;
-
                             #[derive(Default)]
                             struct ScoreAgg {
                                 votes_true: i64,
@@ -360,10 +386,14 @@ async fn app_main() -> anyhow::Result<()> {
                                 support_false: Vec<serde_json::Value>,
                                 explanations_true: Vec<String>,
                                 explanations_false: Vec<String>,
+                                // Tri-State Aggregation
+                                tri_sum: f64,         // ∑ (vote_num * weight)
+                                tri_wsum: f64,        // ∑ weight
                             }
 
                             let mut sc_by_pid: BTreeMap<i32, ScoreAgg> = BTreeMap::new();
 
+                            // From log (bevorzugt)
                             for step in &outcome.log {
                                 if step.prompt_type != shared::dto::PromptType::ScoringPrompt {
                                     continue;
@@ -372,6 +402,14 @@ async fn app_main() -> anyhow::Result<()> {
                                     continue;
                                 };
                                 let agg = sc_by_pid.entry(pid).or_default();
+
+                                // per-Step Konfig
+                                let cfgv = scoring_cfg.get(&pid);
+                                let min_yes    = cfgv.and_then(|c| c.get("min_weight_yes")    .and_then(|x| x.as_f64())).unwrap_or(0.0);
+                                let min_no     = cfgv.and_then(|c| c.get("min_weight_no")     .and_then(|x| x.as_f64())).unwrap_or(0.0);
+                                let min_unsure = cfgv.and_then(|c| c.get("min_weight_unsure") .and_then(|x| x.as_f64())).unwrap_or(0.0);
+                                let yes_thr    = cfgv.and_then(|c| c.get("label_threshold_yes").and_then(|x| x.as_f64())).unwrap_or(0.60);
+                                let no_thr     = cfgv.and_then(|c| c.get("label_threshold_no") .and_then(|x| x.as_f64())).unwrap_or(-0.60);
 
                                 let scores = step
                                     .result
@@ -382,148 +420,121 @@ async fn app_main() -> anyhow::Result<()> {
 
                                 if scores.is_empty() {
                                     if let Some(cons) = step.result.get("consolidated") {
-                                        let res = cons
+                                        // Boolean-Fallback
+                                        let res_bool = cons
                                             .get("result")
                                             .and_then(|v| v.as_bool())
                                             .unwrap_or(false);
-                                        if res {
-                                            agg.votes_true += 1;
-                                        } else {
-                                            agg.votes_false += 1;
-                                        }
-                                        if let Some(src) = cons.get("source") {
-                                            if res {
-                                                agg.support_true.push(src.clone());
-                                            } else {
-                                                agg.support_false.push(src.clone());
+
+                                        // Tri-State aus consolidated (falls vorhanden)
+                                        let label = cons.get("label").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
+                                        let conf  = cons.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                        let vnum = match label.as_str() {
+                                            "yes" =>  1.0,
+                                            "no"  => -1.0,
+                                            "unsure" => 0.0,
+                                            _ => if res_bool { 1.0 } else { -1.0 },
+                                        };
+                                        // Gewicht (wenn strength fehlt → 1.0)
+                                        let w = (0.6_f64*1.0 + 0.4_f64*conf).clamp(0.0, 1.0);
+
+                                        // Filter anwenden
+                                        let pass = if vnum > 0.5 { w >= min_yes } else if vnum < -0.5 { w >= min_no } else { w >= min_unsure };
+                                        if pass {
+                                            // bool-Legacy
+                                            if res_bool { agg.votes_true += 1; } else { agg.votes_false += 1; }
+                                            if let Some(src) = cons.get("source") {
+                                                if res_bool { agg.support_true.push(src.clone()); } else { agg.support_false.push(src.clone()); }
                                             }
-                                        }
-                                        if let Some(expl) =
-                                            cons.get("explanation").and_then(|v| v.as_str())
-                                        {
-                                            let trimmed = expl.trim();
-                                            if !trimmed.is_empty() {
-                                                if res {
-                                                    agg.explanations_true.push(trimmed.to_string());
-                                                } else {
-                                                    agg.explanations_false
-                                                        .push(trimmed.to_string());
+                                            if let Some(expl) = cons.get("explanation").and_then(|v| v.as_str()) {
+                                                let trimmed = expl.trim();
+                                                if !trimmed.is_empty() {
+                                                    if res_bool { agg.explanations_true.push(trimmed.to_string()); }
+                                                    else        { agg.explanations_false.push(trimmed.to_string()); }
                                                 }
                                             }
+                                            // Tri-State Summen
+                                            agg.tri_sum  += vnum * w;
+                                            agg.tri_wsum += w;
                                         }
                                     }
                                     continue;
                                 }
 
                                 for score in scores {
-                                    let res = score
-                                        .get("result")
-                                        .and_then(|v| v.as_bool())
-                                        .unwrap_or(false);
-                                    if res {
-                                        agg.votes_true += 1;
-                                    } else {
-                                        agg.votes_false += 1;
-                                    }
+                                    // Boolean-Fallback
+                                    let res = score.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    // Tri-State Vote
+                                    let vote = score.get("vote").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
+                                    let vnum = match vote.as_str() {
+                                        "yes" =>  1.0,
+                                        "no"  => -1.0,
+                                        "unsure" => 0.0,
+                                        _ => if res { 1.0 } else { -1.0 },
+                                    };
+                                    let strength = score.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.0);
+                                    let conf     = score.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                    let w = (0.6_f64*strength + 0.4_f64*conf).clamp(0.0, 1.0);
 
+                                    // Filter je Label
+                                    let pass = if vnum > 0.5 { w >= min_yes } else if vnum < -0.5 { w >= min_no } else { w >= min_unsure };
+                                    if !pass { continue; }
+
+                                    // bool-Legacy
+                                    if res { agg.votes_true += 1; } else { agg.votes_false += 1; }
                                     if let Some(src) = score.get("source") {
-                                        if res {
-                                            agg.support_true.push(src.clone());
-                                        } else {
-                                            agg.support_false.push(src.clone());
-                                        }
+                                        if res { agg.support_true.push(src.clone()); } else { agg.support_false.push(src.clone()); }
                                     }
-                                    if let Some(expl) =
-                                        score.get("explanation").and_then(|v| v.as_str())
-                                    {
+                                    if let Some(expl) = score.get("explanation").and_then(|v| v.as_str()) {
                                         let trimmed = expl.trim();
                                         if !trimmed.is_empty() {
-                                            if res {
-                                                agg.explanations_true.push(trimmed.to_string());
-                                            } else {
-                                                agg.explanations_false.push(trimmed.to_string());
-                                            }
+                                            if res { agg.explanations_true.push(trimmed.to_string()); }
+                                            else   { agg.explanations_false.push(trimmed.to_string()); }
                                         }
                                     }
-                                }
-                            }
 
-                            for r in &outcome.scoring {
-                                let pid = r.prompt_id as i32;
-                                let agg = sc_by_pid.entry(pid).or_default();
-                                if agg.votes_true + agg.votes_false > 0 {
-                                    continue;
-                                }
-                                if r.result {
-                                    agg.votes_true += 1;
-                                } else {
-                                    agg.votes_false += 1;
-                                }
-                                if let Ok(src) = serde_json::to_value(&r.source) {
-                                    if r.result {
-                                        agg.support_true.push(src);
-                                    } else {
-                                        agg.support_false.push(src);
-                                    }
-                                }
-                                let trimmed = r.explanation.trim();
-                                if !trimmed.is_empty() {
-                                    if r.result {
-                                        agg.explanations_true.push(trimmed.to_string());
-                                    } else {
-                                        agg.explanations_false.push(trimmed.to_string());
-                                    }
-                                }
-                            }
-
-                            for (pid, agg) in sc_by_pid {
-                                let ScoreAgg {
-                                    votes_true,
-                                    votes_false,
-                                    support_true,
-                                    support_false,
-                                    explanations_true,
-                                    explanations_false,
-                                } = agg;
-
-                                let total_votes = votes_true + votes_false;
-                                if total_votes <= 0 {
-                                    continue;
+                                    // Tri-State Summen
+                                    agg.tri_sum  += vnum * w;
+                                    agg.tri_wsum += w;
                                 }
 
-                                let result_bool = votes_true >= votes_false;
-                                let majority_votes =
-                                    if result_bool { votes_true } else { votes_false };
-                                let mut confidence = (majority_votes as f32) / (total_votes as f32);
-                                if !confidence.is_finite() {
-                                    confidence = 0.0;
-                                }
-                                confidence = confidence.clamp(0.0, 1.0);
+                                // Konsolidieren und Final-Step + pipeline_runs-Map füllen
+                                let total_votes = agg.votes_true + agg.votes_false;
+                                if total_votes <= 0 && agg.tri_wsum <= 0.0 { continue; }
+
+                                let result_bool = agg.votes_true >= agg.votes_false;
+                                let majority_votes = if result_bool { agg.votes_true } else { agg.votes_false };
+                                let mut confidence = if total_votes > 0 {
+                                    (majority_votes as f32) / (total_votes as f32)
+                                } else { 0.0 };
+                                if !confidence.is_finite() { confidence = 0.0; }
+                                let confidence = confidence.clamp(0.0, 1.0);
+
+                                let score_tri: f64 = if agg.tri_wsum > 0.0 { (agg.tri_sum / agg.tri_wsum).clamp(-1.0, 1.0) }
+                                else if result_bool { 1.0 } else { -1.0 };
+                                let label = if score_tri >= yes_thr { "yes" } else if score_tri <= no_thr { "no" } else { "unsure" };
 
                                 let explanation = if result_bool {
-                                    explanations_true.into_iter().find(|s| !s.trim().is_empty())
+                                    agg.explanations_true.into_iter().find(|s| !s.trim().is_empty())
                                 } else {
-                                    explanations_false
-                                        .into_iter()
-                                        .find(|s| !s.trim().is_empty())
+                                    agg.explanations_false.into_iter().find(|s| !s.trim().is_empty())
                                 };
 
-                                let support_values = if result_bool {
-                                    support_true
-                                } else {
-                                    support_false
+                                let support: Vec<serde_json::Value> = {
+                                    let sv = if result_bool { agg.support_true } else { agg.support_false };
+                                    sv.into_iter().take(3).collect()
                                 };
-                                let support: Vec<serde_json::Value> =
-                                    support_values.into_iter().take(3).collect();
 
                                 let key = format!("score_{}", pid);
                                 let result_json = serde_json::json!({
                                     "result": result_bool,
                                     "confidence": confidence,
-                                    "votes_true": votes_true,
-                                    "votes_false": votes_false,
+                                    "votes_true": agg.votes_true,
+                                    "votes_false": agg.votes_false,
                                     "explanation": explanation,
-                                    "support": support
+                                    "support": support,
+                                    "score": score_tri,   // −1..+1
+                                    "label": label        // "yes" | "no" | "unsure"
                                 });
 
                                 if let Err(e) = sqlx::query(
@@ -544,11 +555,72 @@ async fn app_main() -> anyhow::Result<()> {
                                     warn!(%e, %run_id, seq, final_key=%key, "failed to insert final scoring");
                                 }
                                 seq += 1;
-                                overall_inputs.push((result_bool, confidence));
+
+                                // Für pipeline_runs + Overall sammeln
+                                final_scores_map.insert(key.clone(), json!(score_tri));
+                                overall_inputs_tri.push((score_tri as f32, confidence));
+                                overall_inputs_bool.push((result_bool, confidence));
+                            }
+
+                            // Fallback von outcome.scoring (falls log keine Inhalte hatte)
+                            for r in &outcome.scoring {
+                                let pid = r.prompt_id as i32;
+
+                                let cfgv = scoring_cfg.get(&pid);
+                                let min_yes    = cfgv.and_then(|c| c.get("min_weight_yes")    .and_then(|x| x.as_f64())).unwrap_or(0.0);
+                                let min_no     = cfgv.and_then(|c| c.get("min_weight_no")     .and_then(|x| x.as_f64())).unwrap_or(0.0);
+                                let min_unsure = cfgv.and_then(|c| c.get("min_weight_unsure") .and_then(|x| x.as_f64())).unwrap_or(0.0);
+                                let yes_thr    = cfgv.and_then(|c| c.get("label_threshold_yes").and_then(|x| x.as_f64())).unwrap_or(0.60);
+                                let no_thr     = cfgv.and_then(|c| c.get("label_threshold_no") .and_then(|x| x.as_f64())).unwrap_or(-0.60);
+
+                                // Bool → vnum, w=0.5
+                                let vnum = if r.result { 1.0 } else { -1.0 };
+                                let w = 0.5_f64;
+                                let pass = if vnum > 0.5 { w >= min_yes } else if vnum < -0.5 { w >= min_no } else { w >= min_unsure };
+                                if !pass { continue; }
+
+                                let score_tri = vnum;
+                                let label = if score_tri >= yes_thr { "yes" } else if score_tri <= no_thr { "no" } else { "unsure" };
+                                let key = format!("score_{}", pid);
+                                let confidence = 0.5_f32;
+
+                                let result_json = json!({
+                                    "result": r.result,
+                                    "confidence": confidence,
+                                    "votes_true": if r.result { 1 } else { 0 },
+                                    "votes_false": if r.result { 0 } else { 1 },
+                                    "explanation": r.explanation,
+                                    "support": r.source,
+                                    "score": score_tri,
+                                    "label": label
+                                });
+
+                                if let Err(e) = sqlx::query(
+                                    "INSERT INTO pipeline_run_steps
+                                       (run_id, seq_no, step_id, prompt_id, prompt_type, is_final, final_key, result, confidence)
+                                     VALUES ($1,$2,$3,$4,'ScoringPrompt',true,$5,$6,$7)"
+                                )
+                                    .bind(run_id)
+                                    .bind(seq)
+                                    .bind("final-scoring")
+                                    .bind(pid)
+                                    .bind(&key)
+                                    .bind(&result_json)
+                                    .bind(confidence)
+                                    .execute(&pool)
+                                    .await
+                                {
+                                    warn!(%e, %run_id, seq, final_key=%key, "failed to insert final scoring (fallback)");
+                                }
+                                seq += 1;
+
+                                final_scores_map.insert(key, json!(score_tri));
+                                overall_inputs_tri.push((score_tri as f32, confidence));
+                                overall_inputs_bool.push((r.result, confidence));
                             }
                         }
 
-                        // 2c) Final-Decision je prompt_id
+                        // 2c) Final-Decision je prompt_id (unverändert)
                         {
                             use std::collections::BTreeMap;
 
@@ -593,78 +665,41 @@ async fn app_main() -> anyhow::Result<()> {
 
                                 if votes.is_empty() {
                                     if let Some(cons) = step.result.get("consolidated") {
-                                        let route = cons
-                                            .get("route")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("UNKNOWN");
+                                        let route = cons.get("route").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
                                         let norm = normalize_route(route);
                                         *agg.route_votes.entry(norm.clone()).or_default() += 1;
                                         if let Some(src) = cons.get("source") {
-                                            agg.support_by_route
-                                                .entry(norm.clone())
-                                                .or_default()
-                                                .push(src.clone());
+                                            agg.support_by_route.entry(norm.clone()).or_default().push(src.clone());
                                         }
-                                        if let Some(b) =
-                                            cons.get("boolean").and_then(|v| v.as_bool())
-                                        {
-                                            if b {
-                                                agg.yes_votes += 1;
-                                            } else {
-                                                agg.no_votes += 1;
-                                            }
+                                        if let Some(b) = cons.get("boolean").and_then(|v| v.as_bool()) {
+                                            if b { agg.yes_votes += 1; } else { agg.no_votes += 1; }
                                         } else if let Some(ans) = route_to_bool(&norm) {
-                                            if ans {
-                                                agg.yes_votes += 1;
-                                            } else {
-                                                agg.no_votes += 1;
-                                            }
+                                            if ans { agg.yes_votes += 1; } else { agg.no_votes += 1; }
                                         }
                                     }
                                     continue;
                                 }
 
                                 for vote in votes {
-                                    let route = vote
-                                        .get("route")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("UNKNOWN");
+                                    let route = vote.get("route").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
                                     let norm = normalize_route(route);
                                     *agg.route_votes.entry(norm.clone()).or_default() += 1;
 
                                     if let Some(src) = vote.get("source") {
-                                        agg.support_by_route
-                                            .entry(norm.clone())
-                                            .or_default()
-                                            .push(src.clone());
+                                        agg.support_by_route.entry(norm.clone()).or_default().push(src.clone());
                                     }
 
-                                    if let Some(val) = vote
-                                        .get("value")
-                                        .and_then(|v| v.get("explanation"))
-                                        .and_then(|x| x.as_str())
-                                    {
+                                    if let Some(val) = vote.get("value").and_then(|v| v.get("explanation")).and_then(|x| x.as_str()) {
                                         let trimmed = val.trim();
                                         if !trimmed.is_empty() {
-                                            agg.explanations_by_route
-                                                .entry(norm.clone())
-                                                .or_default()
-                                                .push(trimmed.to_string());
+                                            agg.explanations_by_route.entry(norm.clone()).or_default().push(trimmed.to_string());
                                         }
                                     }
 
                                     if let Some(b) = vote.get("boolean").and_then(|v| v.as_bool()) {
-                                        if b {
-                                            agg.yes_votes += 1;
-                                        } else {
-                                            agg.no_votes += 1;
-                                        }
+                                        if b { agg.yes_votes += 1; } else { agg.no_votes += 1; }
                                     } else if let Some(ans) = route_to_bool(&norm) {
-                                        if ans {
-                                            agg.yes_votes += 1;
-                                        } else {
-                                            agg.no_votes += 1;
-                                        }
+                                        if ans { agg.yes_votes += 1; } else { agg.no_votes += 1; }
                                     }
                                 }
                             }
@@ -680,42 +715,21 @@ async fn app_main() -> anyhow::Result<()> {
                                 let norm = normalize_route(&route);
                                 *agg.route_votes.entry(norm.clone()).or_default() += 1;
 
-                                if let Some(src) =
-                                    r.source.as_ref().and_then(|s| serde_json::to_value(s).ok())
-                                {
-                                    agg.support_by_route
-                                        .entry(norm.clone())
-                                        .or_default()
-                                        .push(src);
+                                if let Some(src) = r.source.as_ref().and_then(|s| serde_json::to_value(s).ok()) {
+                                    agg.support_by_route.entry(norm.clone()).or_default().push(src);
                                 }
 
-                                if let Some(val) = r
-                                    .value
-                                    .as_ref()
-                                    .and_then(|v| v.get("explanation"))
-                                    .and_then(|x| x.as_str())
-                                {
+                                if let Some(val) = r.value.as_ref().and_then(|v| v.get("explanation")).and_then(|x| x.as_str()) {
                                     let trimmed = val.trim();
                                     if !trimmed.is_empty() {
-                                        agg.explanations_by_route
-                                            .entry(norm.clone())
-                                            .or_default()
-                                            .push(trimmed.to_string());
+                                        agg.explanations_by_route.entry(norm.clone()).or_default().push(trimmed.to_string());
                                     }
                                 }
 
                                 if let Some(b) = r.boolean {
-                                    if b {
-                                        agg.yes_votes += 1;
-                                    } else {
-                                        agg.no_votes += 1;
-                                    }
+                                    if b { agg.yes_votes += 1; } else { agg.no_votes += 1; }
                                 } else if let Some(ans) = route_to_bool(&norm) {
-                                    if ans {
-                                        agg.yes_votes += 1;
-                                    } else {
-                                        agg.no_votes += 1;
-                                    }
+                                    if ans { agg.yes_votes += 1; } else { agg.no_votes += 1; }
                                 }
                             }
 
@@ -740,10 +754,8 @@ async fn app_main() -> anyhow::Result<()> {
                                     .unwrap_or_else(|| (String::from("UNKNOWN"), 0));
 
                                 let mut confidence = (best_cnt as f32) / (total_votes as f32);
-                                if !confidence.is_finite() {
-                                    confidence = 0.0;
-                                }
-                                confidence = confidence.clamp(0.0, 1.0);
+                                if !confidence.is_finite() { confidence = 0.0; }
+                                let confidence = confidence.clamp(0.0, 1.0);
 
                                 let answer = route_to_bool(&best_route);
 
@@ -788,24 +800,55 @@ async fn app_main() -> anyhow::Result<()> {
                                     warn!(%e, %run_id, seq, final_key=%key, "failed to insert final decision");
                                 }
                                 seq += 1;
+
+                                // Für pipeline_runs sammeln
+                                final_decisions_map.insert(key.clone(), json!(answer.unwrap_or(false)));
                             }
                         }
-                        // 3) Overall Score (nur Zahl auf Run-Ebene)
-                        let overall = runner::compute_overall_score(&overall_inputs);
+
+                        // 3) Overall Score (Zahl auf Run-Ebene)
+                        //    Tri-State bevorzugen (Normierung (score+1)/2), Gewicht = Konsolidierungs-Confidence.
+                        let overall: f32 = if !overall_inputs_tri.is_empty() {
+                            let mut sum_w = 0.0f32;
+                            let mut sum_v = 0.0f32;
+                            for (tri, w) in &overall_inputs_tri {
+                                let norm = ((*tri).clamp(-1.0, 1.0) + 1.0) / 2.0; // 0..1
+                                let ww = (*w).clamp(0.0, 1.0);
+                                sum_v += norm * ww;
+                                sum_w += ww;
+                            }
+                            if sum_w > 0.0 { (sum_v / sum_w).clamp(0.0, 1.0) } else { 0.0 }
+                        } else {
+                            runner::compute_overall_score(&overall_inputs_bool)
+                        };
+
+                        // 3b) pipeline_runs updaten (inkl. final_* Maps)
+                        let final_extraction_v = if final_extraction_map.is_empty() { Value::Null } else { Value::Object(final_extraction_map.clone()) };
+                        let final_scores_v     = if final_scores_map.is_empty()     { Value::Null } else { Value::Object(final_scores_map.clone()) };
+                        let final_decisions_v  = if final_decisions_map.is_empty()  { Value::Null } else { Value::Object(final_decisions_map.clone()) };
+
                         if let Err(e) = sqlx::query(
                             "UPDATE pipeline_runs
-                               SET finished_at = now(), status='finished', overall_score = $2
+                               SET finished_at = now(),
+                                   status = 'finished',
+                                   overall_score = $2,
+                                   final_extraction = COALESCE($3, final_extraction),
+                                   final_scores     = COALESCE($4, final_scores),
+                                   final_decisions  = COALESCE($5, final_decisions)
                              WHERE id = $1",
                         )
-                        .bind(run_id)
-                        .bind(overall)
-                        .execute(&pool)
-                        .await
+                            .bind(run_id)
+                            .bind(overall)
+                            .bind(final_extraction_v)
+                            .bind(final_scores_v)
+                            .bind(final_decisions_v)
+                            .execute(&pool)
+                            .await
                         {
                             warn!(%e, %run_id, "failed to finalize pipeline_run row");
                         }
 
-                        // 4) Event für UI/Monitoring – mit run_id
+                        // 4) Event für UI/Monitoring – mit run_id (Struktur unverändert; UIs nutzen Steps/Logs)
                         let result = PipelineRunResult {
                             run_id: Some(run_id),
                             pdf_id: evt.pdf_id,
@@ -820,6 +863,8 @@ async fn app_main() -> anyhow::Result<()> {
 
                         if let Ok(mut result_json) = serde_json::to_value(&result) {
                             result_json["run_id"] = json!(run_id.to_string());
+                            // (Optional) Es wäre möglich, hier final_scores/final_decisions einzublenden,
+                            // aber die History-/UI-Endpunkte ziehen sie bereits aus der DB.
                             if let Ok(payload) = serde_json::to_string(&result_json) {
                                 let _ = producer
                                     .send(

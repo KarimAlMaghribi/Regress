@@ -33,8 +33,8 @@ interface RunStep {
   attempts?: Attempt[];
 }
 interface RunCore {
-  final_scores?: Record<string, number>;
-  final_decisions?: Record<string, boolean>;
+  final_scores?: Record<string, number>;         // Weights
+  final_decisions?: Record<string, boolean>;     // Ergebnisse true/false (legacy)
   overall_score?: number | null;
 }
 export interface RunDetail {
@@ -46,11 +46,13 @@ export interface RunDetail {
 function pickFinalForSlug(detail: RunDetail, slug: string) {
   const step =
       detail.steps.find(
-          (s) => s.step_type === "Score" && (s.final_key === slug || s.definition?.json_key === slug)
+          (s) =>
+              s.step_type === "Score" &&
+              (s.final_key === slug || s.definition?.json_key === slug)
       ) ?? null;
 
   const result =
-      (detail.run.final_decisions && slug in (detail.run.final_decisions ?? {}))
+      detail.run.final_decisions && slug in (detail.run.final_decisions ?? {})
           ? !!detail.run.final_decisions![slug]
           : !!step?.final_value;
 

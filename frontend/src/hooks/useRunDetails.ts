@@ -4,15 +4,24 @@ import * as React from "react";
 
 export type StepType = "Extraction" | "Decision" | "Score";
 
+// Tri-State Labels
+export type TernaryLabel = "yes" | "no" | "unsure";
+
 export interface Attempt {
   id?: number | string;
   attempt_no?: number;
   candidate_key?: string;
+
   // Für die UI: Seite sowohl flach (.page) als auch unter .source.page anbieten
   candidate_value?:
       | { value: any; page?: number; source?: { page?: number; quote?: string } }
       | any;
-  candidate_confidence?: number | null;
+
+  // Für Tri-State: die KI liefert je Chunk/Page strukturierte Felder
+  vote?: TernaryLabel;                 // "yes" | "no" | "unsure"
+  strength?: number | null;            // 0..1 (Evidenzstärke)
+  candidate_confidence?: number | null; // 0..1 (Antwortsicherheit)
+
   source?: string | null;
   is_final?: boolean;
 }
@@ -32,11 +41,15 @@ export interface RunStep {
   definition?: { json_key?: string } | null;
 
   final_key?: string | null;
-  final_value?: any;
-  final_confidence?: number | null;
+  final_value?: any;                 // Backwards-compat (bool bei Score/Decision)
+  final_confidence?: number | null;  // 0..1
+
+  // Neu: Tri-State konsolidiert (falls vorhanden)
+  final_score_label?: TernaryLabel | null; // yes/no/unsure
+  // Hinweis: der numerische Score (−1..+1) liegt in run.final_scores[final_key!]
+
   started_at?: string | null;
   finished_at?: string | null;
-
   attempts?: Attempt[];
 }
 
@@ -47,12 +60,21 @@ export interface RunCore {
   status?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
-  overall_score?: number | null;
+  overall_score?: number | null; // 0..1 (Anzeige)
+
   error?: string | null;
 
   final_extraction?: Record<string, any>;
   final_decisions?: Record<string, boolean>;
+  /**
+   * Achtung:
+   * - alte Runs: 1/0 (bool)
+   * - neue Runs (Tri‑State): −1..+1
+   */
   final_scores?: Record<string, number>;
+
+  // optional: Label-Map falls Backend sie irgendwann mitsendet (keine Pflicht)
+  final_score_labels?: Record<string, TernaryLabel>;
 }
 
 export interface RunDetail {
@@ -184,7 +206,7 @@ export function useRunDetails(
     };
   }, [runId, opts?.pdfId, opts?.storageKey]);
 
-  // Summe der Scores (für die Seitenkarte)
+  // Summe der Scores (nur als Info-Zeile; Tri-State wird nicht normalisiert)
   const scoreSum = React.useMemo(() => {
     if (!data?.run?.final_scores) return 0;
     return Object.values(data.run.final_scores).reduce(
@@ -237,6 +259,11 @@ function clamp01(n: number) {
   return Math.max(0, Math.min(1, n));
 }
 
+function clamp(n: number, lo: number, hi: number) {
+  if (!Number.isFinite(n)) return lo;
+  return Math.max(lo, Math.min(hi, n));
+}
+
 function hashId(s: string, salt: number) {
   let h = 2166136261 ^ salt;
   for (let i = 0; i < s.length; i++) {
@@ -279,8 +306,7 @@ function toBoolLoose(v: any): boolean | undefined {
 
 // leerer Kandidat?
 function isEmptyCandidateValue(val: any): boolean {
-  const raw =
-      val && typeof val === "object" && "value" in val ? (val as any).value : val;
+  const raw = val && typeof val === "object" && "value" in val ? (val as any).value : val;
   if (raw == null) return true;
   if (typeof raw === "string" && raw.trim() === "") return true;
   return false;
@@ -298,8 +324,7 @@ type VoteBucket = {
 function isJunkValue(raw: any, finalKey?: string): boolean {
   if (raw == null) return true;
   if (typeof raw === "object") {
-    if (typeof (raw as any).value !== "undefined")
-      return isJunkValue((raw as any).value, finalKey);
+    if (typeof (raw as any).value !== "undefined") return isJunkValue((raw as any).value, finalKey);
     return false;
   }
   const s = String(raw).trim();
@@ -330,19 +355,17 @@ function consolidateExtractionFromAttempts(attempts: Attempt[], key: string) {
   };
 
   for (const a of attempts) {
-    const raw =
-        a?.candidate_value &&
-        typeof a.candidate_value === "object" &&
-        "value" in a.candidate_value
-            ? (a.candidate_value as any).value
-            : a?.candidate_value;
+    const raw = a?.candidate_value && typeof a.candidate_value === "object" && "value" in a.candidate_value
+        ? (a.candidate_value as any).value
+        : a?.candidate_value;
     if (isJunkValue(raw, key)) continue;
 
     const s = String(raw);
     const nk = norm(s);
     const q = qualityOf(s, key);
     const b =
-        buckets.get(nk) ?? {
+        buckets.get(nk) ??
+        {
           normKey: nk,
           prettyValues: [],
           votes: 0,
@@ -364,11 +387,8 @@ function consolidateExtractionFromAttempts(attempts: Attempt[], key: string) {
 
   const totalVotes = valid.reduce((acc, b) => acc + b.votes, 0);
   const base = (top.votes + 0.5) / (totalVotes + 1);
-  const margin = second
-      ? Math.max(0, (top.votes - second.votes) / Math.max(1, totalVotes))
-      : 1;
-  const conf =
-      clamp01(base * 0.8 + margin * 0.2) * 0.8 + clamp01(top.quality) * 0.2;
+  const margin = second ? Math.max(0, (top.votes - second.votes) / Math.max(1, totalVotes)) : 1;
+  const conf = clamp01(base * 0.8 + margin * 0.2) * 0.8 + clamp01(top.quality) * 0.2;
 
   const pretty = (() => {
     const digits = top.normKey.replace(/\D+/g, "");
@@ -401,13 +421,15 @@ function toRunDetail(payload: any): RunDetail {
     final_extraction: {},
     final_decisions: {},
     final_scores: payload?.final_scores ?? payload?.run?.final_scores ?? {},
+    final_score_labels: payload?.final_score_labels ?? payload?.run?.final_score_labels ?? undefined,
   };
 
-  // Boolean -> number Normalisierung für final_scores (falls Backend bools liefert)
+  // Boolean -> number Normalisierung (alte Runs)
   if (runCore.final_scores) {
     for (const k of Object.keys(runCore.final_scores)) {
       const v = (runCore.final_scores as any)[k];
       if (typeof v === "boolean") {
+        // Alt: bool → 1/0
         (runCore.final_scores as any)[k] = v ? 1 : 0;
       }
     }
@@ -440,7 +462,7 @@ function toRunDetail(payload: any): RunDetail {
           const pnos: number[] = Array.isArray(bat[i]?.pages) ? bat[i].pages : [];
           const page =
               Number.isFinite(pnos?.[0])
-                  ? ((pnos[0] as number) + 1)
+                  ? (pnos[0] as number) + 1
                   : typeof r?.source?.page === "number" && r.source.page > 0
                       ? r.source.page
                       : undefined;
@@ -472,11 +494,10 @@ function toRunDetail(payload: any): RunDetail {
         };
         attempts.forEach((a) => {
           const val = a?.candidate_value?.value ?? a?.candidate_value;
-          a.is_final =
-              winnerNorm != null && !isJunkValue(val, keySlug) && norm(String(val)) === winnerNorm;
+          a.is_final = winnerNorm != null && !isJunkValue(val, keySlug) && norm(String(val)) === winnerNorm;
         });
 
-        // <-- WICHTIG: finale Extraktion inkl. confidence speichern
+        // Finale Extraktion inkl. confidence speichern (Key = json_key/decision_key)
         runCore.final_extraction![keySlug] = { value: final_value, confidence: final_confidence };
 
         orderCounter++;
@@ -484,7 +505,7 @@ function toRunDetail(payload: any): RunDetail {
           id: hashId(keySlug, orderCounter),
           step_type: "Extraction",
           status: "finalized",
-          order_index: entry?.seq_no ?? (orderCounter - 1),
+          order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
           final_key: keySlug,
           final_value,
@@ -503,62 +524,111 @@ function toRunDetail(payload: any): RunDetail {
           const pnos: number[] = Array.isArray(bat[i]?.pages) ? bat[i].pages : [];
           const page = Number.isFinite(pnos?.[0]) ? (pnos[0] as number) + 1 : undefined;
           const quote = r?.explanation ?? entry?.result?.prompt_text ?? "(ohne Kontext)";
-          const val = !!r?.result;
+
+          // Tri‑State Felder
+          const rawVote: string | undefined = (r?.vote ?? r?.value?.vote)?.toString()?.toLowerCase();
+          const vote: TernaryLabel | undefined =
+              rawVote === "yes" ? "yes" : rawVote === "no" ? "no" : rawVote === "unsure" ? "unsure" : undefined;
+
+          const strength = typeof r?.strength === "number" ? r.strength : null;
+          const conf = typeof r?.confidence === "number" ? r.confidence : null;
+
+          // Backward‑Compat: bool (falls es keinen vote gibt)
+          const boolVal =
+              typeof r?.result === "boolean"
+                  ? r.result
+                  : typeof r?.value?.result === "boolean"
+                      ? r.value.result
+                      : undefined;
+
+          const valueForCard = vote ?? (typeof boolVal === "boolean" ? (boolVal ? "yes" : "no") : undefined);
+
           return {
             id: `${keySlug}:${i + 1}`,
             attempt_no: i + 1,
             candidate_key: quote,
-            candidate_value: page != null ? { value: val, page, source: { page, quote } } : val,
-            candidate_confidence: null,
+            candidate_value:
+                page != null
+                    ? { value: valueForCard, page, source: { page, quote } }
+                    : { value: valueForCard, source: { quote } },
+            vote,
+            strength,
+            candidate_confidence: conf,
             source: "llm",
             is_final: false,
           };
         });
 
-        // Nur echte boolesche Kandidaten behalten
-        const attempts = attemptsRaw.filter((a) => {
-          const v =
-              typeof a.candidate_value === "object"
-                  ? (a.candidate_value as any)?.value
-                  : a.candidate_value;
-          return typeof v === "boolean";
-        });
+        // Keine Filterung mehr auf reine Booleans → Tri‑State bleibt sichtbar
+        const attempts = attemptsRaw;
 
+        // Konsolidiert: bevorzugt Tri‑State vom Modell; sonst Boolean-Mehrheit wie bisher
+        const cons = entry?.result?.consolidated ?? {};
+        const consScore =
+            typeof cons?.score === "number" ? clamp(cons.score, -1, 1) : undefined;
+        const consLabelRaw = typeof cons?.label === "string" ? cons.label.toLowerCase() : undefined;
+        const consLabel: TernaryLabel | undefined =
+            consLabelRaw === "yes" ? "yes" : consLabelRaw === "no" ? "no" : consLabelRaw === "unsure" ? "unsure" : undefined;
+        const consConf = typeof cons?.confidence === "number" ? cons.confidence : undefined;
+
+        // Fallbacks aus Attempts (Mehrheit/Heuristik), falls keine Tri‑State-Konsolidierung vorhanden
         let t = 0, f = 0;
         attempts.forEach((a) => {
-          const v =
-              typeof a.candidate_value === "object"
-                  ? !!(a.candidate_value as any).value
-                  : !!a.candidate_value;
-          v ? t++ : f++;
+          const vv = (a.vote ?? "").toString().toLowerCase();
+          if (vv === "yes") t++;
+          else if (vv === "no") f++;
+          else {
+            // kein vote → evtl. bool?
+            const raw =
+                typeof a.candidate_value === "object"
+                    ? (a.candidate_value as any)?.value
+                    : a.candidate_value;
+            const b = toBoolLoose(raw);
+            if (b === true) t++;
+            if (b === false) f++;
+          }
         });
         const total = t + f;
-        const consolidated =
-            typeof entry?.result?.consolidated?.result === "boolean"
-                ? entry.result.consolidated.result
-                : t >= f;
-        const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
+        const majBool = t >= f;
+        const majConfidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
+
+        // Finales Label/Score/Confidence
+        const finalScore = typeof consScore === "number" ? consScore : majBool ? 1 : -1;
+        const finalLabel: TernaryLabel =
+            consLabel ?? (finalScore >= 0.6 ? "yes" : finalScore <= -0.6 ? "no" : "unsure");
+        const finalConfidence = typeof consConf === "number" ? consConf : majConfidence;
+
+        // Attempts markieren (Final)
         attempts.forEach((a) => {
-          const v =
-              typeof a.candidate_value === "object"
-                  ? !!(a.candidate_value as any).value
-                  : !!a.candidate_value;
-          a.is_final = v === consolidated;
+          if (a.vote) {
+            a.is_final = a.vote === finalLabel;
+          } else {
+            const v =
+                typeof a.candidate_value === "object"
+                    ? (a.candidate_value as any)?.value
+                    : a.candidate_value;
+            const b = toBoolLoose(v);
+            a.is_final = typeof b === "boolean" ? (finalLabel === "yes" ? b === true : finalLabel === "no" ? b === false : false) : false;
+          }
         });
 
-        // <-- WICHTIG: Score in final_scores (1/0), NICHT als Decision
-        runCore.final_scores![keySlug] = consolidated ? 1 : 0;
+        // Backend-Map (−1..+1) eintragen; Falls alter Bool → +1/−1, alte Booleans (true/false) bleiben 1/0 in historischen Runs
+        runCore.final_scores![keySlug] = finalScore;
+        // optional Label-Map (falls im Frontend benutzt)
+        (runCore.final_score_labels ??= {})[keySlug] = finalLabel;
 
         orderCounter++;
         steps.push({
           id: hashId(keySlug, orderCounter),
           step_type: "Score",
           status: "finalized",
-          order_index: entry?.seq_no ?? (orderCounter - 1),
+          order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
           final_key: keySlug,
-          final_value: consolidated,
-          final_confidence: confidence,
+          // Backwards-Compat: final_value bleibt boolean (für ältere Karten)
+          final_value: finalLabel === "yes" ? true : finalLabel === "no" ? false : undefined,
+          final_confidence: finalConfidence,
+          final_score_label: finalLabel,
           started_at: payload?.started_at ?? null,
           finished_at: payload?.finished_at ?? null,
           attempts,
@@ -575,14 +645,12 @@ function toRunDetail(payload: any): RunDetail {
           const pnos: number[] = Array.isArray(bat[i]?.pages) ? bat[i].pages : [];
           const page =
               Number.isFinite(pnos?.[0])
-                  ? ((pnos[0] as number) + 1)
+                  ? (pnos[0] as number) + 1
                   : typeof r?.source?.page === "number" && r.source.page > 0
                       ? r.source.page
                       : undefined;
           const rawBool =
-              typeof r?.boolean === "boolean"
-                  ? r.boolean
-                  : toBoolLoose(r?.value) ?? toBoolLoose(r?.route);
+              typeof r?.boolean === "boolean" ? r.boolean : toBoolLoose(r?.value) ?? toBoolLoose(r?.route);
           const key =
               r?.source?.quote ?? r?.prompt_text ?? entry?.result?.prompt_text ?? "(ohne Kontext)";
           return {
@@ -590,9 +658,7 @@ function toRunDetail(payload: any): RunDetail {
             attempt_no: i + 1,
             candidate_key: key,
             candidate_value:
-                page != null
-                    ? { value: rawBool, page, source: { page, quote: key } }
-                    : rawBool,
+                page != null ? { value: rawBool, page, source: { page, quote: key } } : rawBool,
             candidate_confidence: null,
             source: r?.route ?? "llm",
             is_final: false,
@@ -601,29 +667,21 @@ function toRunDetail(payload: any): RunDetail {
 
         // Nur boolesche Kandidaten behalten
         const attempts = attemptsRaw.filter((a) => {
-          const v =
-              typeof a.candidate_value === "object"
-                  ? (a.candidate_value as any)?.value
-                  : a.candidate_value;
+          const v = typeof a.candidate_value === "object" ? (a.candidate_value as any)?.value : a.candidate_value;
           return typeof v === "boolean";
         });
 
-        let t = 0, f = 0;
+        let t = 0,
+            f = 0;
         attempts.forEach((a) => {
-          const v =
-              typeof a.candidate_value === "object"
-                  ? !!(a.candidate_value as any).value
-                  : !!a.candidate_value;
+          const v = typeof a.candidate_value === "object" ? !!(a.candidate_value as any).value : !!a.candidate_value;
           v ? t++ : f++;
         });
         const total = t + f;
         const consolidated = t >= f;
         const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
         attempts.forEach((a) => {
-          const v =
-              typeof a.candidate_value === "object"
-                  ? !!(a.candidate_value as any).value
-                  : !!a.candidate_value;
+          const v = typeof a.candidate_value === "object" ? !!(a.candidate_value as any).value : !!a.candidate_value;
           a.is_final = v === consolidated;
         });
 
@@ -634,7 +692,7 @@ function toRunDetail(payload: any): RunDetail {
           id: hashId(keySlug, orderCounter),
           step_type: "Decision",
           status: "finalized",
-          order_index: entry?.seq_no ?? (orderCounter - 1),
+          order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
           final_key: keySlug,
           final_value: consolidated,
@@ -658,7 +716,7 @@ function toRunDetail(payload: any): RunDetail {
       orderCounter++;
       const { final_value, final_confidence, attempts } = consolidateExtractionGroup(items, keySlug);
 
-      // <-- Finale Extraktion inkl. confidence
+      // Finale Extraktion inkl. confidence
       runCore.final_extraction![keySlug] = { value: final_value, confidence: final_confidence };
 
       steps.push({
@@ -704,7 +762,7 @@ function toRunDetail(payload: any): RunDetail {
       }
     }
 
-    // Score
+    // Score (Fallback: Bool-Mehrheit)
     const scoringArr: any[] = Array.isArray(payload?.scoring) ? payload.scoring : [];
     for (const s of scoringArr) {
       const keySlug = slug(s?.prompt_text ?? "scoring");
@@ -720,15 +778,15 @@ function toRunDetail(payload: any): RunDetail {
       }));
       const attempts = attemptsRaw.filter((a) => typeof a.candidate_value === "boolean");
 
-      let t = 0, f = 0;
+      let t = 0,
+          f = 0;
       attempts.forEach((a) => (a.candidate_value ? t++ : f++));
       const total = t + f;
-      const consolidated =
-          typeof s?.consolidated?.result === "boolean" ? s.consolidated.result : t >= f;
+      const consolidated = typeof s?.consolidated?.result === "boolean" ? s.consolidated.result : t >= f;
       const confidence = total > 0 ? (Math.max(t, f) + 0.5) / (total + 1) : 0;
       attempts.forEach((a) => (a.is_final = a.candidate_value === consolidated));
 
-      // <-- WICHTIG: Score in final_scores (1/0), NICHT als Decision
+      // Fallback: 1/0
       runCore.final_scores![keySlug] = consolidated ? 1 : 0;
 
       orderCounter++;
@@ -761,27 +819,15 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
     attemptNo++;
     const parsed = tryParseOpenAiRaw(r?.openai_raw);
 
-    const runnerPage =
-        r?.source && typeof r.source.page === "number" && r.source.page > 0
-            ? r.source.page
-            : undefined;
-    const rawPage =
-        parsed?.source && typeof parsed.source.page === "number" && parsed.source.page > 0
-            ? parsed.source.page
-            : undefined;
+    const runnerPage = r?.source && typeof r.source.page === "number" && r.source.page > 0 ? r.source.page : undefined;
+    const rawPage = parsed?.source && typeof parsed.source.page === "number" && parsed.source.page > 0 ? parsed.source.page : undefined;
 
     const page = runnerPage ?? rawPage;
     const quote =
-        (r?.source && r.source.quote) ||
-        (parsed?.source && parsed.source.quote) ||
-        r?.prompt_text ||
-        "(ohne Kontext)";
+        (r?.source && r.source.quote) || (parsed?.source && parsed.source.quote) || r?.prompt_text || "(ohne Kontext)";
 
     const value = (typeof parsed?.value !== "undefined" ? parsed.value : r?.value) ?? null;
-    const cv =
-        page != null
-            ? { value, page, source: { page, quote } }
-            : { value, source: { quote } };
+    const cv = page != null ? { value, page, source: { page, quote } } : { value, source: { quote } };
 
     attemptsRaw.push({
       id: r?.id ?? `${finalKey}:${attemptNo}`,
@@ -797,10 +843,7 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
   // Kandidaten mit leerem Value ausblenden
   const attempts = attemptsRaw.filter((a) => !isEmptyCandidateValue(a.candidate_value));
 
-  const { final_value, final_confidence, winnerNorm } = consolidateExtractionFromAttempts(
-      attempts,
-      finalKey
-  );
+  const { final_value, final_confidence, winnerNorm } = consolidateExtractionFromAttempts(attempts, finalKey);
 
   const norm = (v: string) => {
     const d = ONLY_DIGITS(v);
@@ -808,8 +851,7 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
   };
   attempts.forEach((a) => {
     const val = a?.candidate_value?.value ?? a?.candidate_value;
-    a.is_final =
-        winnerNorm != null && !isJunkValue(val, finalKey) && norm(String(val)) === winnerNorm;
+    a.is_final = winnerNorm != null && !isJunkValue(val, finalKey) && norm(String(val)) === winnerNorm;
   });
 
   return { final_value, final_confidence, attempts };
@@ -817,7 +859,9 @@ function consolidateExtractionGroup(records: any[], finalKey: string) {
 
 function consolidateDecisionGroup(items: any[], keySlug: string) {
   const attemptsRaw: Attempt[] = [];
-  let t = 0, f = 0, idx = 0;
+  let t = 0,
+      f = 0,
+      idx = 0;
 
   for (const r of items) {
     idx++;

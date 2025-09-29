@@ -1,4 +1,3 @@
-// src/pages/RunDetailsPage.tsx
 import * as React from "react";
 import {useMemo} from "react";
 import {useParams, useSearchParams} from "react-router-dom";
@@ -42,12 +41,13 @@ import AltRouteIcon from "@mui/icons-material/AltRoute"; // Entscheidung
 import AssessmentIcon from "@mui/icons-material/Assessment"; // Übersicht
 import CloseIcon from "@mui/icons-material/Close";
 
-import {type RunDetail, type RunStep, useRunDetails} from "../hooks/useRunDetails";
+import {type RunDetail, type RunStep, type TernaryLabel, useRunDetails} from "../hooks/useRunDetails";
 import {computeWeightedScore, ScoringWeightsCard} from "../components/ScoringWeightsCard";
 import PdfViewer from "../components/PdfViewer";
 
 /* ===== Helfer ===== */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
+const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 const fmtNum = (n: number) => Intl.NumberFormat(undefined, {maximumFractionDigits: 2}).format(n);
 
 function valOrObjValue(v: any) {
@@ -74,9 +74,21 @@ function resolvePdfUrl(raw?: string | null, pdfId?: number | null): string | und
   return undefined;
 }
 
+function normFromScore(score?: number | null): number | undefined {
+  if (typeof score !== "number") return undefined;
+  return clamp01((clamp(score, -1, 1) + 1) / 2);
+}
+
+function voteChip(v?: TernaryLabel) {
+  if (v === "yes")   return <Chip size="small" color="success" label="🟢 Ja" />;
+  if (v === "no")    return <Chip size="small" color="error"   label="🔴 Nein" />;
+  if (v === "unsure")return <Chip size="small"                 label="⚪ Unsicher" />;
+  return <Chip size="small" variant="outlined" label="—" />;
+}
+
 /* ===== kleine UI-Bausteine ===== */
 
-function StatusChip({status}: { status?: string | null }) {
+function StatusChip({status}: {status?: string | null }) {
   const map: Record<string, {
     color: "default" | "success" | "error" | "warning" | "info";
     icon: React.ReactNode;
@@ -247,11 +259,15 @@ function EvidenceModal({
                       </TableHead>
                       <TableBody>
                         {byPage.scoring.map((r, i) => {
-                          const v = asBool(r.attempt.candidate_value);
+                          const vote: TernaryLabel | undefined = r?.attempt?.vote
+                              ?? (typeof r?.attempt?.candidate_value?.value === "string"
+                                  ? r.attempt.candidate_value.value
+                                  : undefined);
+                          const chip = voteChip(vote);
                           return (
                               <TableRow key={i} hover>
                                 <TableCell>{r.step.final_key ?? r.step.definition?.json_key ?? "—"}</TableCell>
-                                <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
+                                <TableCell>{chip}</TableCell>
                                 <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
                               </TableRow>
                           );
@@ -375,7 +391,7 @@ export default function RunDetailsPage() {
           <ExtractionCard detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
           {/* Gewichte/aggregierter Score (optional, rendert evtl. nichts wenn keine Gewichte/FinalScores) */}
           <ScoringWeightsCard detail={data} onOpenEvidence={openEvidence}/>
-          {/* NEU: Immer als Fallback anzeigen, sobald Score-Steps existieren */}
+          {/* Immer als Fallback anzeigen, sobald Score-Steps existieren */}
           <ScoreBreakdownCard detail={data} onOpenEvidence={openEvidence}/>
           <DecisionVotesCard detail={data} onOpenEvidence={openEvidence}/>
           <StepsWithAttempts detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
@@ -430,14 +446,33 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
   const decKeys   = Object.keys(run.final_decisions ?? {});
   const scKeys    = Object.keys(run.final_scores ?? {});
 
+  // 1) Versuche weiterhin computeWeightedScore zu nutzen (falls im Projekt bereits erweitert)
   const weighted = scKeys.length > 0 ? computeWeightedScore(detail) : null;
 
+  // 2) Tri‑State‑Fallback: falls irgendein Score <0 oder >1 → (−1..+1) → 0..1 normalisieren
+  const hasTri = scKeys.some(k => {
+    const v = run.final_scores?.[k];
+    return typeof v === "number" && (v < 0 || v > 1);
+  });
+
+  const triAvg = React.useMemo(() => {
+    if (!hasTri) return null;
+    const vals = scKeys
+    .map(k => run.final_scores?.[k])
+    .filter((v): v is number => typeof v === "number");
+    if (!vals.length) return null;
+    const mean = vals.reduce((a, b) => a + b, 0) / vals.length;
+    return normFromScore(mean) ?? null;
+  }, [hasTri, scKeys.join("|"), run.final_scores]);
+
   const rawScore =
-      typeof weighted === "number"
-          ? weighted
-          : typeof run.overall_score === "number"
-              ? run.overall_score
-              : null;
+      triAvg != null
+          ? triAvg
+          : typeof weighted === "number"
+              ? weighted
+              : typeof run.overall_score === "number"
+                  ? run.overall_score
+                  : null;
 
   const scoreValue = rawScore != null ? clamp01(rawScore) : null;
 
@@ -467,7 +502,9 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
 
             <Row label="Extrakte">🧩 {finalKeys.length} Felder</Row>
             <Row label="Entscheidungen">⚖️ {decKeys.length} Einträge</Row>
-            <Row label="Score-Regeln">🟢 {scKeys.length} Regeln • Summe: {fmtNum(scoreSum)}</Row>
+            <Row label="Score-Regeln">
+              🟢 {scKeys.length} Regeln • Summe: {fmtNum(scoreSum)} {hasTri && <Typography component="span" variant="caption" color="text.secondary"> (Tri‑State Σ)</Typography>}
+            </Row>
 
             <Divider sx={{ my: 1 }} />
 
@@ -553,54 +590,80 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
   const scoreSteps = (detail.steps ?? []).filter(s => s.step_type === "Score");
   if (!scoreSteps.length) return null;
 
+  const scoreByKey: Record<string, number | undefined> = detail.run.final_scores ?? {};
+
   return (
       <Card variant="outlined">
         <CardHeader title="Bewertungs-Details" subheader="Alle Regeln, Stimmen & Evidenzen" />
         <CardContent>
           <Stack spacing={2}>
-            {scoreSteps.map((s, idx) => (
-                <Box key={s.id}>
-                  <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                    <RuleIcon sx={{color: (s.final_value ? "success.main" : "error.main")}} fontSize="small"/>
-                    <Typography variant="subtitle2">
-                      {s.final_key ?? `Regel ${idx + 1}`} · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
-                    </Typography>
-                    <Box sx={{flex: 1}}/>
-                    <ConfidenceBar value={s.final_confidence}/>
-                  </Stack>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell width={56}>#</TableCell>
-                        <TableCell>Erklärung</TableCell>
-                        <TableCell width={120}>Stimme</TableCell>
-                        <TableCell width={120}>Evidenz</TableCell>
-                        <TableCell width={90}>Final</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {(s.attempts ?? []).map((a, i) => {
-                        const v = asBool(a.candidate_value);
-                        const page = getAttemptPage(a);
-                        return (
-                            <TableRow key={a.id ?? i} hover>
-                              <TableCell>{a.attempt_no ?? i + 1}</TableCell>
-                              <TableCell>{a.candidate_key ?? "—"}</TableCell>
-                              <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
-                              <TableCell>
-                                {page
-                                    ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
-                                            onClick={() => onOpenEvidence(page)} clickable/>
-                                    : "—"}
-                              </TableCell>
-                              <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
-                            </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </Box>
-            ))}
+            {scoreSteps.map((s, idx) => {
+              const rawScore = typeof s.final_key === "string" ? scoreByKey[s.final_key] : undefined;
+              const norm = normFromScore(rawScore);
+              const lbl = s.final_score_label as TernaryLabel | undefined;
+
+              return (
+                  <Box key={s.id}>
+                    <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
+                      <RuleIcon sx={{color: (lbl === "yes" ? "success.main" : lbl === "no" ? "error.main" : "text.secondary")}} fontSize="small"/>
+                      <Typography variant="subtitle2">
+                        {s.final_key ?? `Regel ${idx + 1}`} · Ergebnis:&nbsp;
+                        {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
+                      </Typography>
+                      <Box sx={{flex: 1}}/>
+                      {/* Zeige Tri‑State‑Score als Balken (−1..+1 → 0..1), falls vorhanden */}
+                      {typeof norm === "number" ? (
+                          <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 200 }}>
+                            <LinearProgress variant="determinate" value={norm * 100}/>
+                            <Typography variant="caption" sx={{width: 40, textAlign: "right"}}>{fmtNum(norm)}</Typography>
+                          </Stack>
+                      ) : (
+                          <ConfidenceBar value={s.final_confidence}/>
+                      )}
+                    </Stack>
+
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell width={56}>#</TableCell>
+                          <TableCell>Erklärung</TableCell>
+                          <TableCell width={120}>Stimme</TableCell>
+                          <TableCell width={120}>Evidenz</TableCell>
+                          <TableCell width={90}>Final</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {(s.attempts ?? []).map((a, i) => {
+                          const page = getAttemptPage(a);
+                          const vote: TernaryLabel | undefined = a.vote
+                              ?? (typeof a?.candidate_value?.value === "string" ? a.candidate_value.value : undefined);
+                          const chip = voteChip(vote);
+
+                          // Backwards-Compat (falls nur bool vorhanden)
+                          const vb = vote ? undefined : asBool(a.candidate_value);
+
+                          return (
+                              <TableRow key={a.id ?? i} hover>
+                                <TableCell>{a.attempt_no ?? i + 1}</TableCell>
+                                <TableCell>{a.candidate_key ?? "—"}</TableCell>
+                                <TableCell>
+                                  {vote ? chip : (typeof vb === "boolean" ? (vb ? "✅ Ja" : "❌ Nein") : "—")}
+                                </TableCell>
+                                <TableCell>
+                                  {page
+                                      ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
+                                              onClick={() => onOpenEvidence(page)} clickable/>
+                                      : "—"}
+                                </TableCell>
+                                <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
+                              </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </Box>
+              );
+            })}
           </Stack>
         </CardContent>
       </Card>
@@ -718,7 +781,13 @@ function StepsWithAttempts({
                 <AccordionDetails>
                   <Stack spacing={1} sx={{mb: 1}}>
                     <Row label="Finaler Schlüssel"><Chip size="small" label={s.final_key ?? "—"}/></Row>
-                    <Row label="Finaler Wert"><Typography variant="body2">{formatValue(s.final_value)}</Typography></Row>
+                    <Row label="Finaler Wert">
+                      <Typography variant="body2">
+                        {s.step_type === "Score" && s.final_score_label
+                            ? (voteChip(s.final_score_label) as any)
+                            : formatValue(s.final_value)}
+                      </Typography>
+                    </Row>
                     <Row label="Konfidenz"><ConfidenceBar value={s.final_confidence}/></Row>
                     <Row label="Zeit">
                       <Typography variant="body2">{s.started_at ?? "—"} → {s.finished_at ?? "—"}</Typography>
@@ -741,12 +810,16 @@ function StepsWithAttempts({
                       ?.filter(hasValue)
                       .map((a: any, i: number) => {
                         const page = getAttemptPage(a);
-                        const display = formatValue(a?.candidate_value);
+                        const vote: TernaryLabel | undefined = a.vote
+                            ?? (typeof a?.candidate_value?.value === "string" ? a.candidate_value.value : undefined);
+                        const display = vote ? undefined : formatValue(a?.candidate_value);
                         return (
                             <TableRow key={a.id ?? i} hover>
                               <TableCell>{a.attempt_no ?? i + 1}</TableCell>
                               <TableCell>{a.candidate_key ?? "—"}</TableCell>
-                              <TableCell><Typography variant="body2">{display}</Typography></TableCell>
+                              <TableCell>
+                                {vote ? voteChip(vote) : <Typography variant="body2">{display}</Typography>}
+                              </TableCell>
                               <TableCell>
                                 {page
                                     ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
