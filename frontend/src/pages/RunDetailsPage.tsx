@@ -373,7 +373,10 @@ export default function RunDetailsPage() {
         <Stack spacing={2}>
           <SummaryCard detail={data} scoreSum={scoreSum}/>
           <ExtractionCard detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
+          {/* Gewichte/aggregierter Score (optional, rendert evtl. nichts wenn keine Gewichte/FinalScores) */}
           <ScoringWeightsCard detail={data} onOpenEvidence={openEvidence}/>
+          {/* NEU: Immer als Fallback anzeigen, sobald Score-Steps existieren */}
+          <ScoreBreakdownCard detail={data} onOpenEvidence={openEvidence}/>
           <DecisionVotesCard detail={data} onOpenEvidence={openEvidence}/>
           <StepsWithAttempts detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
         </Stack>
@@ -538,6 +541,67 @@ function ExtractionCard({
               })}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+  );
+}
+
+function ScoreBreakdownCard({detail, onOpenEvidence}: {
+  detail: RunDetail;
+  onOpenEvidence: (page?: number) => void
+}) {
+  const scoreSteps = (detail.steps ?? []).filter(s => s.step_type === "Score");
+  if (!scoreSteps.length) return null;
+
+  return (
+      <Card variant="outlined">
+        <CardHeader title="Bewertungs-Details" subheader="Alle Regeln, Stimmen & Evidenzen" />
+        <CardContent>
+          <Stack spacing={2}>
+            {scoreSteps.map((s, idx) => (
+                <Box key={s.id}>
+                  <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
+                    <RuleIcon sx={{color: (s.final_value ? "success.main" : "error.main")}} fontSize="small"/>
+                    <Typography variant="subtitle2">
+                      {s.final_key ?? `Regel ${idx + 1}`} · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
+                    </Typography>
+                    <Box sx={{flex: 1}}/>
+                    <ConfidenceBar value={s.final_confidence}/>
+                  </Stack>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell width={56}>#</TableCell>
+                        <TableCell>Erklärung</TableCell>
+                        <TableCell width={120}>Stimme</TableCell>
+                        <TableCell width={120}>Evidenz</TableCell>
+                        <TableCell width={90}>Final</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {(s.attempts ?? []).map((a, i) => {
+                        const v = asBool(a.candidate_value);
+                        const page = getAttemptPage(a);
+                        return (
+                            <TableRow key={a.id ?? i} hover>
+                              <TableCell>{a.attempt_no ?? i + 1}</TableCell>
+                              <TableCell>{a.candidate_key ?? "—"}</TableCell>
+                              <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
+                              <TableCell>
+                                {page
+                                    ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
+                                            onClick={() => onOpenEvidence(page)} clickable/>
+                                    : "—"}
+                              </TableCell>
+                              <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
+                            </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </Box>
+            ))}
+          </Stack>
         </CardContent>
       </Card>
   );
