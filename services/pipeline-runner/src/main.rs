@@ -318,7 +318,7 @@ async fn app_main() -> anyhow::Result<()> {
                         let mut final_scores_map     = serde_json::Map::new();
                         let mut final_decisions_map  = serde_json::Map::new();
 
-                        // Zusätzlich: typisierte Maps für das Event
+                        // Zusätzlich: typisierte Maps fürs Event
                         let mut final_scores_hm: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
                         let mut final_score_labels_hm: std::collections::HashMap<String, TernaryLabel> = std::collections::HashMap::new();
 
@@ -841,7 +841,7 @@ async fn app_main() -> anyhow::Result<()> {
                             }
                             if sum_w > 0.0 { (sum_v / sum_w).clamp(0.0, 1.0) } else { 0.0 }
                         } else {
-                            // FIX: Option<f32> → f32
+                            // compute_overall_score liefert Option<f32>
                             runner::compute_overall_score(&overall_inputs_bool).unwrap_or(0.0)
                         };
 
@@ -871,18 +871,17 @@ async fn app_main() -> anyhow::Result<()> {
                             warn!(%e, %run_id, "failed to finalize pipeline_run row");
                         }
 
-                        // 4) Event für UI/Monitoring – mit run_id (Struktur unverändert; UIs nutzen Steps/Logs)
+                        // 4) Event für UI/Monitoring – mit run_id
                         let result = PipelineRunResult {
                             run_id: Some(run_id),
                             pdf_id: evt.pdf_id,
                             pipeline_id: evt.pipeline_id,
-                            overall_score: overall,
-                            extracted: std::collections::HashMap::new(), // Finals baut die API aus Steps
+                            overall_score: Some(overall), // <-- FIX: Option<f32>
+                            extracted: std::collections::HashMap::new(),
                             extraction: outcome.extraction,
                             scoring: outcome.scoring,
                             decision: outcome.decision,
                             log: outcome.log,
-                            // NEU/ausgefüllt:
                             final_scores: Some(final_scores_hm),
                             final_score_labels: Some(final_score_labels_hm),
                             status: Some("finished".to_string()),
@@ -892,7 +891,6 @@ async fn app_main() -> anyhow::Result<()> {
 
                         if let Ok(mut result_json) = serde_json::to_value(&result) {
                             result_json["run_id"] = json!(run_id.to_string());
-                            // (Optional) final_scores/final_decisions stehen bereits in DB – Event kann reduziert bleiben
                             if let Ok(payload) = serde_json::to_string(&result_json) {
                                 let _ = producer
                                     .send(
