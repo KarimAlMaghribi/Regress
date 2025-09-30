@@ -175,8 +175,8 @@ pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletio
 /* ======================= OpenAI Call ======================= */
 
 /// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
-/// Erzwingt response_format=json_object und berücksichtigt function_call.arguments.
-/// **Erweitert**: Fallback auf tool_calls[].function.arguments und content-Arrays.
+/// Erzwingt response_format=json_object und berücksichtigt function/tool arguments.
+/// **Robust**: Kein früher Abbruch bei Schemaabweichungen; immer erst Roh-JSON auswerten.
 pub async fn call_openai_chat(
     client: &Client,
     model: &str,
@@ -207,52 +207,45 @@ pub async fn call_openai_chat(
             PromptError::Network(e.to_string())
         })?;
 
-    debug!(status = %res.status(), "\u{2190} headers = {:?}", res.headers());
-    let bytes = res
-        .body()
-        .await
-        .map_err(|e| PromptError::Network(e.to_string()))?;
-    debug!(
-        "\u{2190} body = {}",
-        String::from_utf8_lossy(&bytes[..bytes.len().min(1024)])
-    );
+    let status = res.status();
+    debug!(status = %status, "\u{2190} headers = {:?}", res.headers());
+    let bytes = res.body().await.map_err(|e| PromptError::Network(e.to_string()))?;
+    let body_preview = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_string();
+    debug!("\u{2190} body[0..512] = {}", body_preview);
 
-    if !res.status().is_success() {
-        return Err(PromptError::Http(res.status().as_u16()));
+    if !status.is_success() {
+        return Err(PromptError::Http(status.as_u16()));
     }
 
-    // 1) Standard-Pfad: getypte Struktur (content oder function_call.arguments)
-    let chat: ChatCompletion = serde_json::from_slice(&bytes).map_err(PromptError::Parse)?;
-    if let Some(primary) = chat
-        .choices
-        .get(0)
-        .and_then(|c| {
-            c.message.content.clone().or_else(|| {
-                c.message
-                    .function_call
-                    .as_ref()
-                    .map(|fc| fc.arguments.clone())
-            })
-        })
-    {
-        if !primary.trim().is_empty() {
-            return Ok(primary);
-        }
-    }
-
-    // 2) Fallback: tool_calls / content-Arrays direkt aus dem Roh-JSON
-    if let Ok(raw) = serde_json::from_slice::<JsonValue>(&bytes) {
+    // === 1) Roh-JSON parsen und robust Inhalt extrahieren (behandelt content-Arrays & tool_calls) ===
+    if let Ok(raw) = serde_json::from_slice::<serde_json::Value>(&bytes) {
         if let Some(ans) = extract_choice_content_from_raw_json(&raw) {
-            if !ans.trim().is_empty() {
-                return Ok(ans);
+            let trimmed = ans.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
             }
         }
     }
 
-    // 3) Kein verwertbarer Inhalt → sauberer Parse-Fehler (dein Retry greift weiter oben)
-    Err(PromptError::Parse(DeError::custom(
-        "missing content/function arguments in OpenAI response",
-    )))
+    // === 2) Als Rückfallebene OPTIONAL den alten typed-Struct versuchen – aber NICHT mit '?' ===
+    if let Ok(chat) = serde_json::from_slice::<ChatCompletion>(&bytes) {
+        if let Some(primary) = chat.choices.get(0).and_then(|c| {
+            c.message.content.clone().or_else(|| {
+                c.message.function_call.as_ref().map(|fc| fc.arguments.clone())
+            })
+        }) {
+            let trimmed = primary.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
+        }
+    }
+
+    // === 3) Kein verwertbarer Inhalt – aussagekräftiger Fehler mit Body-Vorschau ===
+    Err(PromptError::Parse(DeError::custom(format!(
+        "no content/function arguments in OpenAI response (first 200 chars): {}",
+        &body_preview[..body_preview.len().min(200)]
+    ))))
 }
 
 /* ======================= Fehler & DTOs ======================= */
@@ -300,23 +293,31 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
             msg(ChatCompletionMessageRole::User, &user),
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
-            if let Ok(v) = parse_json_block(&ans) {
-                let value = v.get("value").cloned();
-                let source = v
-                    .get("source")
-                    .and_then(|s| serde_json::from_value(s.clone()).ok())
-                    .map(|mut s: TextPosition| {
-                        if s.bbox.len() != 4 { s.bbox = [0.0, 0.0, 0.0, 0.0]; }
-                        s
-                    });
+            match parse_json_block(&ans) {
+                Ok(v) => {
+                    let value = v.get("value").cloned();
+                    let source = v
+                        .get("source")
+                        .and_then(|s| serde_json::from_value(s.clone()).ok())
+                        .map(|mut s: TextPosition| {
+                            if s.bbox.len() != 4 { s.bbox = [0.0, 0.0, 0.0, 0.0]; }
+                            s
+                        });
 
-                return Ok(OpenAiAnswer {
-                    boolean: None,
-                    route: None,
-                    value,
-                    source,
-                    raw: v.to_string(),
-                });
+                    return Ok(OpenAiAnswer {
+                        boolean: None,
+                        route: None,
+                        value,
+                        source,
+                        raw: v.to_string(),
+                    });
+                }
+                Err(e) => {
+                    warn!(
+                        "extract parse_json_block failed: {e}; ans[0..200]={}",
+                        ans.chars().take(200).collect::<String>()
+                    );
+                }
             }
         }
         let wait = 100 * (1u64 << i).min(8);
@@ -369,54 +370,62 @@ pub async fn score(
         )
             .await
         {
-            if let Ok(v) = parse_json_block(&ans) {
-                let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
-                let vote_opt = match vote_str {
-                    "yes" => Some(TernaryLabel::yes),
-                    "no" => Some(TernaryLabel::no),
-                    "unsure" => Some(TernaryLabel::unsure),
-                    _ => None,
-                };
+            match parse_json_block(&ans) {
+                Ok(v) => {
+                    let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
+                    let vote_opt = match vote_str {
+                        "yes" => Some(TernaryLabel::yes),
+                        "no" => Some(TernaryLabel::no),
+                        "unsure" => Some(TernaryLabel::unsure),
+                        _ => None,
+                    };
 
-                let legacy_bool = v.get("result").and_then(|b| b.as_bool());
-                // WICHTIG: bei UNSURE KEIN Default-false!
-                let result_bool = match vote_opt {
-                    Some(TernaryLabel::yes) => true,
-                    Some(TernaryLabel::no) => false,
-                    Some(TernaryLabel::unsure) => legacy_bool.unwrap_or(false), // falls legacy explizit vorhanden
-                    None => legacy_bool.unwrap_or(false),
-                };
+                    let legacy_bool = v.get("result").and_then(|b| b.as_bool());
+                    // WICHTIG: bei UNSURE KEIN Default-false!
+                    let result_bool = match vote_opt {
+                        Some(TernaryLabel::yes) => true,
+                        Some(TernaryLabel::no) => false,
+                        Some(TernaryLabel::unsure) => legacy_bool.unwrap_or(false), // falls legacy explizit vorhanden
+                        None => legacy_bool.unwrap_or(false),
+                    };
 
-                let mut source: Option<TextPosition> = v
-                    .get("source")
-                    .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok());
-                if let Some(s) = source.as_mut() {
-                    if s.bbox.len() != 4 {
-                        s.bbox = [0.0, 0.0, 0.0, 0.0];
+                    let mut source: Option<TextPosition> = v
+                        .get("source")
+                        .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok());
+                    if let Some(s) = source.as_mut() {
+                        if s.bbox.len() != 4 {
+                            s.bbox = [0.0, 0.0, 0.0, 0.0];
+                        }
+                    } else {
+                        source = Some(TextPosition {
+                            page: 0,
+                            bbox: [0.0, 0.0, 0.0, 0.0],
+                            quote: None,
+                        });
                     }
-                } else {
-                    source = Some(TextPosition {
-                        page: 0,
-                        bbox: [0.0, 0.0, 0.0, 0.0],
-                        quote: None,
+
+                    let strength = v.get("strength").and_then(|x| x.as_f64()).map(|f| f as f32);
+                    let confidence = v.get("confidence").and_then(|x| x.as_f64()).map(|f| f as f32);
+                    let explanation = v.get("explanation").and_then(|e| e.as_str()).unwrap_or("").to_string();
+
+                    return Ok(crate::dto::ScoringResult {
+                        prompt_id,
+                        result: result_bool,
+                        source: source.unwrap(),
+                        explanation,
+                        vote: vote_opt,
+                        strength,
+                        confidence,
+                        score: None,
+                        label: None,
                     });
                 }
-
-                let strength = v.get("strength").and_then(|x| x.as_f64()).map(|f| f as f32);
-                let confidence = v.get("confidence").and_then(|x| x.as_f64()).map(|f| f as f32);
-                let explanation = v.get("explanation").and_then(|e| e.as_str()).unwrap_or("").to_string();
-
-                return Ok(crate::dto::ScoringResult {
-                    prompt_id,
-                    result: result_bool,
-                    source: source.unwrap(),
-                    explanation,
-                    vote: vote_opt,
-                    strength,
-                    confidence,
-                    score: None,
-                    label: None,
-                });
+                Err(e) => {
+                    warn!(
+                        "score parse_json_block failed: {e}; ans[0..200]={}",
+                        ans.chars().take(200).collect::<String>()
+                    );
+                }
             }
         }
         let wait = 100 * (1u64 << i).min(8);
@@ -449,30 +458,38 @@ pub async fn decide(
             msg(ChatCompletionMessageRole::User, &user),
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
-            if let Ok(mut v) = parse_json_block(&ans) {
-                let answer_bool = v.get("answer").and_then(|val| val.as_bool());
-                if v.get("route").is_none() {
-                    if let Some(ansb) = answer_bool {
-                        v["route"] = serde_json::Value::String(ansb.to_string());
+            match parse_json_block(&ans) {
+                Ok(mut v) => {
+                    let answer_bool = v.get("answer").and_then(|val| val.as_bool());
+                    if v.get("route").is_none() {
+                        if let Some(ansb) = answer_bool {
+                            v["route"] = serde_json::Value::String(ansb.to_string());
+                        }
                     }
-                }
-                let route = v.get("route").and_then(|r| r.as_str()).map(|s| s.to_string());
+                    let route = v.get("route").and_then(|r| r.as_str()).map(|s| s.to_string());
 
-                let source = v
-                    .get("source")
-                    .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok())
-                    .map(|mut s| {
-                        if s.bbox.len() != 4 { s.bbox = [0.0, 0.0, 0.0, 0.0]; }
-                        s
+                    let source = v
+                        .get("source")
+                        .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok())
+                        .map(|mut s| {
+                            if s.bbox.len() != 4 { s.bbox = [0.0, 0.0, 0.0, 0.0]; }
+                            s
+                        });
+
+                    return Ok(OpenAiAnswer {
+                        boolean: answer_bool,
+                        route,
+                        value: None,
+                        source,
+                        raw: v.to_string(),
                     });
-
-                return Ok(OpenAiAnswer {
-                    boolean: answer_bool,
-                    route,
-                    value: None,
-                    source,
-                    raw: v.to_string(),
-                });
+                }
+                Err(e) => {
+                    warn!(
+                        "decide parse_json_block failed: {e}; ans[0..200]={}",
+                        ans.chars().take(200).collect::<String>()
+                    );
+                }
             }
         }
         let wait = 100 * (1u64 << i).min(8);
