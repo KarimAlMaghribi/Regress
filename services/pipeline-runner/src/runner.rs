@@ -111,8 +111,8 @@ pub async fn execute_with_pages(
 
                 run_log.push(RunStep {
                     seq_no,
-                    step_id: step.id.clone(),
-                    prompt_id: step.prompt_id,
+                    step_id: step.id.to_string(),          // FIX: Uuid -> String
+                    prompt_id: step.prompt_id as i64,      // FIX: i32 -> i64
                     prompt_type: PromptType::ExtractionPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
@@ -179,8 +179,8 @@ pub async fn execute_with_pages(
 
                 run_log.push(RunStep {
                     seq_no,
-                    step_id: step.id.clone(),
-                    prompt_id: step.prompt_id,
+                    step_id: step.id.to_string(),          // FIX: Uuid -> String
+                    prompt_id: step.prompt_id as i64,      // FIX: i32 -> i64
                     prompt_type: PromptType::ScoringPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
@@ -266,8 +266,8 @@ pub async fn execute_with_pages(
 
                 run_log.push(RunStep {
                     seq_no,
-                    step_id: step.id.clone(),
-                    prompt_id: step.prompt_id,
+                    step_id: step.id.to_string(),          // FIX: Uuid -> String
+                    prompt_id: step.prompt_id as i64,      // FIX: i32 -> i64
                     prompt_type: PromptType::DecisionPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
