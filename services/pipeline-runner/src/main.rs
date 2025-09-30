@@ -786,8 +786,8 @@ async fn app_main() -> anyhow::Result<()> {
                                     "route": best_route,
                                     "answer": answer,
                                     "confidence": confidence,
-                                    "votes_yes": yes_votes,
-                                    "votes_no": no_votes,
+                                    "votes_yes": agg.yes_votes,
+                                    "votes_no": agg.no_votes,
                                     "explanation": explanation,
                                     "support": support
                                 });

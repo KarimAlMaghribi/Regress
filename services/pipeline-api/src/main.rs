@@ -327,11 +327,32 @@ async fn get_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl 
     }
 }
 
+/// Update-Endpoint, der **Name-only** ODER **volle Pipeline** akzeptiert.
+/// - Wenn Body { "name": "..." } ist → nur Name setzen.
+/// - Wenn Body ein PipelineConfig ist → komplette Pipeline ersetzen.
 async fn update_pipeline(
     data: web::Data<AppState>,
     path: web::Path<Uuid>,
-    Json(input): web::Json<NameInput>,
+    Json(body): web::Json<Value>,
 ) -> impl Responder {
+    // Versuch: als volle Pipeline interpretieren
+    if body.get("steps").is_some() {
+        let cfg: PipelineConfig = match serde_json::from_value(body.clone()) {
+            Ok(c) => c,
+            Err(_) => return HttpResponse::BadRequest().finish(),
+        };
+        return match store_config(&data.pool, *path, &cfg).await {
+            Ok(()) => HttpResponse::NoContent().finish(),
+            Err(e) => e,
+        };
+    }
+
+    // Fallback: Name-only
+    let input: NameInput = match serde_json::from_value(body) {
+        Ok(n) => n,
+        Err(_) => return HttpResponse::BadRequest().finish(),
+    };
+
     let row = match sqlx::query("SELECT config_json FROM pipelines WHERE id=$1")
         .bind(*path)
         .fetch_one(&data.pool)
@@ -351,15 +372,15 @@ async fn update_pipeline(
 
     cfg.name = input.name.clone();
 
-    let jsonv = match serde_json::to_value(&cfg) {
-        Ok(v) => v,
-        Err(_) => return HttpResponse::InternalServerError().finish(),
-    };
+    match store_config(&data.pool, *path, &cfg).await {
+        Ok(()) => HttpResponse::NoContent().finish(),
+        Err(e) => e,
+    }
+}
 
-    match sqlx::query("UPDATE pipelines SET name=$2, config_json=$3, updated_at=now() WHERE id=$1")
+async fn delete_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl Responder {
+    match sqlx::query("DELETE FROM pipelines WHERE id=$1")
         .bind(*path)
-        .bind(&cfg.name)
-        .bind(jsonv)
         .execute(&data.pool)
         .await
     {
@@ -408,7 +429,7 @@ struct StepPatch {
     #[serde(alias = "noKey", alias = "no_key")]
     no_key: Option<Option<String>>,
     active: Option<bool>,
-    // 🔸 wichtig für z. B. { "min_signal": 0.5 }
+    // z. B. { "min_signal": 0.5 }
     config: Option<Value>,
 }
 
@@ -419,7 +440,6 @@ async fn update_step(
 ) -> impl Responder {
     let (id, step_id_str) = path.into_inner();
 
-    // step_id: String → Uuid
     let step_uuid = match Uuid::parse_str(&step_id_str) {
         Ok(u) => u,
         Err(_) => return HttpResponse::BadRequest().finish(),
@@ -505,7 +525,6 @@ async fn reorder_steps(
         return HttpResponse::BadRequest().finish();
     }
 
-    // Map von UUID → Step
     let mut map: HashMap<Uuid, PipelineStep> =
         cfg.steps.into_iter().map(|s| (s.id, s)).collect();
 
