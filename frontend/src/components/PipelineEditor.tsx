@@ -18,18 +18,39 @@ const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
 const ROOT = 'Root';
 
-/* ──────────────────────────────────────────────────────────────────────────────
+/* ===== Helper: Store-Persist-Funktion (fallback-sicher) ===== */
+async function tryPersistPipeline() {
+  try {
+    const st: any = (usePipelineStore as any)?.getState?.();
+    const fn =
+        st?.savePipeline ||
+        st?.save ||
+        st?.persist ||
+        st?.flush ||
+        st?.saveCurrent ||
+        null;
+    if (typeof fn === 'function') {
+      await fn();
+    }
+  } catch {
+    /* ignore – falls der Store keine Save-Funktion hat */
+  }
+}
+
+/* ────────────────────────────────────────────────────────────────
    Scoring-Konfiguration (nur EIN Wert: min_signal)
    - UI: "Mindest-Signal (0..1)"
    - UNSURE wird serverseitig ignoriert
    - Backcompat: falls alte Pipelines min_weight_yes/no haben, initialisieren wir min_signal = max(yes, no)
-──────────────────────────────────────────────────────────────────────────────── */
+────────────────────────────────────────────────────────────────── */
 function ScoringConfigFields({
                                value,
                                onChange,
+                               onPersist,
                              }: {
   value?: any;
-  onChange: (cfg: any) => void;
+  onChange: (cfg: any) => Promise<void> | void;
+  onPersist?: () => Promise<void> | void;
 }) {
   // Backcompat-Initialisierung
   const initialMinSignal =
@@ -54,12 +75,13 @@ function ScoringConfigFields({
 
   const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
-  const commit = (next: number) => {
+  const commit = async (next: number) => {
     const nextCfg = {
       ...(value || {}),
       min_signal: next,
     };
-    onChange(nextCfg); // ← sofort in den Store
+    await onChange(nextCfg);      // sofort im Store
+    await (onPersist?.() ?? tryPersistPipeline()); // direkt persistieren (falls vorhanden)
   };
 
   const handleChange = (raw: string) => {
@@ -71,7 +93,7 @@ function ScoringConfigFields({
     if (Number.isNaN(parsed)) return;
     const clamped = clamp01(parsed);
     setLocalMinSignal(clamped);
-    commit(clamped);
+    void commit(clamped);
   };
 
   return (
@@ -89,7 +111,7 @@ function ScoringConfigFields({
             onBlur={() => {
               if (localMinSignal === '') {
                 setLocalMinSignal(0);
-                commit(0);
+                void commit(0);
               }
             }}
             helperText="Einzel-Stimmen zählen nur, wenn ihr Signal ≥ Mindest-Signal ist. UNSURE wird generell ignoriert."
@@ -179,6 +201,7 @@ export default function PipelineEditor() {
     steps.forEach((s, i) => { if (s.route === route) idx = i + 1; });
     if (idx === -1) idx = steps.length;
     addStepAt(idx, draft as any)
+    .then(() => tryPersistPipeline())
     .then(() => setDraft(null))
     .catch(e => setError(String(e)));
   };
@@ -190,6 +213,7 @@ export default function PipelineEditor() {
     newOrder.splice(to, 0, id);
     try {
       await reorder(newOrder);
+      await tryPersistPipeline();
     } catch (e) {
       setError(String(e));
     }
@@ -206,6 +230,7 @@ export default function PipelineEditor() {
       const order = others.map(s => s.id);
       order.splice(idx, 0, stepId);
       await reorder(order);
+      await tryPersistPipeline();
     } catch (err) {
       setError(String(err));
     }
@@ -222,6 +247,16 @@ export default function PipelineEditor() {
   if (!currentPipelineId) {
     return <Typography>Select or create a pipeline</Typography>;
   }
+
+  const closeEdit = async () => {
+    await tryPersistPipeline();
+    setEdit(null);
+  };
+
+  const closeDraft = async () => {
+    await tryPersistPipeline();
+    setDraft(null);
+  };
 
   return (
       <Box>
@@ -326,15 +361,16 @@ export default function PipelineEditor() {
         </Table>
 
         {/* EDIT Drawer */}
-        <Drawer open={!!edit} onClose={() => setEdit(null)} anchor="right">
+        <Drawer open={!!edit} onClose={closeEdit} anchor="right">
           {edit && (
               <Box sx={{ p:2, width: 360, display:'flex', flexDirection:'column', gap:2 }}>
                 <Select
                     fullWidth
                     value={edit.type}
-                    onChange={e=>{
+                    onChange={async (e)=>{
                       const val=e.target.value as string;
-                      updateStep(edit.id,{type:val}).catch(er=>setError(String(er)));
+                      await updateStep(edit.id,{type:val});
+                      await tryPersistPipeline();
                     }}
                 >
                   <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
@@ -345,7 +381,10 @@ export default function PipelineEditor() {
                 <Select
                     fullWidth
                     value={edit.promptId}
-                    onChange={e=>updateStep(edit.id,{promptId:Number(e.target.value)}).catch(er=>setError(String(er)))}
+                    onChange={async (e)=>{
+                      await updateStep(edit.id,{promptId:Number(e.target.value)});
+                      await tryPersistPipeline();
+                    }}
                 >
                   {(promptOptions[edit.type]||[]).map(p=>(
                       <MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>
@@ -360,14 +399,19 @@ export default function PipelineEditor() {
                 {edit.type==='ScoringPrompt' && (
                     <ScoringConfigFields
                         value={(edit as any).config}
-                        onChange={(cfg)=> updateStep(edit.id, { config: cfg } as any).catch(er => setError(String(er)))}
+                        onChange={async (cfg)=> {
+                          await updateStep(edit.id, { config: cfg } as any);
+                        }}
+                        onPersist={tryPersistPipeline}
                     />
                 )}
 
                 <Select
                     fullWidth
                     value={edit.route||ROOT}
-                    onChange={e => handleRouteChange(edit.id, e.target.value as string)}
+                    onChange={async (e)=>{
+                      await handleRouteChange(edit.id, e.target.value as string);
+                    }}
                 >
                   {routeKeysUpTo(steps.findIndex(s=>s.id===edit.id)).map(k => (
                       <MenuItem key={k} value={k}>{k}</MenuItem>
@@ -378,7 +422,7 @@ export default function PipelineEditor() {
         </Drawer>
 
         {/* DRAFT Drawer */}
-        <Drawer open={!!draft} onClose={() => setDraft(null)} anchor="right">
+        <Drawer open={!!draft} onClose={closeDraft} anchor="right">
           {draft && (
               <Box sx={{ p:2, width:360, display:'flex', flexDirection:'column', gap:2 }}>
                 <Select
@@ -414,6 +458,7 @@ export default function PipelineEditor() {
                     <ScoringConfigFields
                         value={(draft as any).config}
                         onChange={(cfg) => setDraft({ ...(draft as any), config: cfg } as any)}
+                        onPersist={tryPersistPipeline}
                     />
                 )}
 
@@ -428,7 +473,7 @@ export default function PipelineEditor() {
                 </Select>
 
                 <Box sx={{ display:'flex', justifyContent:'flex-end', mt:2, gap:1 }}>
-                  <Button variant="outlined" onClick={() => setDraft(null)}>Cancel</Button>
+                  <Button variant="outlined" onClick={closeDraft}>Cancel</Button>
                   <Button
                       variant="contained"
                       onClick={saveNewStep}
