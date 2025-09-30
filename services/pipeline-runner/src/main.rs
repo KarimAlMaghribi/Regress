@@ -221,8 +221,8 @@ async fn app_main() -> anyhow::Result<()> {
                         }
                     };
 
-                // Per-Scoring-Step Konfiguration (promptId → config)
-                let mut scoring_cfg: HashMap<i32, Value> = HashMap::new();
+                // Per-Scoring-Step Konfiguration (promptId → min_signal)
+                let mut scoring_cfg: HashMap<i32, f64> = HashMap::new();
                 if let Some(steps) = config_json.get("steps").and_then(|v| v.as_array()) {
                     for s in steps {
                         let t = s.get("type").and_then(|v| v.as_str()).unwrap_or_default();
@@ -230,7 +230,17 @@ async fn app_main() -> anyhow::Result<()> {
                             let pid = s.get("promptId").and_then(|v| v.as_i64())
                                 .or_else(|| s.get("prompt_id").and_then(|v| v.as_i64()));
                             if let Some(pid64) = pid {
-                                scoring_cfg.insert(pid64 as i32, s.get("config").cloned().unwrap_or(Value::Null));
+                                let cfgv = s.get("config");
+                                // min_signal oder (backcompat) max(min_weight_yes, min_weight_no)
+                                let min_signal = cfgv
+                                    .and_then(|c| c.get("min_signal")).and_then(|v| v.as_f64())
+                                    .or_else(|| {
+                                        let y = cfgv.and_then(|c| c.get("min_weight_yes")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                        let n = cfgv.and_then(|c| c.get("min_weight_no")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                        Some(y.max(n))
+                                    })
+                                    .unwrap_or(0.0);
+                                scoring_cfg.insert(pid64 as i32, min_signal);
                             }
                         }
                     }
@@ -382,7 +392,7 @@ async fn app_main() -> anyhow::Result<()> {
                         let mut overall_inputs_bool: Vec<(bool, f32)> = Vec::new();
                         let mut overall_inputs_tri:  Vec<(f32, f32)> = Vec::new(); // (score -1..+1, weight 0..1)
 
-                        // 2b) Final-Scoring je prompt_id (Tri-State + optionale Filter/Schwellen)
+                        // 2b) Final-Scoring je prompt_id: NUR min_signal, UNSURE ignorieren
                         {
                             #[derive(Default)]
                             struct ScoreAgg {
@@ -392,9 +402,8 @@ async fn app_main() -> anyhow::Result<()> {
                                 support_false: Vec<serde_json::Value>,
                                 explanations_true: Vec<String>,
                                 explanations_false: Vec<String>,
-                                // Tri-State Aggregation
-                                tri_sum: f64,         // ∑ (vote_num * weight)
-                                tri_wsum: f64,        // ∑ weight
+                                tri_sum: f64,
+                                tri_wsum: f64,
                             }
 
                             let mut sc_by_pid: BTreeMap<i32, ScoreAgg> = BTreeMap::new();
@@ -409,13 +418,8 @@ async fn app_main() -> anyhow::Result<()> {
                                 };
                                 let agg = sc_by_pid.entry(pid).or_default();
 
-                                // per-Step Konfig
-                                let cfgv = scoring_cfg.get(&pid);
-                                let min_yes    = cfgv.and_then(|c| c.get("min_weight_yes")    .and_then(|x| x.as_f64())).unwrap_or(0.0);
-                                let min_no     = cfgv.and_then(|c| c.get("min_weight_no")     .and_then(|x| x.as_f64())).unwrap_or(0.0);
-                                let min_unsure = cfgv.and_then(|c| c.get("min_weight_unsure") .and_then(|x| x.as_f64())).unwrap_or(0.0);
-                                let yes_thr    = cfgv.and_then(|c| c.get("label_threshold_yes").and_then(|x| x.as_f64())).unwrap_or(0.60);
-                                let no_thr     = cfgv.and_then(|c| c.get("label_threshold_no") .and_then(|x| x.as_f64())).unwrap_or(-0.60);
+                                // pro Step: min_signal
+                                let min_signal = scoring_cfg.get(&pid).copied().unwrap_or(0.0);
 
                                 let scores = step
                                     .result
@@ -426,67 +430,62 @@ async fn app_main() -> anyhow::Result<()> {
 
                                 if scores.is_empty() {
                                     if let Some(cons) = step.result.get("consolidated") {
-                                        // Boolean-Fallback
-                                        let res_bool = cons
-                                            .get("result")
-                                            .and_then(|v| v.as_bool())
-                                            .unwrap_or(false);
-
-                                        // Tri-State aus consolidated (falls vorhanden)
-                                        let label = cons.get("label").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
-                                        let conf  = cons.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                                        let vnum = match label.as_str() {
-                                            "yes" =>  1.0,
-                                            "no"  => -1.0,
-                                            "unsure" => 0.0,
-                                            _ => if res_bool { 1.0 } else { -1.0 },
-                                        };
-                                        let w = (0.6_f64*1.0 + 0.4_f64*conf).clamp(0.0, 1.0);
-
-                                        // Filter anwenden
-                                        let pass = if vnum > 0.5 { w >= min_yes } else if vnum < -0.5 { w >= min_no } else { w >= min_unsure };
-                                        if pass {
-                                            // bool-Legacy
-                                            if res_bool { agg.votes_true += 1; } else { agg.votes_false += 1; }
-                                            if let Some(src) = cons.get("source") {
-                                                if res_bool { agg.support_true.push(src.clone()); } else { agg.support_false.push(src.clone()); }
-                                            }
-                                            if let Some(expl) = cons.get("explanation").and_then(|v| v.as_str()) {
-                                                let trimmed = expl.trim();
-                                                if !trimmed.is_empty() {
-                                                    if res_bool { agg.explanations_true.push(trimmed.to_string()); }
-                                                    else        { agg.explanations_false.push(trimmed.to_string()); }
-                                                }
-                                            }
-                                            // Tri-State Summen
-                                            agg.tri_sum  += vnum * w;
-                                            agg.tri_wsum += w;
+                                        // konsolidiertes Label aus dem Modell
+                                        let label = cons
+                                            .get("label")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("")
+                                            .to_ascii_lowercase();
+                                        if label == "unsure" {
+                                            continue;
                                         }
+                                        let res_bool = cons.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        let conf  = cons.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
+                                        let vnum = match label.as_str() { "yes" => 1.0, "no" => -1.0, _ => if res_bool { 1.0 } else { -1.0 } };
+                                        let signal = (0.6_f64*1.0 + 0.4_f64*conf).clamp(0.0, 1.0);
+
+                                        if signal < min_signal { continue; }
+
+                                        if res_bool { agg.votes_true += 1; } else { agg.votes_false += 1; }
+                                        if let Some(src) = cons.get("source") {
+                                            if res_bool { agg.support_true.push(src.clone()); } else { agg.support_false.push(src.clone()); }
+                                        }
+                                        if let Some(expl) = cons.get("explanation").and_then(|v| v.as_str()) {
+                                            let trimmed = expl.trim();
+                                            if !trimmed.is_empty() {
+                                                if res_bool { agg.explanations_true.push(trimmed.to_string()); }
+                                                else        { agg.explanations_false.push(trimmed.to_string()); }
+                                            }
+                                        }
+                                        agg.tri_sum  += vnum * signal;
+                                        agg.tri_wsum += signal;
                                     }
                                     continue;
                                 }
 
                                 for score in scores {
-                                    // Boolean-Fallback
-                                    let res = score.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
                                     // Tri-State Vote
                                     let vote = score.get("vote").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
+                                    if vote == "unsure" { continue; }
+
+                                    // Boolean für Legacy-Zwecke (Mehrheit)
+                                    let res = score.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
+
                                     let vnum = match vote.as_str() {
                                         "yes" =>  1.0,
                                         "no"  => -1.0,
-                                        "unsure" => 0.0,
-                                        _ => if res { 1.0 } else { -1.0 },
+                                        _ => if res { 1.0 } else { -1.0 }
                                     };
                                     let strength = score.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.0);
                                     let conf     = score.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                                    let w = (0.6_f64*strength + 0.4_f64*conf).clamp(0.0, 1.0);
+                                    let signal = (0.6_f64*strength + 0.4_f64*conf).clamp(0.0, 1.0);
 
-                                    // Filter je Label
-                                    let pass = if vnum > 0.5 { w >= min_yes } else if vnum < -0.5 { w >= min_no } else { w >= min_unsure };
-                                    if !pass { continue; }
+                                    if signal < min_signal { continue; }
 
-                                    // bool-Legacy
+                                    // Mehrheitszähler (YES/NO)
                                     if res { agg.votes_true += 1; } else { agg.votes_false += 1; }
+
+                                    // Support/Erklärungen sammeln
                                     if let Some(src) = score.get("source") {
                                         if res { agg.support_true.push(src.clone()); } else { agg.support_false.push(src.clone()); }
                                     }
@@ -498,40 +497,38 @@ async fn app_main() -> anyhow::Result<()> {
                                         }
                                     }
 
-                                    // Tri-State Summen
-                                    agg.tri_sum  += vnum * w;
-                                    agg.tri_wsum += w;
+                                    // Score-Aggregation (−1..+1)
+                                    agg.tri_sum  += vnum * signal;
+                                    agg.tri_wsum += signal;
                                 }
 
                                 // Konsolidieren und Final-Step + pipeline_runs-Map füllen
                                 let total_votes = agg.votes_true + agg.votes_false;
-                                if total_votes <= 0 && agg.tri_wsum <= 0.0 { continue; }
+                                if total_votes <= 0 && agg.tri_wsum <= 0.0 {
+                                    continue;
+                                }
 
+                                // Mehrheit entscheidet Label
                                 let result_bool = agg.votes_true >= agg.votes_false;
-                                let majority_votes = if result_bool { agg.votes_true } else { agg.votes_false };
                                 let mut confidence = if total_votes > 0 {
-                                    (majority_votes as f32) / (total_votes as f32)
+                                    (std::cmp::max(agg.votes_true, agg.votes_false) as f32) / (total_votes as f32)
                                 } else { 0.0 };
                                 if !confidence.is_finite() { confidence = 0.0; }
                                 let confidence = confidence.clamp(0.0, 1.0);
 
-                                let score_tri: f64 = if agg.tri_wsum > 0.0 { (agg.tri_sum / agg.tri_wsum).clamp(-1.0, 1.0) }
-                                else if result_bool { 1.0 } else { -1.0 };
-                                let label = if score_tri >= yes_thr { "yes" } else if score_tri <= no_thr { "no" } else { "unsure" };
-                                let lbl_enum = match label {
-                                    "yes" => TernaryLabel::yes,
-                                    "no" => TernaryLabel::no,
-                                    _ => TernaryLabel::unsure,
-                                };
+                                let score_tri: f64 = if agg.tri_wsum > 0.0 {
+                                    (agg.tri_sum / agg.tri_wsum).clamp(-1.0, 1.0)
+                                } else if result_bool { 1.0 } else { -1.0 };
 
-                                // FIX: borrow-safe (kein into_iter hier)
+                                let label = if result_bool { "yes" } else { "no" };
+                                let lbl_enum = if result_bool { TernaryLabel::yes } else { TernaryLabel::no };
+
+                                // borrow-safe explanation & support
                                 let explanation: Option<String> = if result_bool {
                                     agg.explanations_true.iter().find(|s| !s.trim().is_empty()).cloned()
                                 } else {
                                     agg.explanations_false.iter().find(|s| !s.trim().is_empty()).cloned()
                                 };
-
-                                // FIX: borrow-safe support
                                 let support: Vec<serde_json::Value> = if result_bool {
                                     agg.support_true.iter().take(3).cloned().collect()
                                 } else {
@@ -547,7 +544,7 @@ async fn app_main() -> anyhow::Result<()> {
                                     "explanation": explanation,
                                     "support": support,
                                     "score": score_tri,   // −1..+1
-                                    "label": label        // "yes" | "no" | "unsure"
+                                    "label": label        // "yes" | "no"
                                 });
 
                                 if let Err(e) = sqlx::query(
@@ -582,27 +579,17 @@ async fn app_main() -> anyhow::Result<()> {
                             for r in &outcome.scoring {
                                 let pid = r.prompt_id as i32;
 
-                                let cfgv = scoring_cfg.get(&pid);
-                                let min_yes    = cfgv.and_then(|c| c.get("min_weight_yes")    .and_then(|x| x.as_f64())).unwrap_or(0.0);
-                                let min_no     = cfgv.and_then(|c| c.get("min_weight_no")     .and_then(|x| x.as_f64())).unwrap_or(0.0);
-                                let min_unsure = cfgv.and_then(|c| c.get("min_weight_unsure") .and_then(|x| x.as_f64())).unwrap_or(0.0);
-                                let yes_thr    = cfgv.and_then(|c| c.get("label_threshold_yes").and_then(|x| x.as_f64())).unwrap_or(0.60);
-                                let no_thr     = cfgv.and_then(|c| c.get("label_threshold_no") .and_then(|x| x.as_f64())).unwrap_or(-0.60);
+                                let min_signal = scoring_cfg.get(&pid).copied().unwrap_or(0.0);
 
-                                // Bool → vnum, w=0.5
+                                // Bool → vnum, signal = 0.5
                                 let vnum = if r.result { 1.0 } else { -1.0 };
-                                let w = 0.5_f64;
-                                let pass = if vnum > 0.5 { w >= min_yes } else if vnum < -0.5 { w >= min_no } else { w >= min_unsure };
-                                if !pass { continue; }
+                                let signal = 0.5_f64;
+                                if signal < min_signal { continue; }
 
                                 let score_tri = vnum;
-                                let label = if score_tri >= yes_thr { "yes" } else if score_tri <= no_thr { "no" } else { "unsure" };
-                                let lbl_enum = match label {
-                                    "yes" => TernaryLabel::yes,
-                                    "no" => TernaryLabel::no,
-                                    _ => TernaryLabel::unsure,
-                                };
-
+                                let result_bool = r.result;
+                                let label = if result_bool { "yes" } else { "no" };
+                                let lbl_enum = if result_bool { TernaryLabel::yes } else { TernaryLabel::no };
                                 let key = format!("score_{}", pid);
                                 let confidence = 0.5_f32;
 

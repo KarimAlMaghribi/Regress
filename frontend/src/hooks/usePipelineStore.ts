@@ -9,6 +9,8 @@ export interface PipelineStep {
   noKey?: string;
   route?: string;
   active?: boolean;
+  /** Freie JSON-Config pro Step (z. B. { min_signal: 0.5 }) */
+  config?: Record<string, unknown>;
 }
 
 interface PipelineState {
@@ -61,6 +63,8 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       noKey: (s.noKey ?? s.no_key) || undefined,
       route: s.route || undefined,
       active: s.active !== false,
+      // WICHTIG: config aus dem Backend übernehmen
+      config: s.config ?? undefined,
     }));
     set({ name: json.name, steps, currentPipelineId: id, dirty: false });
   },
@@ -73,7 +77,17 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    set({ name: json.name, steps: json.steps, currentPipelineId: json.id, dirty: false });
+    const steps: PipelineStep[] = (json.steps || []).map((s: any) => ({
+      id: s.id,
+      type: s.type,
+      promptId: s.promptId ?? s.prompt_id,
+      yesKey: (s.yesKey ?? s.yes_key) || undefined,
+      noKey: (s.noKey ?? s.no_key) || undefined,
+      route: s.route || undefined,
+      active: s.active !== false,
+      config: s.config ?? undefined,
+    }));
+    set({ name: json.name, steps, currentPipelineId: json.id, dirty: false });
     return json.id as string;
   },
 
@@ -83,12 +97,28 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
       set({ name, dirty: true });
       return;
     }
+    // ⚠️ Sicherer Name-Update: wenn dein Backend beim PUT die komplette Pipeline erwartet,
+    // dann sende vollständiges Objekt. Falls es Name-only unterstützt, ist das ebenfalls ok.
+    const payload = {
+      name,
+      steps: get().steps.map(s => ({
+        id: s.id,
+        type: s.type,
+        promptId: s.promptId,
+        route: s.route ?? null,
+        yesKey: s.yesKey ?? null,
+        noKey: s.noKey ?? null,
+        active: s.active !== false,
+        ...(s.config ? { config: s.config } : {}),
+      })),
+    };
+
     const prev = get().name;
     set({ name, dirty: true });
     const res = await fetch(`${API}/pipelines/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify(payload), // ← vollständige Pipeline senden
     });
     if (!res.ok) {
       set({ name: prev, dirty: true });
@@ -105,6 +135,8 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     const next = [...prev];
     next.splice(safeIndex, 0, step);
     set({ steps: next, dirty: true });
+
+    // Step inkl. config an Backend schicken
     const res = await fetch(`${API}/pipelines/${id}/steps`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -123,6 +155,8 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     const prev = get().steps;
     const next = prev.map(s => (s.id === stepId ? { ...s, ...changes } : s));
     set({ steps: next, dirty: true });
+
+    // Patch inkl. möglicher config-Änderung
     const res = await fetch(`${API}/pipelines/${id}/steps/${stepId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -158,18 +192,21 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     const map = new Map(prev.map(s => [s.id, s]));
     const next: PipelineStep[] = [];
     order.forEach(o => { const s = map.get(o); if (s) next.push(s); });
+    // ggf. restliche Steps anhängen (falls order unvollständig)
+    if (next.length !== prev.length) {
+      prev.forEach(s => { if (!order.includes(s.id)) next.push(s); });
+    }
     set({ steps: next, dirty: true });
+
     const res = await fetch(`${API}/pipelines/${id}/steps/order`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ order }),
     });
     if (!res.ok) {
-      // Revert to the previous order which is still persisted
       set({ steps: prev, dirty: false });
       throw new Error(`HTTP ${res.status}`);
     }
-    // Ensure the latest order is treated as clean once persisted
     set({ dirty: false });
   },
 

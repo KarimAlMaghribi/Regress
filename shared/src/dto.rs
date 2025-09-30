@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use strum_macros::{Display, EnumString};
 use uuid::Uuid;
 
@@ -138,22 +139,28 @@ pub struct PipelineRunResult {
     pub finished_at: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-#[serde(rename_all = "camelCase")]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineStep {
-    pub id: String,
+    pub id: Uuid,
     #[serde(rename = "type")]
     pub step_type: PromptType,
-    pub prompt_id: i64,
+    #[serde(rename = "promptId")]
+    pub prompt_id: i32,
+
+    // optional routing / decisions
     #[serde(default)]
     pub route: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "yesKey")]
     pub yes_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, rename = "noKey")]
     pub no_key: Option<String>,
-    #[serde(default = "default_true")]
+
+    #[serde(default)]
     pub active: bool,
+
+    pub config: Option<Value>,
 }
+
 
 #[derive(Serialize, Deserialize)]
 pub struct PipelineConfig {
