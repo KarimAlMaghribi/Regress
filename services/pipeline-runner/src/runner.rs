@@ -630,6 +630,7 @@ fn clamp01f(x: f32) -> f32 {
 /// - w = 0.6*strength + 0.4*confidence (Fallbacks: strength=1.0 bei vorhandenem vote, confidence=0.5)
 /// - finale Score s = (yesW - noW) / (yesW + noW) in [-1,1]
 /// - Label: s>=+0.6 => yes, s<=-0.6 => no, sonst unsure
+/// - **WICHTIG**: Bei **Null-Evidenz** (yesW==0 && noW==0) -> **unsure/0.0** (kein Default-„no“ mehr)
 fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
     if v.is_empty() {
         return ScoringResult {
@@ -652,17 +653,17 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
     let pid = v[0].prompt_id;
 
     let mut yes_w: f32 = 0.0;
-    let mut no_w: f32 = 0.0;
+    let mut no_w:  f32 = 0.0;
 
     for s in v {
         let vote = s.vote.or_else(|| {
-            // Fallback aus legacy-boolean
+            // Fallback aus legacy-boolean (nur wenn explizit vorhanden)
             if s.result { Some(TernaryLabel::yes) } else { Some(TernaryLabel::no) }
         }).unwrap_or(TernaryLabel::unsure);
 
         let strength = s.strength.unwrap_or_else(|| {
             match vote {
-                TernaryLabel::yes | TernaryLabel::no => 1.0, // wenn Stimme da, standardmäßig "normal stark"
+                TernaryLabel::yes | TernaryLabel::no => 1.0,
                 TernaryLabel::unsure => 0.0,
             }
         });
@@ -672,48 +673,50 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
 
         match vote {
             TernaryLabel::yes => yes_w += w,
-            TernaryLabel::no =>  no_w += w,
+            TernaryLabel::no  =>  no_w += w,
             TernaryLabel::unsure => {}
         }
     }
 
     let total = yes_w + no_w;
-    let (score, label) = if total > 0.0 {
-        let s = (yes_w - no_w) / total; // -1..+1
-        let lbl = if s >= 0.60 {
-            TernaryLabel::yes
-        } else if s <= -0.60 {
-            TernaryLabel::no
-        } else {
-            TernaryLabel::unsure
+
+    // **Null-Evidenz ⇒ UNSURE/0.0** (kein Rückfall auf bool-Mehrheit)
+    if total <= 0.0 {
+        return ScoringResult {
+            prompt_id: pid,
+            result: false, // bool-Kompat: kein „true“, wenn wir unsicher sind
+            source: v[0].source.clone(),
+            explanation: format!(
+                "weighted vote: yes_w={:.3} no_w={:.3} -> score={:.3} label={:?}",
+                yes_w, no_w, 0.0, TernaryLabel::unsure
+            ),
+            vote: Some(TernaryLabel::unsure),
+            strength: None,
+            confidence: Some(0.0),
+            score: Some(0.0),
+            label: Some(TernaryLabel::unsure),
         };
-        (s, lbl)
+    }
+
+    let s = (yes_w - no_w) / total; // -1..+1
+    let label = if s >= 0.60 {
+        TernaryLabel::yes
+    } else if s <= -0.60 {
+        TernaryLabel::no
     } else {
-        // Keine gewichteten Stimmen → Mehrheit rein numerisch
-        let mut trues = 0usize;
-        let mut falses = 0usize;
-        for s in v {
-            if s.result { trues += 1 } else { falses += 1 }
-        }
-        let majority_yes = trues >= falses;
-        let s = if trues + falses > 0 { // normierter Ersatzscore
-            let total_n = (trues + falses) as f32;
-            (trues as f32 - falses as f32) / total_n
-        } else { 0.0 };
-        let lbl = if majority_yes { TernaryLabel::yes } else { TernaryLabel::no };
-        (s, lbl)
+        TernaryLabel::unsure
     };
 
     // Quelle: nimm die erste Quelle, die zum finalen Label passt, sonst die erste
     let mut chosen_src: Option<TextPosition> = None;
-    for s in v {
-        if let Some(vv) = s.vote {
+    for sres in v {
+        if let Some(vv) = sres.vote {
             if vv == label {
-                chosen_src = Some(s.source.clone());
+                chosen_src = Some(sres.source.clone());
                 break;
             }
-        } else if (label == TernaryLabel::yes && s.result) || (label == TernaryLabel::no && !s.result) {
-            chosen_src = Some(s.source.clone());
+        } else if (label == TernaryLabel::yes && sres.result) || (label == TernaryLabel::no && !sres.result) {
+            chosen_src = Some(sres.source.clone());
             break;
         }
     }
@@ -725,12 +728,12 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
         source,
         explanation: format!(
             "weighted vote: yes_w={:.3} no_w={:.3} -> score={:.3} label={:?}",
-            yes_w, no_w, score, label
+            yes_w, no_w, s, label
         ),
         vote: Some(label),         // konsolidiertes Label
         strength: None,
         confidence: Some((yes_w.max(no_w) / (total.max(1e-6))).min(1.0)), // grobe Konfidenz
-        score: Some(score),
+        score: Some(s),
         label: Some(label),
     }
 }

@@ -72,9 +72,13 @@ async fn app_main() -> anyhow::Result<()> {
         batch_cfg.openai_timeout_ms, batch_cfg.openai_retries
     );
 
+    // ---------- SQLx Pool mit stabilen Idle-/Lifetime-Settings ----------
     let pool: PgPool = PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))
+        .idle_timeout(Some(Duration::from_secs(600)))   // 🔧 Idle-Conn nach 10 min recyceln
+        .max_lifetime(Some(Duration::from_secs(1800)))  // 🔧 Max. Lebenszeit 30 min
+        .test_before_acquire(true)                      // 🔧 nur gesunde Verbindungen ausgeben
         .connect(&db_url)
         .await
         .map_err(|e| {
@@ -144,10 +148,15 @@ async fn app_main() -> anyhow::Result<()> {
     let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_prs_run_final_type ON pipeline_run_steps (run_id, is_final, prompt_type)").execute(&pool).await;
     let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_prs_run_final_key  ON pipeline_run_steps (run_id, final_key) WHERE is_final = TRUE").execute(&pool).await;
 
-    // Kafka-Client
+    // ---------- Kafka-Clients mit robusten Settings für lange Läufe ----------
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "pipeline-runner")
         .set("bootstrap.servers", &broker)
+        .set("enable.auto.commit", "true")      // 🔧 Auto-Commit
+        .set("session.timeout.ms", "45000")     // 🔧 45s Session Timeout
+        .set("max.poll.interval.ms", "1800000") // 🔧 30 Min: lange LLM-Runs ohne Group-Leave
+        .set("heartbeat.interval.ms", "5000")   // 🔧 regelmäßige Heartbeats
+        .set("socket.keepalive.enable", "true") // 🔧 TCP-Keepalive
         .create()
         .map_err(|e| {
             error!(%e, "failed to create kafka consumer");

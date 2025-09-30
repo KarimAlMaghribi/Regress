@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
+use serde_json::Value as JsonValue;
 
 /* ======================= STRICT-JSON Guards (keine Füllwerte) ======================= */
 
@@ -97,23 +98,70 @@ fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
     }
 }
 
-/* --- robuster JSON-Parser: erst direkt, dann ggf. Code-Fence-Fallback --- */
+/* --- robuster JSON-Parser: direkt, Code-Fence, dann balancierte Klammern (mit String-/Escape-Beachtung) --- */
 fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
     // 1) direkter Versuch
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
         return Ok(v);
     }
-    // 2) fallback für ```json ... ```
-    let clean = s.trim().trim_start_matches("```json").trim_end_matches("```").trim();
-    let val = serde_json::from_str(clean)?;
-    Ok(val)
+    // 2) ```json ... ``` oder ``` ... ```
+    let mut t = s.trim();
+    if t.starts_with("```json") { t = &t[7..]; }
+    if t.starts_with("```") { t = &t[3..]; }
+    if t.ends_with("```") { t = &t[..t.len()-3]; }
+    let t = t.trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+        return Ok(v);
+    }
+    // 3) ersten balancierten JSON-Block extrahieren (Ignorieren von Klammern in Strings)
+    if let Some(json_str) = extract_first_balanced_json(t) {
+        return Ok(serde_json::from_str::<serde_json::Value>(&json_str)?);
+    }
+    Err(anyhow::anyhow!("invalid JSON"))
+}
+
+fn extract_first_balanced_json(s: &str) -> Option<String> {
+    let mut in_str = false;
+    let mut esc = false;
+    let mut depth: i32 = 0;
+    let mut start: Option<usize> = None;
+    for (i, ch) in s.char_indices() {
+        if in_str {
+            if esc {
+                esc = false;
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == '"' {
+                in_str = false;
+            }
+            continue;
+        } else {
+            match ch {
+                '"' => in_str = true,
+                '{' => {
+                    depth += 1;
+                    if start.is_none() { start = Some(i); }
+                }
+                '}' => {
+                    if depth > 0 {
+                        depth -= 1;
+                        if depth == 0 {
+                            let st = start.unwrap_or(0);
+                            return Some(s[st..=i].to_string());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 /* ======================= Scoring-Prompt (Tri-State) ======================= */
 
 pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMessage> {
     let system = SCORING_GUARD_PREFIX;
-    // Frage + Dokument explizit einbetten
     let user = format!(
         "DOCUMENT:\n{}\n\nQUESTION (Tri-state Yes/No/Unsure): {}\n\nRespond with the JSON schema above (STRICT).",
         document, question
@@ -127,7 +175,8 @@ pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletio
 /* ======================= OpenAI Call ======================= */
 
 /// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
-/// Erzwingt response_format=json_object und loggt bei Fehlern Details.
+/// Erzwingt response_format=json_object und berücksichtigt function_call.arguments.
+/// **Erweitert**: Fallback auf tool_calls[].function.arguments und content-Arrays.
 pub async fn call_openai_chat(
     client: &Client,
     model: &str,
@@ -172,8 +221,9 @@ pub async fn call_openai_chat(
         return Err(PromptError::Http(res.status().as_u16()));
     }
 
+    // 1) Standard-Pfad: getypte Struktur (content oder function_call.arguments)
     let chat: ChatCompletion = serde_json::from_slice(&bytes).map_err(PromptError::Parse)?;
-    let answer = chat
+    if let Some(primary) = chat
         .choices
         .get(0)
         .and_then(|c| {
@@ -184,8 +234,25 @@ pub async fn call_openai_chat(
                     .map(|fc| fc.arguments.clone())
             })
         })
-        .unwrap_or_default();
-    Ok(answer)
+    {
+        if !primary.trim().is_empty() {
+            return Ok(primary);
+        }
+    }
+
+    // 2) Fallback: tool_calls / content-Arrays direkt aus dem Roh-JSON
+    if let Ok(raw) = serde_json::from_slice::<JsonValue>(&bytes) {
+        if let Some(ans) = extract_choice_content_from_raw_json(&raw) {
+            if !ans.trim().is_empty() {
+                return Ok(ans);
+            }
+        }
+    }
+
+    // 3) Kein verwertbarer Inhalt → sauberer Parse-Fehler (dein Retry greift weiter oben)
+    Err(PromptError::Parse(DeError::custom(
+        "missing content/function arguments in OpenAI response",
+    )))
 }
 
 /* ======================= Fehler & DTOs ======================= */
@@ -221,7 +288,6 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
 
-    // STRIKTER Guard: Dokument + Aufgabe + Contract
     let system = "You are an extraction engine. Follow the contract strictly.";
     let user = format!(
         "DOCUMENT:\n{}\n\nTASK:\n{}\n\n{}",
@@ -235,20 +301,12 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
             if let Ok(v) = parse_json_block(&ans) {
-                // Erwartetes Format:
-                // { "value": <string|null>,
-                //   "source": { "page":<int|null>, "bbox":[f,f,f,f], "quote":<string|null> } }
                 let value = v.get("value").cloned();
                 let source = v
                     .get("source")
                     .and_then(|s| serde_json::from_value(s.clone()).ok())
                     .map(|mut s: TextPosition| {
-                        // bbox absichern (falls Modell null liefert)
-                        let bbox = s.bbox;
-                        let valid = bbox.len() == 4;
-                        if !valid {
-                            s.bbox = [0.0, 0.0, 0.0, 0.0];
-                        }
+                        if s.bbox.len() != 4 { s.bbox = [0.0, 0.0, 0.0, 0.0]; }
                         s
                     });
 
@@ -277,7 +335,6 @@ pub async fn score(
     let question = fetch_prompt(prompt_id).await?;
     let msgs = build_scoring_prompt(document, &question);
 
-    // Tri-State Function Calling: zwingt vote/strength/confidence/source/explanation
     let schema = serde_json::json!({
       "name": "ternary_answer",
       "description": "Return exactly one object with tri-state vote (yes/no/unsure), strength, confidence and a verbatim quote.",
@@ -313,7 +370,6 @@ pub async fn score(
             .await
         {
             if let Ok(v) = parse_json_block(&ans) {
-                // Robust fallback: akzeptiere ggf. legacy {result:boolean,...}
                 let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
                 let vote_opt = match vote_str {
                     "yes" => Some(TernaryLabel::yes),
@@ -323,10 +379,13 @@ pub async fn score(
                 };
 
                 let legacy_bool = v.get("result").and_then(|b| b.as_bool());
-                let result_bool = vote_opt
-                    .map(|vl| matches!(vl, TernaryLabel::yes))
-                    .or(legacy_bool)
-                    .unwrap_or(false);
+                // WICHTIG: bei UNSURE KEIN Default-false!
+                let result_bool = match vote_opt {
+                    Some(TernaryLabel::yes) => true,
+                    Some(TernaryLabel::no) => false,
+                    Some(TernaryLabel::unsure) => legacy_bool.unwrap_or(false), // falls legacy explizit vorhanden
+                    None => legacy_bool.unwrap_or(false),
+                };
 
                 let mut source: Option<TextPosition> = v
                     .get("source")
@@ -336,7 +395,6 @@ pub async fn score(
                         s.bbox = [0.0, 0.0, 0.0, 0.0];
                     }
                 } else {
-                    // notfalls neutral
                     source = Some(TextPosition {
                         page: 0,
                         bbox: [0.0, 0.0, 0.0, 0.0],
@@ -346,11 +404,7 @@ pub async fn score(
 
                 let strength = v.get("strength").and_then(|x| x.as_f64()).map(|f| f as f32);
                 let confidence = v.get("confidence").and_then(|x| x.as_f64()).map(|f| f as f32);
-                let explanation = v
-                    .get("explanation")
-                    .and_then(|e| e.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                let explanation = v.get("explanation").and_then(|e| e.as_str()).unwrap_or("").to_string();
 
                 return Ok(crate::dto::ScoringResult {
                     prompt_id,
@@ -360,8 +414,8 @@ pub async fn score(
                     vote: vote_opt,
                     strength,
                     confidence,
-                    score: None,      // konsolidierter Score wird im runner berechnet
-                    label: None,      // konsolidiertes Label wird im runner gesetzt
+                    score: None,
+                    label: None,
                 });
             }
         }
@@ -396,25 +450,19 @@ pub async fn decide(
         ];
         if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
             if let Ok(mut v) = parse_json_block(&ans) {
-                // Normalisiere route, wenn nur answer geliefert wurde
                 let answer_bool = v.get("answer").and_then(|val| val.as_bool());
                 if v.get("route").is_none() {
                     if let Some(ansb) = answer_bool {
                         v["route"] = serde_json::Value::String(ansb.to_string());
                     }
                 }
-                let route = v
-                    .get("route")
-                    .and_then(|r| r.as_str())
-                    .map(|s| s.to_string());
+                let route = v.get("route").and_then(|r| r.as_str()).map(|s| s.to_string());
 
                 let source = v
                     .get("source")
                     .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok())
                     .map(|mut s| {
-                        if s.bbox.len() != 4 {
-                            s.bbox = [0.0, 0.0, 0.0, 0.0];
-                        }
+                        if s.bbox.len() != 4 { s.bbox = [0.0, 0.0, 0.0, 0.0]; }
                         s
                     });
 
@@ -473,4 +521,50 @@ async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
 
 pub async fn fetch_prompt_text(id: i32) -> Result<String, PromptError> {
     fetch_prompt(id).await
+}
+
+/* ======================= Fallback-Hilfsfunktion (tool_calls, content-Arrays) ======================= */
+
+fn extract_choice_content_from_raw_json(raw: &JsonValue) -> Option<String> {
+    // 1) content als String
+    if let Some(s) = raw.pointer("/choices/0/message/content").and_then(|v| v.as_str()) {
+        return Some(s.to_string());
+    }
+
+    // 1b) content als Array (neues Format)
+    if let Some(arr) = raw.pointer("/choices/0/message/content").and_then(|v| v.as_array()) {
+        let mut buf = String::new();
+        for part in arr {
+            if let Some(txt) = part.get("text").and_then(|x| x.as_str()) {
+                buf.push_str(txt);
+            } else if let Some(s) = part.as_str() {
+                buf.push_str(s);
+            } else if let Some(obj) = part.as_object() {
+                if let Some(JsonValue::String(t)) = obj.get("text") {
+                    buf.push_str(t);
+                }
+            }
+        }
+        if !buf.is_empty() {
+            return Some(buf);
+        }
+    }
+
+    // 2) tool_calls (neues Schema)
+    if let Some(s) = raw
+        .pointer("/choices/0/message/tool_calls/0/function/arguments")
+        .and_then(|v| v.as_str())
+    {
+        return Some(s.to_string());
+    }
+
+    // 3) altes function_call-Schema (zur Sicherheit)
+    if let Some(s) = raw
+        .pointer("/choices/0/message/function_call/arguments")
+        .and_then(|v| v.as_str())
+    {
+        return Some(s.to_string());
+    }
+
+    None
 }
