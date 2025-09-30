@@ -524,15 +524,18 @@ async fn app_main() -> anyhow::Result<()> {
                                     _ => TernaryLabel::unsure,
                                 };
 
-                                let explanation = if result_bool {
-                                    agg.explanations_true.into_iter().find(|s| !s.trim().is_empty())
+                                // FIX: borrow-safe (kein into_iter hier)
+                                let explanation: Option<String> = if result_bool {
+                                    agg.explanations_true.iter().find(|s| !s.trim().is_empty()).cloned()
                                 } else {
-                                    agg.explanations_false.into_iter().find(|s| !s.trim().is_empty())
+                                    agg.explanations_false.iter().find(|s| !s.trim().is_empty()).cloned()
                                 };
 
-                                let support: Vec<serde_json::Value> = {
-                                    let sv = if result_bool { agg.support_true } else { agg.support_false };
-                                    sv.into_iter().take(3).collect()
+                                // FIX: borrow-safe support
+                                let support: Vec<serde_json::Value> = if result_bool {
+                                    agg.support_true.iter().take(3).cloned().collect()
+                                } else {
+                                    agg.support_false.iter().take(3).cloned().collect()
                                 };
 
                                 let key = format!("score_{}", pid);
@@ -727,7 +730,7 @@ async fn app_main() -> anyhow::Result<()> {
                             }
                             for r in &outcome.decision {
                                 let pid = r.prompt_id as i32;
-                                let agg = dc_by_pid.entry(pid).or_default();
+                                let mut agg = dc_by_pid.entry(pid).or_default();
                                 let current_votes: i64 = agg.route_votes.values().sum();
                                 if current_votes > 0 {
                                     continue;
@@ -876,7 +879,7 @@ async fn app_main() -> anyhow::Result<()> {
                             run_id: Some(run_id),
                             pdf_id: evt.pdf_id,
                             pipeline_id: evt.pipeline_id,
-                            overall_score: Some(overall), // <-- FIX: Option<f32>
+                            overall_score: Some(overall),
                             extracted: std::collections::HashMap::new(),
                             extraction: outcome.extraction,
                             scoring: outcome.scoring,
