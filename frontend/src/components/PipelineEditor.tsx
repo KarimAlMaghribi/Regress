@@ -1,50 +1,29 @@
-import {useEffect, useMemo, useRef, useState} from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Alert,
-  Box,
-  Button,
-  Checkbox,
-  Chip,
-  Drawer,
-  IconButton,
-  MenuItem,
-  Select,
-  Snackbar,
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableRow,
-  TextField,
-  Typography
+  Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
+  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip
 } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import debounce from 'lodash.debounce';
-import {PipelineStep, usePipelineStore} from '../hooks/usePipelineStore';
-import {LayoutRow, useLinearIndentLayout} from '../hooks/useLinearIndentLayout';
+import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
+import { useLinearIndentLayout, LayoutRow } from '../hooks/useLinearIndentLayout';
 import StepDialog from './PipelineEditor/StepDialog';
-import {useNavigate} from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import uuid from '../utils/uuid';
 
-interface PromptOption {
-  id: number;
-  text: string;
-}
-
+interface PromptOption { id: number; text: string; }
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
 const ROOT = 'Root';
 
 /* ──────────────────────────────────────────────────────────────────────────────
-   Tri-State Konfig-Felder (inline)
-   Persistenz in steps[i].config (vom Backend ausgewertet).
-   UI:
-   - Schrittweite überall 0.1
-   - "Mindest-Signal" statt "Gewicht"
-   - UNSURE wird grundsätzlich ignoriert → kein Eingabefeld; Wert bleibt intern erhalten
+   Scoring-Konfiguration (nur EIN Wert: min_signal)
+   - UI zeigt nur "Mindest-Signal (0..1)"
+   - UNSURE wird serverseitig ohnehin ignoriert (Hinweis in der UI)
+   - Backcompat: falls alte Pipelines min_weight_yes/no haben, initialisieren wir min_signal = max(yes, no)
 ──────────────────────────────────────────────────────────────────────────────── */
 function ScoringConfigFields({
                                value,
@@ -53,60 +32,70 @@ function ScoringConfigFields({
   value?: any;
   onChange: (cfg: any) => void;
 }) {
-  const cfg = {
-    min_weight_yes: typeof value?.min_weight_yes === 'number' ? value.min_weight_yes : 0,
-    min_weight_no: typeof value?.min_weight_no === 'number' ? value.min_weight_no : 0,
-    // behalten für Persistenz/Kompatibilität, aber nicht anzeigen:
-    min_weight_unsure: typeof value?.min_weight_unsure === 'number' ? value.min_weight_unsure : 0,
-    label_threshold_yes: typeof value?.label_threshold_yes === 'number' ? value.label_threshold_yes : 0.60,
-    label_threshold_no: typeof value?.label_threshold_no === 'number' ? value.label_threshold_no : -0.60,
-  };
+  // Backcompat-Initialisierung
+  const initialMinSignal =
+      typeof value?.min_signal === 'number'
+          ? value.min_signal
+          : Math.max(
+              typeof value?.min_weight_yes === 'number' ? value.min_weight_yes : 0,
+              typeof value?.min_weight_no === 'number' ? value.min_weight_no : 0
+          );
 
-  const set = (k: keyof typeof cfg, v: number) => {
-    const next = {...cfg, [k]: v};
-    onChange(next);
+  // Lokaler State für flüssiges Tippen (fix: value ließ sich nicht ändern)
+  const [localMinSignal, setLocalMinSignal] = useState<number | ''>(
+      Number.isFinite(initialMinSignal) ? Number(initialMinSignal.toFixed(3)) : 0
+  );
+
+  // Parent -> Local Sync, wenn extern geändert (z. B. andere Steps/Store-Update)
+  useEffect(() => {
+    const ext = Number.isFinite(initialMinSignal) ? Number(initialMinSignal) : 0;
+    setLocalMinSignal(Number(ext.toFixed(3)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value?.min_signal, value?.min_weight_yes, value?.min_weight_no]);
+
+  // Debounced Persist in den Store, damit nicht bei jedem Keypress ein Update rausgeht
+  const debouncedPersist = useMemo(
+      () =>
+          debounce((nextVal: number) => {
+            const nextCfg = {
+              ...(value || {}),
+              min_signal: nextVal, // nur dieses Feld wird aktiv verwendet
+              // Alte Felder lassen wir unangetastet (Kompatibilität)
+            };
+            onChange(nextCfg);
+          }, 200),
+      [onChange, value]
+  );
+
+  const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+
+  const handleChange = (raw: string) => {
+    // Leere Eingabe zulassen, damit man bequem tippen kann
+    if (raw === '') {
+      setLocalMinSignal('');
+      return;
+    }
+    const parsed = Number(raw);
+    if (Number.isNaN(parsed)) return;
+    const clamped = clamp01(parsed);
+    setLocalMinSignal(clamped);
+    debouncedPersist(clamped);
   };
 
   return (
-      <Box sx={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1}}>
-        <Typography variant="subtitle2" sx={{gridColumn: '1 / -1', mt: 1}}>
-          Tri-State (Scoring) · Filter & Schwellen
+      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr', gap: 1 }}>
+        <Typography variant="subtitle2" sx={{ mt: 1 }}>
+          Scoring · Mindest-Signal
         </Typography>
 
         <TextField
-            label="Mindest-Signal YES (0..1)"
+            label="Mindest-Signal (0..1)"
             type="number"
-            inputProps={{step: 0.1, min: 0, max: 1}}
-            value={cfg.min_weight_yes}
-            onChange={e => set('min_weight_yes', Number(e.target.value))}
+            value={localMinSignal}
+            onChange={(e) => handleChange(e.target.value)}
+            inputProps={{ step: 0.1, min: 0, max: 1 }}
+            helperText="Einzel-Stimmen werden nur gezählt, wenn ihr Signal ≥ Mindest-Signal ist. UNSURE wird generell ignoriert."
         />
-        <TextField
-            label="Mindest-Signal NO (0..1)"
-            type="number"
-            inputProps={{step: 0.1, min: 0, max: 1}}
-            value={cfg.min_weight_no}
-            onChange={e => set('min_weight_no', Number(e.target.value))}
-        />
-
-        <TextField
-            label="Schwelle YES (−1..+1)"
-            type="number"
-            inputProps={{step: 0.1, min: -1, max: 1}}
-            value={cfg.label_threshold_yes}
-            onChange={e => set('label_threshold_yes', Number(e.target.value))}
-        />
-        <TextField
-            label="Schwelle NO (−1..+1)"
-            type="number"
-            inputProps={{step: 0.1, min: -1, max: 1}}
-            value={cfg.label_threshold_no}
-            onChange={e => set('label_threshold_no', Number(e.target.value))}
-        />
-
-        <Typography variant="caption" color="text.secondary" sx={{gridColumn: '1 / -1'}}>
-          Beiträge mit „unsure“ werden grundsätzlich ignoriert. Das finale Label wird aus dem
-          konsolidierten Score (−1..+1) mit den Schwellen abgeleitet: ≥ YES ⇒ „yes“, ≤ NO ⇒ „no“.
-        </Typography>
       </Box>
   );
 }
@@ -118,7 +107,7 @@ export default function PipelineEditor() {
     currentPipelineId, dirty, confirmIfDirty
   } = usePipelineStore();
   const navigate = useNavigate();
-  const routeColors = useRef<Record<string, string>>({});
+  const routeColors = useRef<Record<string,string>>({});
   const getRouteColor = (routeKey: string) => {
     if (!routeColors.current[routeKey]) {
       routeColors.current[routeKey] =
@@ -126,6 +115,7 @@ export default function PipelineEditor() {
     }
     return routeColors.current[routeKey];
   };
+
   const [edit, setEdit] = useState<PipelineStep | null>(null);
   const [draft, setDraft] = useState<PipelineStep | null>(null);
   const [insertPos, setInsertPos] = useState<number>(steps.length);
@@ -133,6 +123,14 @@ export default function PipelineEditor() {
   const [error, setError] = useState('');
   const debounced = useMemo(() => debounce(updateName, 300), [updateName]);
   const totalCols = 9;
+
+  // Sobald sich die globale steps-Liste ändert, aktuelle edit-Referenz aus dem Store nachziehen
+  useEffect(() => {
+    if (!edit) return;
+    const latest = steps.find(s => s.id === edit.id);
+    if (latest && latest !== edit) setEdit(latest);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [steps]);
 
   /* memo-ise linear rows with depth */
   const layoutRows = useMemo<LayoutRow[]>(() => useLinearIndentLayout(steps), [steps]);
@@ -164,17 +162,15 @@ export default function PipelineEditor() {
     if (promptOptions[t]) return;
     fetch(`${PROMPT_API}/prompts?type=${t}`)
     .then(r => r.ok ? r.json() : [])
-    .then((list: PromptOption[]) => setPromptOptions(o => ({...o, [t]: list})))
-    .catch(() => setPromptOptions(o => ({...o, [t]: []})));
+    .then((list: PromptOption[]) => setPromptOptions(o => ({ ...o, [t]: list })))
+    .catch(() => setPromptOptions(o => ({ ...o, [t]: [] })));
   };
 
   const saveNewStep = () => {
     if (!draft) return;
     const route = draft.route;
     let idx = -1;
-    steps.forEach((s, i) => {
-      if (s.route === route) idx = i + 1;
-    });
+    steps.forEach((s, i) => { if (s.route === route) idx = i + 1; });
     if (idx === -1) idx = steps.length;
     addStepAt(idx, draft as any) // evtl. .config vorhanden
     .then(() => setDraft(null))
@@ -196,12 +192,10 @@ export default function PipelineEditor() {
   const handleRouteChange = async (stepId: string, newRoute: string) => {
     try {
       const routeValue = newRoute === ROOT ? undefined : newRoute;
-      await updateStep(stepId, {route: routeValue});
+      await updateStep(stepId, { route: routeValue });
       const others = usePipelineStore.getState().steps.filter(s => s.id !== stepId);
       let idx = -1;
-      others.forEach((s, i) => {
-        if (s.route === routeValue) idx = i + 1;
-      });
+      others.forEach((s, i) => { if (s.route === routeValue) idx = i + 1; });
       if (idx === -1) idx = others.length;
       const order = others.map(s => s.id);
       order.splice(idx, 0, stepId);
@@ -225,21 +219,19 @@ export default function PipelineEditor() {
 
   return (
       <Box>
-        <Box sx={{mb: 2, display: 'flex', gap: 1, alignItems: 'center'}}>
-          <Button onClick={() => {
-            if (confirmIfDirty()) navigate('/pipeline');
-          }}>Zur Liste</Button>
+        <Box sx={{ mb:2, display:'flex', gap:1, alignItems:'center' }}>
+          <Button onClick={() => { if (confirmIfDirty()) navigate('/pipeline'); }}>Zur Liste</Button>
           <TextField
               size="small"
               label="Name"
               value={name}
-              onChange={e => debounced(e.target.value)}
+              onChange={e=>debounced(e.target.value)}
           />
           <Button
               startIcon={<AddIcon/>}
               onClick={() => {
                 setInsertPos(steps.length);
-                setDraft({id: uuid(), type: 'ExtractionPrompt', promptId: 0, active: true} as any);
+                setDraft({ id: uuid(), type:'ExtractionPrompt', promptId:0, active:true } as any);
               }}
           >
             Step
@@ -266,47 +258,45 @@ export default function PipelineEditor() {
               return (
                   <>
                     <TableRow key={r.step.id}>
-                      <TableCell sx={{pl: r.depth * 4}}>{r.rowLabel}</TableCell>
+                      <TableCell sx={{ pl: r.depth * 4 }}>{r.rowLabel}</TableCell>
                       <TableCell>
                         <IconButton size="small" onClick={() => moveStep(idx, idx - 1)}>
-                          <ArrowUpwardIcon fontSize="small"/>
+                          <ArrowUpwardIcon fontSize="small" />
                         </IconButton>
                         <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}>
-                          <ArrowDownwardIcon fontSize="small"/>
+                          <ArrowDownwardIcon fontSize="small" />
                         </IconButton>
                         <IconButton size="small" onClick={() => {
                           setInsertPos(idx + 1);
-                          setDraft({...(r.step as any), id: uuid()});
+                          setDraft({ ...(r.step as any), id: uuid() });
                         }}>
-                          <AddIcon fontSize="small"/>
+                          <AddIcon fontSize="small" />
                         </IconButton>
                       </TableCell>
                       <TableCell>{r.step.type}</TableCell>
                       <TableCell>{r.step.promptId}</TableCell>
-                      <TableCell>{r.step.type === 'DecisionPrompt' ? r.step.yesKey : '—'}</TableCell>
-                      <TableCell>{r.step.type === 'DecisionPrompt' ? r.step.noKey : '—'}</TableCell>
+                      <TableCell>{r.step.type==='DecisionPrompt' ? r.step.yesKey : '—'}</TableCell>
+                      <TableCell>{r.step.type==='DecisionPrompt' ? r.step.noKey : '—'}</TableCell>
                       <TableCell>
                         <Select
-                            value={r.step.route || ROOT}
+                            value={r.step.route||ROOT}
                             onChange={e => handleRouteChange(r.step.id, e.target.value as string)}
                         >
-                          {routeKeysUpTo(idx).map(k => (
-                              <MenuItem key={k} value={k}>{k}</MenuItem>))}
+                          {routeKeysUpTo(idx).map(k => (<MenuItem key={k} value={k}>{k}</MenuItem>))}
                         </Select>
                       </TableCell>
                       <TableCell>
                         <Checkbox
                             checked={r.step.active !== false}
-                            onChange={e => updateStep(r.step.id, {active: e.target.checked}).catch(err => setError(String(err)))}
+                            onChange={e => updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))}
                         />
                       </TableCell>
                       <TableCell>
                         {r.warnings.map((w, i) => (
-                            <Chip key={i} label={w} size="small" color="warning" sx={{mr: 0.5}}/>
+                            <Chip key={i} label={w} size="small" color="warning" sx={{ mr: 0.5 }} />
                         ))}
-                        <IconButton
-                            onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}>
-                          <DeleteIcon/>
+                        <IconButton onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}>
+                          <DeleteIcon />
                         </IconButton>
                         <Button size="small" onClick={() => setEdit(r.step)}>Edit</Button>
                       </TableCell>
@@ -314,11 +304,11 @@ export default function PipelineEditor() {
 
                     {r.step.type === 'DecisionPrompt' && (
                         <TableRow>
-                          <TableCell colSpan={totalCols} sx={{p: 0}}>
+                          <TableCell colSpan={totalCols} sx={{ p: 0 }}>
                             <Box
                                 width="100%"
                                 height="4px"
-                                sx={{backgroundColor: getRouteColor(r.step.route || r.step.yesKey || '')}}
+                                sx={{ backgroundColor: getRouteColor(r.step.route || r.step.yesKey || '') }}
                             />
                           </TableCell>
                         </TableRow>
@@ -332,13 +322,13 @@ export default function PipelineEditor() {
         {/* EDIT Drawer */}
         <Drawer open={!!edit} onClose={() => setEdit(null)} anchor="right">
           {edit && (
-              <Box sx={{p: 2, width: 360, display: 'flex', flexDirection: 'column', gap: 2}}>
+              <Box sx={{ p:2, width: 360, display:'flex', flexDirection:'column', gap:2 }}>
                 <Select
                     fullWidth
                     value={edit.type}
-                    onChange={e => {
-                      const val = e.target.value as string;
-                      updateStep(edit.id, {type: val}).catch(er => setError(String(er)));
+                    onChange={e=>{
+                      const val=e.target.value as string;
+                      updateStep(edit.id,{type:val}).catch(er=>setError(String(er)));
                     }}
                 >
                   <MenuItem value="ExtractionPrompt">ExtractionPrompt</MenuItem>
@@ -349,31 +339,31 @@ export default function PipelineEditor() {
                 <Select
                     fullWidth
                     value={edit.promptId}
-                    onChange={e => updateStep(edit.id, {promptId: Number(e.target.value)}).catch(er => setError(String(er)))}
+                    onChange={e=>updateStep(edit.id,{promptId:Number(e.target.value)}).catch(er=>setError(String(er)))}
                 >
-                  {(promptOptions[edit.type] || []).map(p => (
+                  {(promptOptions[edit.type]||[]).map(p=>(
                       <MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>
                   ))}
                 </Select>
 
-                {edit.type === 'DecisionPrompt' && (
-                    <StepDialog step={edit}/>
+                {edit.type==='DecisionPrompt' && (
+                    <StepDialog step={edit} />
                 )}
 
-                {/* Tri-State Konfig nur für ScoringPrompt */}
-                {edit.type === 'ScoringPrompt' && (
+                {/* Scoring-Konfig (nur Mindest-Signal) */}
+                {edit.type==='ScoringPrompt' && (
                     <ScoringConfigFields
                         value={(edit as any).config}
-                        onChange={(cfg) => updateStep(edit.id, {config: cfg} as any).catch(er => setError(String(er)))}
+                        onChange={(cfg)=> updateStep(edit.id, { config: cfg } as any).catch(er => setError(String(er)))}
                     />
                 )}
 
                 <Select
                     fullWidth
-                    value={edit.route || ROOT}
+                    value={edit.route||ROOT}
                     onChange={e => handleRouteChange(edit.id, e.target.value as string)}
                 >
-                  {routeKeysUpTo(steps.findIndex(s => s.id === edit.id)).map(k => (
+                  {routeKeysUpTo(steps.findIndex(s=>s.id===edit.id)).map(k => (
                       <MenuItem key={k} value={k}>{k}</MenuItem>
                   ))}
                 </Select>
@@ -384,13 +374,13 @@ export default function PipelineEditor() {
         {/* DRAFT Drawer */}
         <Drawer open={!!draft} onClose={() => setDraft(null)} anchor="right">
           {draft && (
-              <Box sx={{p: 2, width: 360, display: 'flex', flexDirection: 'column', gap: 2}}>
+              <Box sx={{ p:2, width:360, display:'flex', flexDirection:'column', gap:2 }}>
                 <Select
                     fullWidth
                     value={draft.type}
-                    onChange={e => {
-                      const val = e.target.value as string;
-                      setDraft({...(draft as any), type: val});
+                    onChange={e=>{
+                      const val=e.target.value as string;
+                      setDraft({ ...(draft as any), type:val });
                       fetchPrompts(val);
                     }}
                 >
@@ -402,45 +392,41 @@ export default function PipelineEditor() {
                 <Select
                     fullWidth
                     value={draft.promptId}
-                    onChange={e => setDraft({...(draft as any), promptId: Number(e.target.value)})}
+                    onChange={e=>setDraft({ ...(draft as any), promptId:Number(e.target.value) })}
                 >
-                  {(promptOptions[draft.type] || []).map(p => (
+                  {(promptOptions[draft.type]||[]).map(p=>(
                       <MenuItem key={p.id} value={p.id}>{p.text}</MenuItem>
                   ))}
                 </Select>
 
-                {draft.type === 'DecisionPrompt' && (
-                    <StepDialog step={draft}
-                                onSave={changes => setDraft({...(draft as any), ...changes})}/>
+                {draft.type==='DecisionPrompt' && (
+                    <StepDialog step={draft} onSave={changes => setDraft({ ...(draft as any), ...changes })} />
                 )}
 
-                {/* Tri-State Konfig für neuen Scoring-Step */}
-                {draft.type === 'ScoringPrompt' && (
+                {/* Scoring-Konfig (nur Mindest-Signal) */}
+                {draft.type==='ScoringPrompt' && (
                     <ScoringConfigFields
                         value={(draft as any).config}
-                        onChange={(cfg) => setDraft({...(draft as any), config: cfg} as any)}
+                        onChange={(cfg) => setDraft({ ...(draft as any), config: cfg } as any)}
                     />
                 )}
 
                 <Select
                     fullWidth
-                    value={draft.route || ROOT}
-                    onChange={e => setDraft({
-                      ...(draft as any),
-                      route: e.target.value === ROOT ? undefined : e.target.value
-                    })}
+                    value={draft.route||ROOT}
+                    onChange={e=>setDraft({ ...(draft as any), route: e.target.value===ROOT?undefined:e.target.value })}
                 >
                   {routeKeysUpTo(insertPos).map(k => (
                       <MenuItem key={k} value={k}>{k}</MenuItem>
                   ))}
                 </Select>
 
-                <Box sx={{display: 'flex', justifyContent: 'flex-end', mt: 2, gap: 1}}>
+                <Box sx={{ display:'flex', justifyContent:'flex-end', mt:2, gap:1 }}>
                   <Button variant="outlined" onClick={() => setDraft(null)}>Cancel</Button>
                   <Button
                       variant="contained"
                       onClick={saveNewStep}
-                      disabled={draft.type === 'DecisionPrompt' && !(draft.yesKey && draft.noKey)}
+                      disabled={draft.type==='DecisionPrompt' && !(draft.yesKey && draft.noKey)}
                   >
                     Add
                   </Button>
@@ -449,10 +435,9 @@ export default function PipelineEditor() {
           )}
         </Drawer>
 
-        <Snackbar open={!!error} autoHideDuration={6000} onClose={() => setError('')}>
-          <Alert severity="error" onClose={() => setError('')}>{error}</Alert>
+        <Snackbar open={!!error} autoHideDuration={6000} onClose={()=>setError('')}>
+          <Alert severity="error" onClose={()=>setError('')}>{error}</Alert>
         </Snackbar>
       </Box>
   );
 }
-
