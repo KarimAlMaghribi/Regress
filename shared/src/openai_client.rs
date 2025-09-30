@@ -1,13 +1,16 @@
-use crate::dto::{TextPosition, TernaryLabel};
+// shared/src/openai_client.rs
+
+use crate::dto::{ScoringResult, TernaryLabel, TextPosition};
 use actix_web::http::header;
 use awc::Client;
 use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
 use serde::de::Error as DeError;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
+use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
-use serde_json::Value as JsonValue;
 
 /* ======================= STRICT-JSON Guards (keine Füllwerte) ======================= */
 
@@ -106,9 +109,15 @@ fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
     }
     // 2) ```json ... ``` oder ``` ... ```
     let mut t = s.trim();
-    if t.starts_with("```json") { t = &t[7..]; }
-    if t.starts_with("```") { t = &t[3..]; }
-    if t.ends_with("```") { t = &t[..t.len()-3]; }
+    if t.starts_with("```json") {
+        t = &t[7..];
+    }
+    if t.starts_with("```") {
+        t = &t[3..];
+    }
+    if t.ends_with("```") {
+        t = &t[..t.len() - 3];
+    }
     let t = t.trim();
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
         return Ok(v);
@@ -140,7 +149,9 @@ fn extract_first_balanced_json(s: &str) -> Option<String> {
                 '"' => in_str = true,
                 '{' => {
                     depth += 1;
-                    if start.is_none() { start = Some(i); }
+                    if start.is_none() {
+                        start = Some(i);
+                    }
                 }
                 '}' => {
                     if depth > 0 {
@@ -287,51 +298,48 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
         input, prompt, EXTRACTION_GUARD_SUFFIX
     );
 
-    for i in 0..=3 {
-        let msgs = vec![
-            msg(ChatCompletionMessageRole::System, system),
-            msg(ChatCompletionMessageRole::User, &user),
-        ];
-        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
-            match parse_json_block(&ans) {
-                Ok(v) => {
-                    let value = v.get("value").cloned();
-                    let source = v
-                        .get("source")
-                        .and_then(|s| serde_json::from_value(s.clone()).ok())
-                        .map(|mut s: TextPosition| {
-                            if s.bbox.len() != 4 { s.bbox = [0.0, 0.0, 0.0, 0.0]; }
-                            s
-                        });
+    let msgs = vec![
+        msg(ChatCompletionMessageRole::System, system),
+        msg(ChatCompletionMessageRole::User, &user),
+    ];
 
-                    return Ok(OpenAiAnswer {
-                        boolean: None,
-                        route: None,
-                        value,
-                        source,
-                        raw: v.to_string(),
+    if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None) {
+        match parse_json_block(&ans) {
+            Ok(v) => {
+                let value = v.get("value").cloned();
+                let source = v
+                    .get("source")
+                    .and_then(|s| serde_json::from_value(s.clone()).ok())
+                    .map(|mut s: TextPosition| {
+                        if s.bbox.len() != 4 {
+                            s.bbox = [0.0, 0.0, 0.0, 0.0];
+                        }
+                        s
                     });
-                }
-                Err(e) => {
-                    warn!(
-                        "extract parse_json_block failed: {e}; ans[0..200]={}",
-                        ans.chars().take(200).collect::<String>()
-                    );
-                }
+
+                return Ok(OpenAiAnswer {
+                    boolean: None,
+                    route: None,
+                    value,
+                    source,
+                    raw: v.to_string(),
+                });
+            }
+            Err(e) => {
+                warn!(
+                    "extract parse_json_block failed: {e}; ans[0..200]={}",
+                    ans.chars().take(200).collect::<String>()
+                );
             }
         }
-        let wait = 100 * (1u64 << i).min(8);
-        time::sleep(Duration::from_millis(wait)).await;
     }
+
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
 /* ======================= Scoring (Tri-State mit Function-Call) ======================= */
 
-pub async fn score(
-    prompt_id: i32,
-    document: &str,
-) -> Result<crate::dto::ScoringResult, PromptError> {
+pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let question = fetch_prompt(prompt_id).await?;
     let msgs = build_scoring_prompt(document, &question);
@@ -360,77 +368,71 @@ pub async fn score(
       }
     });
 
-    for i in 0..=3 {
-        if let Ok(ans) = call_openai_chat(
-            &client,
-            "gpt-4o",
-            msgs.clone(),
-            Some(vec![schema.clone()]),
-            Some(serde_json::json!({"name":"ternary_answer"})),
-        )
-            .await
-        {
-            match parse_json_block(&ans) {
-                Ok(v) => {
-                    let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
-                    let vote_opt = match vote_str {
-                        "yes" => Some(TernaryLabel::yes),
-                        "no" => Some(TernaryLabel::no),
-                        "unsure" => Some(TernaryLabel::unsure),
-                        _ => None,
-                    };
+    if let Ok(ans) = call_openai_chat(
+        &client,
+        "gpt-4o",
+        msgs,
+        Some(vec![schema.clone()]),
+        Some(serde_json::json!({"name":"ternary_answer"})),
+    ) {
+        match parse_json_block(&ans) {
+            Ok(v) => {
+                let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
+                let vote_opt = match vote_str {
+                    "yes" => Some(TernaryLabel::yes),
+                    "no" => Some(TernaryLabel::no),
+                    "unsure" => Some(TernaryLabel::unsure),
+                    _ => None,
+                };
 
-                    let legacy_bool = v.get("result").and_then(|b| b.as_bool());
-                    // WICHTIG: bei UNSURE KEIN Default-false!
-                    let result_bool = match vote_opt {
-                        Some(TernaryLabel::yes) => true,
-                        Some(TernaryLabel::no) => false,
-                        Some(TernaryLabel::unsure) => legacy_bool.unwrap_or(false), // falls legacy explizit vorhanden
-                        None => legacy_bool.unwrap_or(false),
-                    };
+                // legacy bool optional
+                let legacy_bool = v.get("result").and_then(|b| b.as_bool());
+                let result_bool = match vote_opt {
+                    Some(TernaryLabel::yes) => true,
+                    Some(TernaryLabel::no) => false,
+                    Some(TernaryLabel::unsure) => legacy_bool.unwrap_or(false),
+                    None => legacy_bool.unwrap_or(false),
+                };
 
-                    let mut source: Option<TextPosition> = v
-                        .get("source")
-                        .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok());
-                    if let Some(s) = source.as_mut() {
-                        if s.bbox.len() != 4 {
-                            s.bbox = [0.0, 0.0, 0.0, 0.0];
-                        }
-                    } else {
-                        source = Some(TextPosition {
-                            page: 0,
-                            bbox: [0.0, 0.0, 0.0, 0.0],
-                            quote: None,
-                        });
+                let mut source: Option<TextPosition> =
+                    v.get("source").and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok());
+                if let Some(s) = source.as_mut() {
+                    if s.bbox.len() != 4 {
+                        s.bbox = [0.0, 0.0, 0.0, 0.0];
                     }
-
-                    let strength = v.get("strength").and_then(|x| x.as_f64()).map(|f| f as f32);
-                    let confidence = v.get("confidence").and_then(|x| x.as_f64()).map(|f| f as f32);
-                    let explanation = v.get("explanation").and_then(|e| e.as_str()).unwrap_or("").to_string();
-
-                    return Ok(crate::dto::ScoringResult {
-                        prompt_id,
-                        result: result_bool,
-                        source: source.unwrap(),
-                        explanation,
-                        vote: vote_opt,
-                        strength,
-                        confidence,
-                        score: None,
-                        label: None,
+                } else {
+                    source = Some(TextPosition {
+                        page: 0,
+                        bbox: [0.0, 0.0, 0.0, 0.0],
+                        quote: None,
                     });
                 }
-                Err(e) => {
-                    warn!(
-                        "score parse_json_block failed: {e}; ans[0..200]={}",
-                        ans.chars().take(200).collect::<String>()
-                    );
-                }
+
+                let strength = v.get("strength").and_then(|x| x.as_f64()).map(|f| f as f32);
+                let confidence = v.get("confidence").and_then(|x| x.as_f64()).map(|f| f as f32);
+                let explanation = v.get("explanation").and_then(|e| e.as_str()).unwrap_or("").to_string();
+
+                return Ok(ScoringResult {
+                    prompt_id,
+                    result: result_bool,
+                    source: source.unwrap(),
+                    explanation,
+                    vote: vote_opt,
+                    strength,
+                    confidence,
+                    score: None,
+                    label: None,
+                });
+            }
+            Err(e) => {
+                warn!(
+                    "score parse_json_block failed: {e}; ans[0..200]={}",
+                    ans.chars().take(200).collect::<String>()
+                );
             }
         }
-        let wait = 100 * (1u64 << i).min(8);
-        time::sleep(Duration::from_millis(wait)).await;
     }
+
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
@@ -439,7 +441,7 @@ pub async fn score(
 pub async fn decide(
     prompt_id: i32,
     document: &str,
-    state: &std::collections::HashMap<String, serde_json::Value>,
+    state: &HashMap<String, serde_json::Value>,
 ) -> Result<OpenAiAnswer, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
@@ -452,49 +454,49 @@ pub async fn decide(
         serde_json::to_string(state).unwrap_or_default()
     );
 
-    for i in 0..=3 {
-        let msgs = vec![
-            msg(ChatCompletionMessageRole::System, system),
-            msg(ChatCompletionMessageRole::User, &user),
-        ];
-        if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
-            match parse_json_block(&ans) {
-                Ok(mut v) => {
-                    let answer_bool = v.get("answer").and_then(|val| val.as_bool());
-                    if v.get("route").is_none() {
-                        if let Some(ansb) = answer_bool {
-                            v["route"] = serde_json::Value::String(ansb.to_string());
-                        }
+    let msgs = vec![
+        msg(ChatCompletionMessageRole::System, system),
+        msg(ChatCompletionMessageRole::User, &user),
+    ];
+
+    if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None) {
+        match parse_json_block(&ans) {
+            Ok(mut v) => {
+                let answer_bool = v.get("answer").and_then(|val| val.as_bool());
+                if v.get("route").is_none() {
+                    if let Some(ansb) = answer_bool {
+                        v["route"] = serde_json::Value::String(ansb.to_string());
                     }
-                    let route = v.get("route").and_then(|r| r.as_str()).map(|s| s.to_string());
+                }
+                let route = v.get("route").and_then(|r| r.as_str()).map(|s| s.to_string());
 
-                    let source = v
-                        .get("source")
-                        .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok())
-                        .map(|mut s| {
-                            if s.bbox.len() != 4 { s.bbox = [0.0, 0.0, 0.0, 0.0]; }
-                            s
-                        });
-
-                    return Ok(OpenAiAnswer {
-                        boolean: answer_bool,
-                        route,
-                        value: None,
-                        source,
-                        raw: v.to_string(),
+                let source = v
+                    .get("source")
+                    .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok())
+                    .map(|mut s| {
+                        if s.bbox.len() != 4 {
+                            s.bbox = [0.0, 0.0, 0.0, 0.0];
+                        }
+                        s
                     });
-                }
-                Err(e) => {
-                    warn!(
-                        "decide parse_json_block failed: {e}; ans[0..200]={}",
-                        ans.chars().take(200).collect::<String>()
-                    );
-                }
+
+                return Ok(OpenAiAnswer {
+                    boolean: answer_bool,
+                    route,
+                    value: None,
+                    source,
+                    raw: v.to_string(),
+                });
+            }
+            Err(e) => {
+                warn!(
+                    "decide parse_json_block failed: {e}; ans[0..200]={}",
+                    ans.chars().take(200).collect::<String>()
+                );
             }
         }
-        let wait = 100 * (1u64 << i).min(8);
-        time::sleep(Duration::from_millis(wait)).await;
     }
+
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
