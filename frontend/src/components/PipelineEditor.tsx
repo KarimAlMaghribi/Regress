@@ -7,7 +7,6 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
-import debounce from 'lodash.debounce';
 import { usePipelineStore, PipelineStep } from '../hooks/usePipelineStore';
 import { useLinearIndentLayout, LayoutRow } from '../hooks/useLinearIndentLayout';
 import StepDialog from './PipelineEditor/StepDialog';
@@ -21,8 +20,8 @@ const ROOT = 'Root';
 
 /* ──────────────────────────────────────────────────────────────────────────────
    Scoring-Konfiguration (nur EIN Wert: min_signal)
-   - UI zeigt nur "Mindest-Signal (0..1)"
-   - UNSURE wird serverseitig ohnehin ignoriert (Hinweis in der UI)
+   - UI: "Mindest-Signal (0..1)"
+   - UNSURE wird serverseitig ignoriert
    - Backcompat: falls alte Pipelines min_weight_yes/no haben, initialisieren wir min_signal = max(yes, no)
 ──────────────────────────────────────────────────────────────────────────────── */
 function ScoringConfigFields({
@@ -41,36 +40,29 @@ function ScoringConfigFields({
               typeof value?.min_weight_no === 'number' ? value.min_weight_no : 0
           );
 
-  // Lokaler State für flüssiges Tippen (fix: value ließ sich nicht ändern)
+  // Tipp-freundlicher lokaler State
   const [localMinSignal, setLocalMinSignal] = useState<number | ''>(
       Number.isFinite(initialMinSignal) ? Number(initialMinSignal.toFixed(3)) : 0
   );
 
-  // Parent -> Local Sync, wenn extern geändert (z. B. andere Steps/Store-Update)
+  // Parent -> Local Sync
   useEffect(() => {
     const ext = Number.isFinite(initialMinSignal) ? Number(initialMinSignal) : 0;
     setLocalMinSignal(Number(ext.toFixed(3)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value?.min_signal, value?.min_weight_yes, value?.min_weight_no]);
 
-  // Debounced Persist in den Store, damit nicht bei jedem Keypress ein Update rausgeht
-  const debouncedPersist = useMemo(
-      () =>
-          debounce((nextVal: number) => {
-            const nextCfg = {
-              ...(value || {}),
-              min_signal: nextVal, // nur dieses Feld wird aktiv verwendet
-              // Alte Felder lassen wir unangetastet (Kompatibilität)
-            };
-            onChange(nextCfg);
-          }, 200),
-      [onChange, value]
-  );
-
   const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
+  const commit = (next: number) => {
+    const nextCfg = {
+      ...(value || {}),
+      min_signal: next,
+    };
+    onChange(nextCfg); // ← sofort in den Store
+  };
+
   const handleChange = (raw: string) => {
-    // Leere Eingabe zulassen, damit man bequem tippen kann
     if (raw === '') {
       setLocalMinSignal('');
       return;
@@ -79,7 +71,7 @@ function ScoringConfigFields({
     if (Number.isNaN(parsed)) return;
     const clamped = clamp01(parsed);
     setLocalMinSignal(clamped);
-    debouncedPersist(clamped);
+    commit(clamped);
   };
 
   return (
@@ -94,7 +86,13 @@ function ScoringConfigFields({
             value={localMinSignal}
             onChange={(e) => handleChange(e.target.value)}
             inputProps={{ step: 0.1, min: 0, max: 1 }}
-            helperText="Einzel-Stimmen werden nur gezählt, wenn ihr Signal ≥ Mindest-Signal ist. UNSURE wird generell ignoriert."
+            onBlur={() => {
+              if (localMinSignal === '') {
+                setLocalMinSignal(0);
+                commit(0);
+              }
+            }}
+            helperText="Einzel-Stimmen zählen nur, wenn ihr Signal ≥ Mindest-Signal ist. UNSURE wird generell ignoriert."
         />
       </Box>
   );
@@ -121,10 +119,18 @@ export default function PipelineEditor() {
   const [insertPos, setInsertPos] = useState<number>(steps.length);
   const [promptOptions, setPromptOptions] = useState<Record<string, PromptOption[]>>({});
   const [error, setError] = useState('');
-  const debounced = useMemo(() => debounce(updateName, 300), [updateName]);
   const totalCols = 9;
 
-  // Sobald sich die globale steps-Liste ändert, aktuelle edit-Referenz aus dem Store nachziehen
+  // Name-Update leicht entkoppeln
+  const debouncedUpdateName = useMemo(() => {
+    let t: any;
+    return (v: string) => {
+      clearTimeout(t);
+      t = setTimeout(() => updateName(v), 200);
+    };
+  }, [updateName]);
+
+  // Beim Steps-Update edit-Step frisch ziehen (damit UI die neuesten Werte zeigt)
   useEffect(() => {
     if (!edit) return;
     const latest = steps.find(s => s.id === edit.id);
@@ -172,7 +178,7 @@ export default function PipelineEditor() {
     let idx = -1;
     steps.forEach((s, i) => { if (s.route === route) idx = i + 1; });
     if (idx === -1) idx = steps.length;
-    addStepAt(idx, draft as any) // evtl. .config vorhanden
+    addStepAt(idx, draft as any)
     .then(() => setDraft(null))
     .catch(e => setError(String(e)));
   };
@@ -225,7 +231,7 @@ export default function PipelineEditor() {
               size="small"
               label="Name"
               value={name}
-              onChange={e=>debounced(e.target.value)}
+              onChange={e=>debouncedUpdateName(e.target.value)}
           />
           <Button
               startIcon={<AddIcon/>}
@@ -288,7 +294,7 @@ export default function PipelineEditor() {
                       <TableCell>
                         <Checkbox
                             checked={r.step.active !== false}
-                            onChange={e => updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))}
+                            onChange={e => usePipelineStore.getState().updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))}
                         />
                       </TableCell>
                       <TableCell>
