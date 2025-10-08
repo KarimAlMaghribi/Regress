@@ -379,18 +379,18 @@ pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, Prom
             Ok(v) => {
                 let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
                 let vote_opt = match vote_str {
-                    "yes" => Some(TernaryLabel::yes),
-                    "no" => Some(TernaryLabel::no),
-                    "unsure" => Some(TernaryLabel::unsure),
+                    "yes" => Some(TernaryLabel::Yes),
+                    "no" => Some(TernaryLabel::No),
+                    "unsure" => Some(TernaryLabel::Unsure),
                     _ => None,
                 };
 
                 // legacy bool optional
                 let legacy_bool = v.get("result").and_then(|b| b.as_bool());
                 let result_bool = match vote_opt {
-                    Some(TernaryLabel::yes) => true,
-                    Some(TernaryLabel::no) => false,
-                    Some(TernaryLabel::unsure) => legacy_bool.unwrap_or(false),
+                    Some(TernaryLabel::Yes) => true,
+                    Some(TernaryLabel::No) => false,
+                    Some(TernaryLabel::Unsure) => legacy_bool.unwrap_or(false),
                     None => legacy_bool.unwrap_or(false),
                 };
 

@@ -15,9 +15,9 @@ pub enum PromptType {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TernaryLabel {
-    yes,
-    no,
-    unsure,
+    Yes,
+    No,
+    Unsure,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
