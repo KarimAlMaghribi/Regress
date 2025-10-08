@@ -161,7 +161,6 @@ pub struct PipelineStep {
     pub config: Option<Value>,
 }
 
-
 #[derive(Serialize, Deserialize)]
 pub struct PipelineConfig {
     pub name: String,

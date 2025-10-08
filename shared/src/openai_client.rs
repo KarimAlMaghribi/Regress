@@ -187,7 +187,7 @@ pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletio
 
 /// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
 /// Erzwingt response_format=json_object und berücksichtigt function/tool arguments.
-/// **Robust**: Kein früher Abbruch bei Schemaabweichungen; immer erst Roh-JSON auswerten.
+— /// **Robust**: Kein früher Abbruch bei Schemaabweichungen; immer erst Roh-JSON auswerten.
 pub async fn call_openai_chat(
     client: &Client,
     model: &str,
@@ -303,7 +303,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
         msg(ChatCompletionMessageRole::User, &user),
     ];
 
-    if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None) {
+    if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
         match parse_json_block(&ans) {
             Ok(v) => {
                 let value = v.get("value").cloned();
@@ -374,7 +374,7 @@ pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, Prom
         msgs,
         Some(vec![schema.clone()]),
         Some(serde_json::json!({"name":"ternary_answer"})),
-    ) {
+    ).await {
         match parse_json_block(&ans) {
             Ok(v) => {
                 let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
@@ -459,7 +459,7 @@ pub async fn decide(
         msg(ChatCompletionMessageRole::User, &user),
     ];
 
-    if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None) {
+    if let Ok(ans) = call_openai_chat(&client, "gpt-4o", msgs, None, None).await {
         match parse_json_block(&ans) {
             Ok(mut v) => {
                 let answer_bool = v.get("answer").and_then(|val| val.as_bool());
