@@ -530,7 +530,7 @@ async fn app_main() -> anyhow::Result<()> {
                                 } else if result_bool { 1.0 } else { -1.0 };
 
                                 let label = if result_bool { "yes" } else { "no" };
-                                let lbl_enum = if result_bool { TernaryLabel::yes } else { TernaryLabel::no };
+                                let lbl_enum = if result_bool { TernaryLabel::Yes } else { TernaryLabel::No };
 
                                 // borrow-safe explanation & support
                                 let explanation: Option<String> = if result_bool {
@@ -598,7 +598,7 @@ async fn app_main() -> anyhow::Result<()> {
                                 let score_tri = vnum;
                                 let result_bool = r.result;
                                 let label = if result_bool { "yes" } else { "no" };
-                                let lbl_enum = if result_bool { TernaryLabel::yes } else { TernaryLabel::no };
+                                let lbl_enum = if result_bool { TernaryLabel::Yes } else { TernaryLabel::No };
                                 let key = format!("score_{}", pid);
                                 let confidence = 0.5_f32;
 

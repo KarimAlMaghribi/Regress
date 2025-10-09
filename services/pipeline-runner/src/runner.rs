@@ -85,20 +85,20 @@ pub async fn execute_with_pages(
                             &cfg_clone,
                             &prompt_text_for_log,
                         )
-                            .await
-                            .unwrap_or_else(|e| PromptResult {
-                                prompt_id,
-                                prompt_type: PromptType::ExtractionPrompt,
-                                prompt_text: prompt_text_for_log.clone(),
-                                value: None,
-                                boolean: None,
-                                route: None,
-                                weight: None,
-                                source: None,
-                                openai_raw: String::new(),
-                                json_key: None,
-                                error: Some(format!("extract failed: {e}")),
-                            })
+                        .await
+                        .unwrap_or_else(|e| PromptResult {
+                            prompt_id,
+                            prompt_type: PromptType::ExtractionPrompt,
+                            prompt_text: prompt_text_for_log.clone(),
+                            value: None,
+                            boolean: None,
+                            route: None,
+                            weight: None,
+                            source: None,
+                            openai_raw: String::new(),
+                            json_key: None,
+                            error: Some(format!("extract failed: {e}")),
+                        })
                     }
                 });
 
@@ -159,7 +159,7 @@ pub async fn execute_with_pages(
                                     quote: None,
                                 },
                                 explanation: format!("score failed: {e}"),
-                                vote: Some(TernaryLabel::unsure),
+                                vote: Some(TernaryLabel::Unsure),
                                 strength: Some(0.0),
                                 confidence: Some(0.0),
                                 score: None,
@@ -231,20 +231,20 @@ pub async fn execute_with_pages(
                             &no_key,
                             &prompt_text_for_log,
                         )
-                            .await
-                            .unwrap_or_else(|e| PromptResult {
-                                prompt_id,
-                                prompt_type: PromptType::DecisionPrompt,
-                                prompt_text: prompt_text_for_log.clone(),
-                                value: None,
-                                boolean: None,
-                                route: Some(no_key.clone()),
-                                weight: None,
-                                source: None,
-                                openai_raw: String::new(),
-                                json_key: None,
-                                error: Some(format!("decision failed: {e}")),
-                            })
+                        .await
+                        .unwrap_or_else(|e| PromptResult {
+                            prompt_id,
+                            prompt_type: PromptType::DecisionPrompt,
+                            prompt_text: prompt_text_for_log.clone(),
+                            value: None,
+                            boolean: None,
+                            route: Some(no_key.clone()),
+                            weight: None,
+                            source: None,
+                            openai_raw: String::new(),
+                            json_key: None,
+                            error: Some(format!("decision failed: {e}")),
+                        })
                     }
                 });
 
@@ -448,7 +448,7 @@ async fn call_extract_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::extract(prompt_id, text),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -502,7 +502,7 @@ async fn call_score_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::score(prompt_id, text),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -548,7 +548,7 @@ async fn call_decide_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::decide(prompt_id, text, &state),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -621,7 +621,9 @@ async fn call_decide_with_retries(
 /* --------------------- Tri-State Konsolidierung für Scoring --------------------- */
 
 fn clamp01f(x: f32) -> f32 {
-    if !x.is_finite() { return 0.0; }
+    if !x.is_finite() {
+        return 0.0;
+    }
     x.max(0.0).min(1.0)
 }
 
@@ -642,39 +644,44 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
                 quote: None,
             },
             explanation: "no scores".into(),
-            vote: Some(TernaryLabel::unsure),
+            vote: Some(TernaryLabel::Unsure),
             strength: Some(0.0),
             confidence: Some(0.0),
             score: Some(0.0),
-            label: Some(TernaryLabel::unsure),
+            label: Some(TernaryLabel::Unsure),
         };
     }
 
     let pid = v[0].prompt_id;
 
     let mut yes_w: f32 = 0.0;
-    let mut no_w:  f32 = 0.0;
+    let mut no_w: f32 = 0.0;
 
     for s in v {
-        let vote = s.vote.or_else(|| {
-            // Fallback aus legacy-boolean (nur wenn explizit vorhanden)
-            if s.result { Some(TernaryLabel::yes) } else { Some(TernaryLabel::no) }
-        }).unwrap_or(TernaryLabel::unsure);
+        let vote = s
+            .vote
+            .or_else(|| {
+                // Fallback aus legacy-boolean (nur wenn explizit vorhanden)
+                if s.result {
+                    Some(TernaryLabel::Yes)
+                } else {
+                    Some(TernaryLabel::No)
+                }
+            })
+            .unwrap_or(TernaryLabel::Unsure);
 
-        let strength = s.strength.unwrap_or_else(|| {
-            match vote {
-                TernaryLabel::yes | TernaryLabel::no => 1.0,
-                TernaryLabel::unsure => 0.0,
-            }
+        let strength = s.strength.unwrap_or_else(|| match vote {
+            TernaryLabel::Yes | TernaryLabel::No => 1.0,
+            TernaryLabel::Unsure => 0.0,
         });
         let confidence = s.confidence.unwrap_or(0.5);
 
         let w = 0.6 * clamp01f(strength) + 0.4 * clamp01f(confidence);
 
         match vote {
-            TernaryLabel::yes => yes_w += w,
-            TernaryLabel::no  =>  no_w += w,
-            TernaryLabel::unsure => {}
+            TernaryLabel::Yes => yes_w += w,
+            TernaryLabel::No => no_w += w,
+            TernaryLabel::Unsure => {}
         }
     }
 
@@ -688,23 +695,26 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
             source: v[0].source.clone(),
             explanation: format!(
                 "weighted vote: yes_w={:.3} no_w={:.3} -> score={:.3} label={:?}",
-                yes_w, no_w, 0.0, TernaryLabel::unsure
+                yes_w,
+                no_w,
+                0.0,
+                TernaryLabel::Unsure
             ),
-            vote: Some(TernaryLabel::unsure),
+            vote: Some(TernaryLabel::Unsure),
             strength: None,
             confidence: Some(0.0),
             score: Some(0.0),
-            label: Some(TernaryLabel::unsure),
+            label: Some(TernaryLabel::Unsure),
         };
     }
 
     let s = (yes_w - no_w) / total; // -1..+1
     let label = if s >= 0.60 {
-        TernaryLabel::yes
+        TernaryLabel::Yes
     } else if s <= -0.60 {
-        TernaryLabel::no
+        TernaryLabel::No
     } else {
-        TernaryLabel::unsure
+        TernaryLabel::Unsure
     };
 
     // Quelle: nimm die erste Quelle, die zum finalen Label passt, sonst die erste
@@ -715,7 +725,9 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
                 chosen_src = Some(sres.source.clone());
                 break;
             }
-        } else if (label == TernaryLabel::yes && sres.result) || (label == TernaryLabel::no && !sres.result) {
+        } else if (label == TernaryLabel::Yes && sres.result)
+            || (label == TernaryLabel::No && !sres.result)
+        {
             chosen_src = Some(sres.source.clone());
             break;
         }
@@ -724,13 +736,13 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
 
     ScoringResult {
         prompt_id: pid,
-        result: matches!(label, TernaryLabel::yes), // bool Kompatibilität
+        result: matches!(label, TernaryLabel::Yes), // bool Kompatibilität
         source,
         explanation: format!(
             "weighted vote: yes_w={:.3} no_w={:.3} -> score={:.3} label={:?}",
             yes_w, no_w, s, label
         ),
-        vote: Some(label),         // konsolidiertes Label
+        vote: Some(label), // konsolidiertes Label
         strength: None,
         confidence: Some((yes_w.max(no_w) / (total.max(1e-6))).min(1.0)), // grobe Konfidenz
         score: Some(s),
