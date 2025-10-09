@@ -1,13 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
 import {
-  Box, Tabs, Tab, Typography,
+  Box, Typography,
   Card, CardHeader, CardContent,
   Chip, Stack, Table, TableHead, TableRow, TableCell, TableBody,
-  Tooltip, LinearProgress, IconButton
+  Tooltip, LinearProgress, IconButton, Divider
 } from '@mui/material';
 import LaunchIcon from '@mui/icons-material/Launch';
 
-import GenericResultTable from './GenericResultTable';
 import PdfViewer from './PdfViewer';
 import { PipelineRunResult, TextPosition } from '../types/pipeline';
 import { FinalHeader } from './final/FinalPills';
@@ -50,36 +49,6 @@ function fmt(val: any) {
   return String(val);
 }
 
-function toPosLike(obj: any): any | null {
-  if (!obj || typeof obj !== 'object') return null;
-  const page = obj.page ?? obj?.source?.page ?? null;
-  const bbox = obj.bbox ?? obj?.source?.bbox ?? null;
-  const quote = obj.quote ?? obj?.source?.quote ?? null;
-  return { page, bbox, quote };
-}
-
-function EvidenceChip({ ev, onSelect }: { ev: any; onSelect: (p: TextPosition | null) => void }) {
-  if (!ev || !ev.page) return <span>—</span>;
-  const title = `${`Seite ${ev.page}`}${Array.isArray(ev.bbox) ? ` • BBox: ${ev.bbox.join(',')}` : ''}${ev.quote ? `\n${ev.quote}` : ''}`;
-  return (
-      <Tooltip title={title}>
-        <Chip
-            size="small"
-            label={`Seite ${ev.page}`}
-            clickable
-            onClick={() => {
-              const pos: TextPosition = {
-                page: ev.page as number,
-                bbox: (Array.isArray(ev.bbox) ? (ev.bbox as [number, number, number, number]) : [0, 0, 0, 0]),
-                quote: ev.quote ?? undefined,
-              };
-              onSelect(pos);
-            }}
-        />
-      </Tooltip>
-  );
-}
-
 function formatDuration(start: string, end: string): string {
   const startTime = new Date(start);
   const endTime = new Date(end);
@@ -96,11 +65,10 @@ interface Props {
 
 export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
   const run: any = useMemo(() => normalizeRun(rawRun), [rawRun]);
-  const [tab, setTab] = useState(0);
   const [highlight, setHighlight] = useState<TextPosition | null>(null);
+  const stepRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const extractedEntries = useMemo(() => Object.entries(run.extracted ?? {}), [run.extracted]);
-  const decisionEntries = useMemo(() => Object.entries(run.decisions ?? {}), [run.decisions]);
   const scoringArray = Array.isArray(run.scoring) ? run.scoring : [];
 
   const computedOverall: number | null = useMemo(() => {
@@ -125,6 +93,11 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
     ...(computedOverall != null ? [{ key: 'overall_score', value: computedOverall.toFixed(2) }] : []),
   ];
 
+  const scrollToStep = (stepId: string) => {
+    const el = stepRefs.current[stepId];
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   return (
       <Box>
         <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 2, mb: 2 }}>
@@ -138,8 +111,40 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
 
         <FinalHeader extracted={run.extracted} scores={run.scores} decisions={run.decisions} />
 
+        {/* Schritte & Versuche */}
+        {Array.isArray(run.log) && run.log.length > 0 && (
+            <Card variant="outlined" sx={{ mt: 3 }}>
+              <CardHeader title="Schritte & Versuche" subheader="Abarbeitung der Pipeline" />
+              <CardContent>
+                <Stack spacing={2} divider={<Divider />}>
+                  {run.log.map((step: any) => {
+                    const stepId = step.step_id ?? step.seq_no;
+                    const refKey = String(stepId);
+                    return (
+                        <Box key={refKey} ref={el => (stepRefs.current[refKey] = el)}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <Tooltip title={step.prompt_text ?? ''}>
+                              <Chip
+                                  label={step.prompt_text ?? step.prompt_type}
+                                  size="small"
+                                  onClick={() => scrollToStep(refKey)}
+                                  sx={{ maxWidth: 300 }}
+                              />
+                            </Tooltip>
+                            <Typography variant="body2" noWrap>
+                              {fmt(step.result?.value ?? step.result?.final_value ?? '—')}
+                            </Typography>
+                          </Stack>
+                        </Box>
+                    );
+                  })}
+                </Stack>
+              </CardContent>
+            </Card>
+        )}
+
         {extractedEntries.length > 0 && (
-            <Card variant="outlined" sx={{ mt: 2 }}>
+            <Card variant="outlined" sx={{ mt: 3 }}>
               <CardHeader title="Finale Extraktion" />
               <CardContent>
                 <Table size="small">
@@ -153,7 +158,11 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
                   <TableBody>
                     {extractedEntries.map(([k, v]: any) => (
                         <TableRow key={k}>
-                          <TableCell><Chip size="small" label={k.replace(/_/g, ' ')} /></TableCell>
+                          <TableCell>
+                            <Tooltip title={k}>
+                              <Typography noWrap sx={{ maxWidth: 280 }}>{k.replace(/_/g, ' ')}</Typography>
+                            </Tooltip>
+                          </TableCell>
                           <TableCell>{fmt(v?.value)}</TableCell>
                           <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
                         </TableRow>
@@ -165,7 +174,7 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
         )}
 
         {scoringArray.length > 0 && (
-            <Card variant="outlined" sx={{ mt: 2 }}>
+            <Card variant="outlined" sx={{ mt: 3 }}>
               <CardHeader
                   title="Scoring (final)"
                   subheader="Ja/Nein-Ergebnisse je Prompt"
@@ -180,7 +189,6 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
                       <TableCell>Confidence</TableCell>
                       <TableCell>Votes</TableCell>
                       <TableCell>Begründung</TableCell>
-                      <TableCell>Support</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -195,13 +203,6 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
                           <TableCell><ConfidenceBar value={v.confidence} /></TableCell>
                           <TableCell>{(v.votes_true ?? 0)} / {(v.votes_false ?? 0)}</TableCell>
                           <TableCell>{v.explanation ?? '—'}</TableCell>
-                          <TableCell>
-                            <Stack direction="row" spacing={0.5} flexWrap="wrap">
-                              {(v.support ?? []).slice(0, 3).map((s: any, i: number) => (
-                                  <EvidenceChip key={i} ev={s} onSelect={setHighlight} />
-                              ))}
-                            </Stack>
-                          </TableCell>
                         </TableRow>
                     ))}
                   </TableBody>
@@ -210,52 +211,7 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
             </Card>
         )}
 
-        {decisionEntries.length > 0 && (
-            <Card variant="outlined" sx={{ mt: 2 }}>
-              <CardHeader title="Decision (final)" subheader="Routenentscheidungen je Prompt" />
-              <CardContent>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Decision-Key</TableCell>
-                      <TableCell>Route</TableCell>
-                      <TableCell>Answer</TableCell>
-                      <TableCell width={200}>Confidence</TableCell>
-                      <TableCell>Votes</TableCell>
-                      <TableCell>Erklärung</TableCell>
-                      <TableCell>Support</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {decisionEntries.map(([k, v]: any) => {
-                      const support: any[] = Array.isArray(v?.support) ? v.support : [];
-                      return (
-                          <TableRow key={k}>
-                            <TableCell><Chip size="small" label={k.replace(/_/g, ' ')} /></TableCell>
-                            <TableCell><Chip size="small" label={v?.route ?? '—'} /></TableCell>
-                            <TableCell>{typeof v?.answer === 'boolean' ? <Chip size="small" color={v.answer ? 'success' : 'error'} label={v.answer ? 'Ja' : 'Nein'} /> : '—'}</TableCell>
-                            <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
-                            <TableCell>{(v?.votes_yes ?? v?.votes_true ?? 0)} / {(v?.votes_no ?? v?.votes_false ?? 0)}</TableCell>
-                            <TableCell>{v?.explanation ?? '—'}</TableCell>
-                            <TableCell>
-                              <Stack direction="row" gap={0.5} flexWrap="wrap">
-                                {support.length
-                                    ? support.slice(0, 3).map((s, i) => (
-                                        <EvidenceChip key={i} ev={toPosLike(s)} onSelect={setHighlight} />
-                                    ))
-                                    : '—'}
-                              </Stack>
-                            </TableCell>
-                          </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </CardContent>
-            </Card>
-        )}
-
-        <Box sx={{ mt: 2 }}>
+        <Box sx={{ mt: 4 }}>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
             <Typography variant="subtitle2">PDF</Typography>
             {pdfUrl && (
