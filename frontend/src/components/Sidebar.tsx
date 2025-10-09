@@ -61,10 +61,9 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
     { text: 'Dashboard', to: '/', icon: <DashboardIcon /> },
     { text: 'Upload', to: '/upload', icon: <CloudUploadIcon /> },
     { text: 'Pipeline', to: '/pipeline', icon: <BuildIcon /> },
-    // Entfernt: Analysis (/analysis)
-    { text: 'Analyses', to: '/analyses', icon: <AssessmentIcon /> }, // anderes Icon als History
+    { text: 'Analyses', to: '/analyses', icon: <AssessmentIcon /> },
     { text: 'History', to: '/history', icon: <HistoryIcon /> },
-    { text: 'Tenants', to: '/tenants', icon: <DomainIcon /> }, // neu hinzugefügt
+    { text: 'Tenants', to: '/tenants', icon: <DomainIcon /> },
   ];
 
   const secondary = [
