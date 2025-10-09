@@ -187,7 +187,7 @@ pub fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletio
 
 /// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
 /// Erzwingt response_format=json_object und berücksichtigt function/tool arguments.
-— /// **Robust**: Kein früher Abbruch bei Schemaabweichungen; immer erst Roh-JSON auswerten.
+/// **Robust**: Kein früher Abbruch bei Schemaabweichungen; immer erst Roh-JSON auswerten.
 pub async fn call_openai_chat(
     client: &Client,
     model: &str,
