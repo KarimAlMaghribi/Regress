@@ -244,58 +244,81 @@ pub fn consolidate_scoring_weighted(
     anchor_page: Option<u32>,
     cfg: &ConsCfg,
 ) -> Option<ScoreOutcome> {
-    let mut score_true = 0.0f32;
-    let mut score_false = 0.0f32;
-    let mut votes_true = 0usize;
-    let mut votes_false = 0usize;
+    #[derive(Clone)]
+    struct Item {
+        pos: TextPosition,
+        strength: f32,
+        expl: Option<String>,
+        confidence: f32,
+    }
 
-    #[derive(Clone)] struct Item { pos: TextPosition, strength: f32, expl: Option<String> }
-    let mut items_true: Vec<Item> = Vec::new();
-    let mut items_false: Vec<Item> = Vec::new();
+    let mut yes_w: f64 = 0.0;
+    let mut no_w: f64 = 0.0;
+    let mut items_true = Vec::new();
+    let mut items_false = Vec::new();
 
     let (wv, wn, wh, we) = cfg.w_scoring;
 
     for r in results.iter().filter(|r| r.prompt_id == prompt_id) {
-        let page  = r.source.page as u32;
-        let y1    = r.source.bbox[1];
-        let near  = anchor_page.map(|a| 1.0 / (1.0 + (page as f32 - a as f32).abs())).unwrap_or(0.5);
-        let header= if y1 <= cfg.header_y { 1.0 } else { 0.0 };
+        let page = r.source.page as u32;
+        let y1 = r.source.bbox[1];
+        let near = anchor_page.map(|a| 1.0 / (1.0 + (page as f32 - a as f32).abs())).unwrap_or(0.5);
+        let header = if y1 <= cfg.header_y { 1.0 } else { 0.0 };
         let explq = if r.explanation.trim().len() >= cfg.min_expl_len { 1.0 } else { 0.0 };
+        let strength = wv * 1.0 + wn * near + wh * header + we * explq;
+        let conf = r.confidence;
 
-        let strength = wv*1.0 + wn*near + wh*header + we*explq;
+        // nur Stimmen ≥ min_confidence zählen
+        if conf < cfg.min_confidence {
+            continue;
+        }
 
         if r.result {
-            votes_true += 1;
-            score_true += strength;
-            items_true.push(Item { pos: r.source.clone(), strength, expl: non_empty(&r.explanation) });
+            yes_w += strength as f64;
+            items_true.push(Item {
+                pos: r.source.clone(),
+                strength,
+                expl: non_empty(&r.explanation),
+                confidence: conf,
+            });
         } else {
-            votes_false += 1;
-            score_false += strength;
-            items_false.push(Item { pos: r.source.clone(), strength, expl: non_empty(&r.explanation) });
+            no_w += strength as f64;
+            items_false.push(Item {
+                pos: r.source.clone(),
+                strength,
+                expl: non_empty(&r.explanation),
+                confidence: conf,
+            });
         }
     }
 
-    let total_votes = votes_true + votes_false;
-    if total_votes == 0 { return None; }
+    let total_weight = yes_w + no_w;
+    if total_weight == 0.0 {
+        return None; // keine verwertbaren Stimmen → "Unsicher"
+    }
 
-    let (result, conf, support, _explanation) = if score_true >= score_false {
-        let sum = (score_true + score_false).max(1e-6);
-        items_true.sort_by(|a,b| b.strength.total_cmp(&a.strength));
-        (true, (score_true / sum).clamp(0.0, 1.0), items_true, None::<String>)
+    let (result, label, support_items) = if (yes_w - no_w).abs() < 1e-6 {
+        // Gleichstand
+        (false, "unsure", if yes_w > 0.0 { items_true } else { items_false })
+    } else if yes_w > no_w {
+        (true, "yes", items_true)
     } else {
-        let sum = (score_true + score_false).max(1e-6);
-        items_false.sort_by(|a,b| b.strength.total_cmp(&a.strength));
-        (false, (score_false / sum).clamp(0.0, 1.0), items_false, None::<String>)
+        (false, "no", items_false)
     };
 
-    let best_expl = support.iter().find_map(|i| i.expl.clone());
-    let support_positions = support.into_iter().take(3).map(|i| i.pos).collect();
+    let confidence = (yes_w / total_weight) as f32;
+    let best_expl = support_items.iter().find_map(|i| i.expl.clone());
+    let support_positions = support_items
+        .into_iter()
+        .take(3)
+        .map(|i| i.pos)
+        .collect();
 
     Some(ScoreOutcome {
         result,
-        confidence: conf,
-        votes_true,
-        votes_false,
+        confidence,
+        votes_true: if result { 1 } else { 0 },
+        votes_false: if !result && label == "no" { 1 } else { 0 },
         support: support_positions,
         explanation: best_expl,
     })
