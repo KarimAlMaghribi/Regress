@@ -80,6 +80,15 @@ function EvidenceChip({ ev, onSelect }: { ev: any; onSelect: (p: TextPosition | 
   );
 }
 
+function formatDuration(start: string, end: string): string {
+  const startTime = new Date(start);
+  const endTime = new Date(end);
+  const diff = endTime.getTime() - startTime.getTime();
+  const seconds = Math.floor(diff / 1000);
+  const ms = diff % 1000;
+  return `${seconds}s ${ms}ms`;
+}
+
 interface Props {
   run: PipelineRunResult;
   pdfUrl: string;
@@ -111,8 +120,9 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
   const meta = [
     ...(run.pipeline_id ? [{ key: 'pipeline_id', value: String(run.pipeline_id) }] : []),
     ...(run.pdf_id != null ? [{ key: 'pdf_id', value: String(run.pdf_id) }] : []),
+    ...(run.started_at && run.finished_at
+        ? [{ key: 'Laufzeit', value: formatDuration(run.started_at, run.finished_at) }] : []),
     ...(computedOverall != null ? [{ key: 'overall_score', value: computedOverall.toFixed(2) }] : []),
-    ...(run.timestamp ? [{ key: 'timestamp', value: run.timestamp }] : []),
   ];
 
   return (
@@ -138,23 +148,16 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
                       <TableCell>Feld</TableCell>
                       <TableCell>Wert</TableCell>
                       <TableCell width={200}>Confidence</TableCell>
-                      <TableCell>Stelle</TableCell>
-                      <TableCell>Zitat</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {extractedEntries.map(([k, v]: any) => {
-                      const ev = toPosLike(v);
-                      return (
-                          <TableRow key={k}>
-                            <TableCell><Chip size="small" label={k} /></TableCell>
-                            <TableCell>{fmt(v?.value)}</TableCell>
-                            <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
-                            <TableCell><EvidenceChip ev={ev} onSelect={setHighlight} /></TableCell>
-                            <TableCell>{ev?.quote ? <Tooltip title={ev.quote}><Typography noWrap sx={{ maxWidth: 360 }}>{ev.quote}</Typography></Tooltip> : '—'}</TableCell>
-                          </TableRow>
-                      );
-                    })}
+                    {extractedEntries.map(([k, v]: any) => (
+                        <TableRow key={k}>
+                          <TableCell><Chip size="small" label={k.replace(/_/g, ' ')} /></TableCell>
+                          <TableCell>{fmt(v?.value)}</TableCell>
+                          <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
+                        </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
               </CardContent>
@@ -183,7 +186,11 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
                   <TableBody>
                     {scoringArray.map((v: any, idx: number) => (
                         <TableRow key={idx}>
-                          <TableCell>{v.prompt_text || `Prompt ${v.prompt_id}`}</TableCell>
+                          <TableCell>
+                            <Tooltip title={v.prompt_text ?? ''}>
+                              <Typography noWrap sx={{ maxWidth: 280 }}>{v.prompt_text ?? `Prompt ${v.prompt_id}`}</Typography>
+                            </Tooltip>
+                          </TableCell>
                           <TableCell><Chip label={v.label} size="small" /></TableCell>
                           <TableCell><ConfidenceBar value={v.confidence} /></TableCell>
                           <TableCell>{(v.votes_true ?? 0)} / {(v.votes_false ?? 0)}</TableCell>
@@ -224,7 +231,7 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
                       const support: any[] = Array.isArray(v?.support) ? v.support : [];
                       return (
                           <TableRow key={k}>
-                            <TableCell><Chip size="small" label={k} /></TableCell>
+                            <TableCell><Chip size="small" label={k.replace(/_/g, ' ')} /></TableCell>
                             <TableCell><Chip size="small" label={v?.route ?? '—'} /></TableCell>
                             <TableCell>{typeof v?.answer === 'boolean' ? <Chip size="small" color={v.answer ? 'success' : 'error'} label={v.answer ? 'Ja' : 'Nein'} /> : '—'}</TableCell>
                             <TableCell><ConfidenceBar value={v?.confidence} /></TableCell>
@@ -247,29 +254,6 @@ export default function RunDetails({ run: rawRun, pdfUrl }: Props) {
               </CardContent>
             </Card>
         )}
-
-        <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mt: 3, mb: 2 }}>
-          {(['extraction', 'scoring', 'decision'] as const).map((cat, i) => (
-              <Tab key={cat} label={cat} value={i} />
-          ))}
-        </Tabs>
-
-        {(['extraction', 'scoring', 'decision'] as const).map((cat, i) => (
-            tab === i && (
-                <Box key={cat} sx={{ mb: 2 }}>
-                  <GenericResultTable data={(run as any)[cat] ?? []} onSelect={setHighlight} />
-                </Box>
-            )
-        ))}
-
-        <Box sx={{ mt: 2 }}>
-          <Typography variant="subtitle2" gutterBottom>Run-Log</Typography>
-          <GenericResultTable
-              data={run.log ?? [] as any}
-              onSelect={setHighlight}
-              preferredOrder={['seq_no', 'prompt_type', 'decision_key', 'route', 'prompt_text']}
-          />
-        </Box>
 
         <Box sx={{ mt: 2 }}>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
