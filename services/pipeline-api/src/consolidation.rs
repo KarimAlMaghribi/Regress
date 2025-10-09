@@ -365,7 +365,7 @@ pub fn consolidate_scoring_weighted(
                 pos: r.source.clone(),
                 strength,
                 expl: non_empty(&r.explanation),
-                confidence: conf,
+                confidence: conf.unwrap_or(0.0),
             });
         } else {
             no_w += strength as f64;
@@ -373,7 +373,7 @@ pub fn consolidate_scoring_weighted(
                 pos: r.source.clone(),
                 strength,
                 expl: non_empty(&r.explanation),
-                confidence: conf,
+                confidence: conf.unwrap_or(0.0),
             });
         }
     }
