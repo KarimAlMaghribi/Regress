@@ -1,5 +1,5 @@
 import * as React from "react";
-import {useMemo} from "react";
+import {useMemo, useCallback} from "react";
 import {useParams, useSearchParams} from "react-router-dom";
 import {
   Alert,
@@ -168,6 +168,52 @@ function formatValue(val: any) {
   } catch {
     return String(v);
   }
+}
+
+/* ===== Batch‑Spannen (Seitenbereich) für Score/Decision ===== */
+
+const STEP_TO_PROMPT_LOG: Record<RunStep["step_type"], "ExtractionPrompt" | "ScoringPrompt" | "DecisionPrompt"> = {
+  Extraction: "ExtractionPrompt",
+  Score: "ScoringPrompt",
+  Decision: "DecisionPrompt",
+};
+
+function pagesSpanLabelFromList(pages: number[] | undefined): string | null {
+  if (!pages || pages.length === 0) return null;
+  const min0 = Math.min(...pages);
+  const max0 = Math.max(...pages);
+  const a = min0 + 1; // UI 1‑basiert
+  const b = max0 + 1;
+  return a === b ? `Seite ${a}` : `Seiten ${a}–${b}`;
+}
+
+function pagesSpanOpenPage(pages: number[] | undefined): number | undefined {
+  if (!pages || !pages.length) return undefined;
+  return Math.min(...pages) + 1; // UI 1‑basiert
+}
+
+function getBatchesPagesForStep(detail: RunDetail, step: RunStep): number[][] | undefined {
+  const logs: any[] = Array.isArray((detail as any).log) ? (detail as any).log : Array.isArray((detail as any).run?.log) ? (detail as any).run.log : [];
+  if (!Array.isArray(logs)) return undefined;
+
+  const expectedType = STEP_TO_PROMPT_LOG[step.step_type];
+  const logsOfType = logs.filter(l => l?.prompt_type === expectedType);
+
+  // Index des Steps innerhalb desselben Typs
+  const sameType = (detail.steps ?? []).filter(s => s.step_type === step.step_type);
+  let idx = sameType.findIndex(s => s.id === step.id);
+
+  // Fallback: via prompt_id
+  if (idx < 0 && (step as any).prompt_id != null) {
+    const li = logsOfType.findIndex(l => l?.prompt_id === (step as any).prompt_id);
+    if (li >= 0) idx = li;
+  }
+
+  const logEntry = logsOfType[idx] ?? logsOfType[0];
+  const batches = logEntry?.result?.batches;
+  if (!Array.isArray(batches)) return undefined;
+
+  return batches.map((b: any) => Array.isArray(b?.pages) ? b.pages as number[] : []);
 }
 
 /* ===== Evidence-Modal ===== */
@@ -612,6 +658,12 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
 
   const scoreByKey: Record<string, number | undefined> = detail.run.final_scores ?? {};
 
+  const getBatchPagesForAttempt = useCallback((step: RunStep, attemptIdx: number): number[] | undefined => {
+    const lists = getBatchesPagesForStep(detail, step);
+    if (!lists) return undefined;
+    return lists[attemptIdx];
+  }, [detail]);
+
   return (
       <Card variant="outlined">
         <CardHeader title="Bewertungs-Details" subheader="Alle Regeln, Stimmen & Evidenzen" />
@@ -649,16 +701,20 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                           <TableCell width={56}>#</TableCell>
                           <TableCell>Erklärung</TableCell>
                           <TableCell width={120}>Stimme</TableCell>
-                          <TableCell width={120}>Evidenz</TableCell>
+                          <TableCell width={160}>Evidenz</TableCell>
                           <TableCell width={90}>Final</TableCell>
                         </TableRow>
                       </TableHead>
                       <TableBody>
                         {(s.attempts ?? []).map((a, i) => {
-                          const page = getAttemptPage(a);
+                          const pageSingle = getAttemptPage(a);
                           const vote: TernaryLabel | undefined = a.vote
                               ?? (typeof a?.candidate_value?.value === "string" ? a.candidate_value.value : undefined);
                           const chip = voteChip(vote);
+
+                          const batchPages = getBatchPagesForAttempt(s, i);
+                          const spanLabel = pagesSpanLabelFromList(batchPages);
+                          const openPage = pagesSpanOpenPage(batchPages);
 
                           // Backwards-Compat (falls nur bool vorhanden)
                           const vb = vote ? undefined : asBool(a.candidate_value);
@@ -673,10 +729,23 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                                   {vote ? chip : (typeof vb === "boolean" ? (vb ? "✅ Ja" : "❌ Nein") : "—")}
                                 </TableCell>
                                 <TableCell>
-                                  {page
-                                      ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
-                                              onClick={() => onOpenEvidence(page)} clickable/>
-                                      : "—"}
+                                  {spanLabel ? (
+                                      <Chip
+                                          size="small"
+                                          variant="outlined"
+                                          label={`📄 ${spanLabel}`}
+                                          onClick={() => onOpenEvidence(openPage)}
+                                          clickable
+                                      />
+                                  ) : pageSingle ? (
+                                      <Chip
+                                          size="small"
+                                          variant="outlined"
+                                          label={`📄 Seite ${pageSingle}`}
+                                          onClick={() => onOpenEvidence(pageSingle)}
+                                          clickable
+                                      />
+                                  ) : "—"}
                                 </TableCell>
                                 <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
                               </TableRow>
@@ -700,6 +769,12 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
   const decisionSteps = (detail.steps ?? []).filter(s => s.step_type === "Decision");
   if (!decisionSteps.length) return null;
 
+  const getBatchPagesForAttempt = useCallback((step: RunStep, attemptIdx: number): number[] | undefined => {
+    const lists = getBatchesPagesForStep(detail, step);
+    if (!lists) return undefined;
+    return lists[attemptIdx];
+  }, [detail]);
+
   return (
       <Card variant="outlined">
         <CardHeader title="Entscheidungs-Ergebnisse" subheader="Kandidaten (Mehrheit)"/>
@@ -721,24 +796,42 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
                         <TableCell width={56}>#</TableCell>
                         <TableCell>Kandidatentext</TableCell>
                         <TableCell width={120}>Stimme</TableCell>
-                        <TableCell width={120}>Evidenz</TableCell>
+                        <TableCell width={160}>Evidenz</TableCell>
                         <TableCell width={90}>Final</TableCell>
                       </TableRow>
                     </TableHead>
                     <TableBody>
                       {(s.attempts ?? []).map((a, i) => {
                         const v = asBool(a.candidate_value);
-                        const page = getAttemptPage(a);
+                        const pageSingle = getAttemptPage(a);
+
+                        const batchPages = getBatchPagesForAttempt(s, i);
+                        const spanLabel = pagesSpanLabelFromList(batchPages);
+                        const openPage = pagesSpanOpenPage(batchPages);
+
                         return (
                             <TableRow key={a.id ?? i} hover>
                               <TableCell>{a.attempt_no ?? i + 1}</TableCell>
                               <TableCell>{a.candidate_key ?? "—"}</TableCell>
                               <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
                               <TableCell>
-                                {page
-                                    ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
-                                            onClick={() => onOpenEvidence(page)} clickable/>
-                                    : "—"}
+                                {spanLabel ? (
+                                    <Chip
+                                        size="small"
+                                        variant="outlined"
+                                        label={`📄 ${spanLabel}`}
+                                        onClick={() => onOpenEvidence(openPage)}
+                                        clickable
+                                    />
+                                ) : pageSingle ? (
+                                    <Chip
+                                        size="small"
+                                        variant="outlined"
+                                        label={`📄 Seite ${pageSingle}`}
+                                        onClick={() => onOpenEvidence(pageSingle)}
+                                        clickable
+                                    />
+                                ) : "—"}
                               </TableCell>
                               <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
                             </TableRow>
