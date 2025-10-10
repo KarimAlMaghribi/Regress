@@ -30,22 +30,22 @@ export function numberWithDepth(steps: PipelineStep[]): NumberedRow[] {
 export default function PipelineLinearView({ steps }: { steps: PipelineStep[] }) {
   const rows = numberWithDepth(steps);
   return (
-    <div>
-      {rows.map(({ no, depth, step }) => (
-        <div
-          key={step.id}
-          style={{ marginLeft: depth * 16, display: 'flex', gap: 8, alignItems: 'baseline' }}
-        >
-          <span style={{ width: 28, textAlign: 'right' }}>{no}.</span>
-          <strong>{step.type}</strong>
-          {step.type === 'DecisionPrompt' && step.yesKey && step.noKey && (
-            <span style={{ opacity: 0.7 }}>
+      <div>
+        {rows.map(({ no, depth, step }) => (
+            <div
+                key={step.id}
+                style={{ marginLeft: depth * 16, display: 'flex', gap: 8, alignItems: 'baseline' }}
+            >
+              <span style={{ width: 28, textAlign: 'right' }}>{no}.</span>
+              <strong>{step.type}</strong>
+              {step.type === 'DecisionPrompt' && step.yesKey && step.noKey && (
+                  <span style={{ opacity: 0.7 }}>
               &nbsp;({step.yesKey} / {step.noKey})
             </span>
-          )}
-          <span style={{ opacity: 0.6 }}>&nbsp;[route: {step.route ?? 'Root'}]</span>
-        </div>
-      ))}
-    </div>
+              )}
+              <span style={{ opacity: 0.6 }}>&nbsp;[route: {step.route ?? 'Root'}]</span>
+            </div>
+        ))}
+      </div>
   );
 }
