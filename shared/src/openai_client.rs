@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
-mod evidence_resolver;
+#[path = "evidence_resolver.rs"] mod evidence_resolver;
 
 /* ======================= Deutsch-Guard (globale Vorgabe) ======================= */
 
@@ -235,7 +235,7 @@ pub async fn call_openai_chat(
     let body_preview = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_string();
     debug!("← body[0..512] = {}", body_preview);
 
-    if !status.is_success() {
+    if (!status.is_success()) {
         return Err(PromptError::Http(status.as_u16()));
     }
 
@@ -321,7 +321,7 @@ pub fn enrich_with_pdf_evidence_answer(
     if let Some((page, _score)) = evidence_resolver::resolve_page(quote, value_str, page_map) {
         if let Some(src) = answer.source.as_mut() {
             // TextPosition.page ist ganzzahlig, interne Repräsentation 1-basiert
-            src.page = page as i32;
+            src.page = page;
         }
     }
 }
