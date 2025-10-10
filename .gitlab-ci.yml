@@ -30,8 +30,8 @@ ci_noop:
     # Login private Registry
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
     # NEU: Login Docker Hub (erhöht Pull-Limits -> verhindert 429)
-    - if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
-      echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin ;
+    - if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+      echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin ;
       fi
     - apk add --no-cache bash coreutils
     - docker buildx create --use || docker buildx use default
@@ -166,8 +166,8 @@ build_migrations_image:
   before_script:
     - echo "$REGISTRY_PASSWORD" | docker login "$REGISTRY_URL" -u "$REGISTRY_USER" --password-stdin
     # NEU: Docker Hub Login auch hier (Basisimage postgres)
-    - if [ -n "${DOCKERHUB_USER:-}" ] && [ -n "${DOCKERHUB_PASSWORD:-}" ]; then
-      echo "$DOCKERHUB_PASSWORD" | docker login docker.io -u "$DOCKERHUB_USER" --password-stdin ;
+    - if [ -n "${DOCKERHUB_USERNAME:-}" ] && [ -n "${DOCKERHUB_TOKEN:-}" ]; then
+      echo "$DOCKERHUB_TOKEN" | docker login docker.io -u "$DOCKERHUB_USERNAME" --password-stdin ;
       fi
     - docker buildx create --use || docker buildx use default
     - mkdir -p "$CACHE_DIR"
