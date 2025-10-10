@@ -22,3 +22,6 @@ tokio-postgres.workspace = true
 reqwest = { version = "0.11", default-features = false, features = ["json", "rustls-tls"] }
 rdkafka.workspace = true
 sqlx = "0.7.4"
+unicode-normalization = "0.1"
+regex = "1"
+strsim = "0.10"

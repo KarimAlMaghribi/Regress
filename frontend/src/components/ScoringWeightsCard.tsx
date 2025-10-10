@@ -1,4 +1,4 @@
-// === ScoringWeightsCard.tsx (kopierfertig) ===============================
+// === ScoringWeightsCard.tsx (dedupliziert) ===============================
 // Benötigt: @mui/material
 import * as React from "react";
 import {
@@ -42,7 +42,7 @@ export interface RunDetail {
   steps: RunStep[];
 }
 
-// === Hilfsfunktion: finalen bool-Wert & Confidence je Scoring-Slug ermitteln
+// === Hilfsfunktion: finalen bool-Wert & Confidence je Slug ermitteln
 function pickFinalForSlug(detail: RunDetail, slug: string) {
   const step =
       detail.steps.find(
@@ -52,8 +52,8 @@ function pickFinalForSlug(detail: RunDetail, slug: string) {
       ) ?? null;
 
   const result =
-      detail.run.final_decisions && slug in (detail.run.final_decisions ?? {})
-          ? !!detail.run.final_decisions![slug]
+      detail.run.final_decisions && slug in detail.run.final_decisions
+          ? !!detail.run.final_decisions[slug]
           : !!step?.final_value;
 
   const conf = step?.final_confidence ?? null;
@@ -61,23 +61,24 @@ function pickFinalForSlug(detail: RunDetail, slug: string) {
   return { result, conf };
 }
 
-// === Export: berechne gewichteten Score aus Weights × finalen Ergebnissen
+// === Berechnung gewichteter Score
 export function computeWeightedScore(detail: RunDetail): number {
-  const weights = detail.run.final_scores ?? {};
-  const entries = Object.entries(weights);
-  if (!entries.length) {
-    // Fallback auf Backendwert, wenn vorhanden
+  const scoringSteps = detail.steps.filter((s) => s.step_type === "Score");
+  if (!scoringSteps.length) {
     return typeof detail.run.overall_score === "number" ? detail.run.overall_score : 0;
   }
 
   let total = 0;
   let positive = 0;
-  for (const [slug, w] of entries) {
-    const weight = Number(w) || 0;
+
+  for (const step of scoringSteps) {
+    const slug = step.final_key || step.definition?.json_key;
+    if (!slug) continue;
+    const weight = Number(detail.run.final_scores?.[slug]) || 0;
     total += weight;
-    const { result } = pickFinalForSlug(detail, slug);
-    if (result) positive += weight;
+    if (step.final_value) positive += weight;
   }
+
   if (total <= 0) return 0;
   return positive / total;
 }
@@ -88,12 +89,23 @@ const NEG = "#9aa0a6"; // grau
 
 export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
   const weights = detail.run.final_scores ?? {};
-  const rows = Object.entries(weights).map(([slug, w]) => {
-    const weight = Number(w) || 0;
-    const { result, conf } = pickFinalForSlug(detail, slug);
-    const contribution = result ? weight : 0;
-    return { slug, weight, result, contribution, conf };
-  });
+
+  const rows = detail.steps
+  .filter((s) => s.step_type === "Score")
+  .map((s) => {
+    const slug = s.final_key || s.definition?.json_key;
+    const weight = Number(weights[slug ?? ""]) || 0;
+    const result = !!s.final_value;
+    const conf = s.final_confidence ?? null;
+    return {
+      slug: slug ?? "undefined",
+      weight,
+      result,
+      conf,
+      contribution: result ? weight : 0,
+    };
+  })
+  .filter((r, i, all) => r.slug !== "undefined" && all.findIndex(x => x.slug === r.slug) === i);
 
   if (!rows.length) return null;
 
@@ -101,7 +113,6 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
   const positive = rows.reduce((a, r) => a + r.contribution, 0);
   const computedScore = totalWeight > 0 ? positive / totalWeight : 0;
 
-  // grafischer, gestapelter Balken: ein Segment je Regel proportional zum Weight
   const segments = rows
   .sort((a, b) => a.slug.localeCompare(b.slug))
   .map((r) => ({

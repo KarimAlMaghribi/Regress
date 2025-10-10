@@ -11,6 +11,15 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
+mod evidence_resolver;
+
+/* ======================= Deutsch-Guard (globale Vorgabe) ======================= */
+
+const SYSTEM_GUARD_DE_ONLY: &str = r#"
+Antworte ausschließlich auf Deutsch.
+Wenn die Aufgabe strikt JSON verlangt, gib nur das JSON ohne zusätzlichen Text aus.
+Keine englischen Sätze oder Erklärungen. Halte dich präzise an das geforderte Schema.
+"#;
 
 /* ======================= STRICT-JSON Guards (keine Füllwerte) ======================= */
 
@@ -173,13 +182,13 @@ fn extract_first_balanced_json(s: &str) -> Option<String> {
 /* ======================= Scoring-Prompt (Tri-State) ======================= */
 
 fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMessage> {
-    let system = SCORING_GUARD_PREFIX;
     let user = format!(
         "QUESTION:\n{}\n\nDOCUMENT:\n{}\n\n(STRICT JSON, follow the contract.)",
         question, document
     );
     vec![
-        msg(ChatCompletionMessageRole::System, system),
+        msg(ChatCompletionMessageRole::System, SYSTEM_GUARD_DE_ONLY),
+        msg(ChatCompletionMessageRole::System, SCORING_GUARD_PREFIX),
         msg(ChatCompletionMessageRole::User, &user),
     ]
 }
@@ -288,20 +297,75 @@ pub struct OpenAiAnswer {
     pub raw: String,
 }
 
+/* ======================= Evidence-Fix (kanonische PDF-Seiten) ======================= */
+
+/// Überschreibt `source.page` in `OpenAiAnswer` anhand Quote/Value mit korrekter 1-basierter PDF-Seite.
+/// `page_map` muss alle Seiteninhalte enthalten: key = 1..N, value = Rohtext der Seite.
+pub fn enrich_with_pdf_evidence_answer(
+    answer: &mut OpenAiAnswer,
+    page_map: &HashMap<u32, String>,
+) {
+    let quote = answer
+        .source
+        .as_ref()
+        .and_then(|s| s.quote.as_ref())
+        .map(|s| s.as_str())
+        .unwrap_or_default();
+
+    let value_str = answer
+        .value
+        .as_ref()
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+
+    if let Some((page, _score)) = evidence_resolver::resolve_page(quote, value_str, page_map) {
+        if let Some(src) = answer.source.as_mut() {
+            // TextPosition.page ist ganzzahlig, interne Repräsentation 1-basiert
+            src.page = page as i32;
+        }
+    }
+}
+
+/// Überschreibt `source.page` in einer Liste von JSON-Extraction-Objekten.
+/// Erwartetes Item-Schema: { "value": ..., "source": { "page": ..., "quote": ... } }
+pub fn enrich_with_pdf_evidence_list(
+    items: &mut [JsonValue],
+    page_map: &HashMap<u32, String>,
+) {
+    for it in items.iter_mut() {
+        let quote = it
+            .pointer("/source/quote")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        // value kann string oder null sein
+        let value_str = it.get("value").and_then(|v| v.as_str()).unwrap_or_default();
+
+        if let Some((page, score)) = evidence_resolver::resolve_page(quote, value_str, page_map) {
+            // Seite setzen
+            if let Some(src) = it.get_mut("source") {
+                src["page"] = JsonValue::from(page);
+                // zusätzliches, nicht störendes Feld zur Nachvollziehbarkeit
+                it["evidence_confidence"] = JsonValue::from(score);
+            }
+        }
+    }
+}
+
 /* ======================= Extraction (STRICT, mit Guard) ======================= */
 
 pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
 
-    let system = "You are an extraction engine. Follow the contract strictly.";
+    let system_en = "You are an extraction engine. Follow the contract strictly.";
     let user = format!(
         "DOCUMENT:\n{}\n\nTASK:\n{}\n\n{}",
         input, prompt, EXTRACTION_GUARD_SUFFIX
     );
 
     let msgs = vec![
-        msg(ChatCompletionMessageRole::System, system),
+        msg(ChatCompletionMessageRole::System, SYSTEM_GUARD_DE_ONLY),
+        msg(ChatCompletionMessageRole::System, system_en),
         msg(ChatCompletionMessageRole::User, &user),
     ];
 
@@ -457,6 +521,7 @@ pub async fn decide(
     );
 
     let msgs = vec![
+        msg(ChatCompletionMessageRole::System, SYSTEM_GUARD_DE_ONLY),
         msg(ChatCompletionMessageRole::System, system),
         msg(ChatCompletionMessageRole::User, &user),
     ];
