@@ -2,9 +2,6 @@ import * as React from "react";
 import {useMemo} from "react";
 import {useParams, useSearchParams} from "react-router-dom";
 import {
-  Accordion,
-  AccordionDetails,
-  AccordionSummary,
   Alert,
   Box,
   Card,
@@ -30,7 +27,6 @@ import {
 } from "@mui/material";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import RefreshIcon from "@mui/icons-material/Refresh";
-import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
@@ -84,6 +80,38 @@ function voteChip(v?: TernaryLabel) {
   if (v === "no")    return <Chip size="small" color="error"   label="🔴 Nein" />;
   if (v === "unsure")return <Chip size="small"                 label="⚪ Unsicher" />;
   return <Chip size="small" variant="outlined" label="—" />;
+}
+
+/* Prompts hübsch anzeigen: Unterstriche entfernen, ellipsieren, Hover = Volltext */
+function prettyPromptName(name?: string | null) {
+  if (typeof name !== "string" || name.trim() === "") return "—";
+  return name.replace(/_/g, " ").trim();
+}
+
+function PromptName({name, maxWidth = 260}: {name?: string | null; maxWidth?: number}) {
+  const full = prettyPromptName(name);
+  return (
+      <Tooltip title={full}>
+        <Box sx={{maxWidth, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>
+          {full}
+        </Box>
+      </Tooltip>
+  );
+}
+
+/* Laufzeit formatieren */
+function formatRuntime(start?: string | null, end?: string | null) {
+  const ds = start ? new Date(start) : undefined;
+  const de = end ? new Date(end) : undefined;
+  if (!ds || !de || Number.isNaN(ds.getTime()) || Number.isNaN(de.getTime())) return "—";
+  const ms = Math.max(0, de.getTime() - ds.getTime());
+  const sec = Math.floor(ms / 1000);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
 }
 
 /* ===== kleine UI-Bausteine ===== */
@@ -237,7 +265,9 @@ function EvidenceModal({
                       <TableBody>
                         {byPage.extraction.map((r, i) => (
                             <TableRow key={i} hover>
-                              <TableCell>{r.step.final_key ?? r.step.definition?.json_key ?? "—"}</TableCell>
+                              <TableCell>
+                                <PromptName name={r.step.final_key ?? r.step.definition?.json_key ?? "—"} />
+                              </TableCell>
                               <TableCell>{formatValue(r.attempt.candidate_value)}</TableCell>
                               <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
                             </TableRow>
@@ -266,7 +296,9 @@ function EvidenceModal({
                           const chip = voteChip(vote);
                           return (
                               <TableRow key={i} hover>
-                                <TableCell>{r.step.final_key ?? r.step.definition?.json_key ?? "—"}</TableCell>
+                                <TableCell>
+                                  <PromptName name={r.step.final_key ?? r.step.definition?.json_key ?? "—"} />
+                                </TableCell>
                                 <TableCell>{chip}</TableCell>
                                 <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
                               </TableRow>
@@ -292,7 +324,9 @@ function EvidenceModal({
                           const v = asBool(r.attempt.candidate_value);
                           return (
                               <TableRow key={i} hover>
-                                <TableCell>{r.step.final_key ?? r.step.definition?.json_key ?? "—"}</TableCell>
+                                <TableCell>
+                                  <PromptName name={r.step.final_key ?? r.step.definition?.json_key ?? "—"} />
+                                </TableCell>
                                 <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
                                 <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
                               </TableRow>
@@ -393,8 +427,7 @@ export default function RunDetailsPage() {
           <ScoringWeightsCard detail={data} onOpenEvidence={openEvidence}/>
           {/* Immer als Fallback anzeigen, sobald Score-Steps existieren */}
           <ScoreBreakdownCard detail={data} onOpenEvidence={openEvidence}/>
-          <DecisionVotesCard detail={data} onOpenEvidence={openEvidence}/>
-          <StepsWithAttempts detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
+          <StepsOverview detail={data}/>
         </Stack>
 
         {/* Modal */}
@@ -476,29 +509,25 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
 
   const scoreValue = rawScore != null ? clamp01(rawScore) : null;
 
+  const runtime = formatRuntime(detail.run.started_at, detail.run.finished_at);
+
   return (
       <Card variant="outlined">
         <CardHeader title="Übersicht" subheader="Konsolidierte Ergebnisse & Score" />
         <CardContent>
-          <Stack spacing={1.25}>
-            <Stack direction="row" alignItems="center" gap={1}>
-              <AssessmentIcon sx={{ color: "success.main" }} fontSize="small" />
-              <Typography variant="body2" sx={{ minWidth: 150, color: "text.secondary" }}>
-                Gesamtscore
-              </Typography>
-              <Box sx={{ flex: 1 }}>
-                {scoreValue != null ? (
-                    <Stack direction="row" alignItems="center" gap={1}>
-                      <LinearProgress variant="determinate" value={scoreValue * 100} />
-                      <Typography variant="caption" sx={{ width: 40, textAlign: "right" }}>
-                        {fmtNum(scoreValue)}
-                      </Typography>
-                    </Stack>
-                ) : (
-                    <Typography variant="body2">—</Typography>
-                )}
-              </Box>
-            </Stack>
+          <Stack spacing={1.5}>
+            {/* Gesamtscore zentral */}
+            <Box sx={{display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center"}}>
+              {scoreValue != null ? (
+                  <Stack alignItems="center" spacing={1} sx={{width: "100%", maxWidth: 540}}>
+                    <Typography variant="body2" color="text.secondary">Gesamtscore</Typography>
+                    <LinearProgress variant="determinate" value={scoreValue * 100} />
+                    <Typography variant="h6">{fmtNum(scoreValue)}</Typography>
+                  </Stack>
+              ) : (
+                  <Typography variant="body2">—</Typography>
+              )}
+            </Box>
 
             <Row label="Extrakte">🧩 {finalKeys.length} Felder</Row>
             <Row label="Entscheidungen">⚖️ {decKeys.length} Einträge</Row>
@@ -508,8 +537,7 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
 
             <Divider sx={{ my: 1 }} />
 
-            <Row label="Start">🕒 {detail.run.started_at ?? "—"}</Row>
-            <Row label="Ende">🏁 {detail.run.finished_at ?? "—"}</Row>
+            <Row label="Laufzeit">⏱️ {runtime}</Row>
 
             {detail.run.error && (
                 <Row label="Fehler">
@@ -556,26 +584,18 @@ function ExtractionCard({
                 <TableCell>Feld</TableCell>
                 <TableCell>Wert</TableCell>
                 <TableCell width={180} align="right">Konfidenz</TableCell>
-                <TableCell width={130} align="right">Evidenz</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
-              {entries.map(([k, v]) => {
-                const page = (v && typeof v === "object" && "page" in (v as any)) ? (v as any).page : undefined;
-                return (
-                    <TableRow key={k}>
-                      <TableCell><Chip size="small" label={k}/></TableCell>
-                      <TableCell>{formatValue(v)}</TableCell>
-                      <TableCell align="right"><ConfidenceBar value={confByKey.get(k)}/></TableCell>
-                      <TableCell align="right">
-                        {page
-                            ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
-                                    onClick={() => onOpenEvidence(page)} clickable/>
-                            : <Chip size="small" variant="outlined" label="—"/>}
-                      </TableCell>
-                    </TableRow>
-                );
-              })}
+              {entries.map(([k, v]) => (
+                  <TableRow key={k}>
+                    <TableCell>
+                      <PromptName name={k}/>
+                    </TableCell>
+                    <TableCell>{formatValue(v)}</TableCell>
+                    <TableCell align="right"><ConfidenceBar value={confByKey.get(k)}/></TableCell>
+                  </TableRow>
+              ))}
             </TableBody>
           </Table>
         </CardContent>
@@ -606,8 +626,9 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                   <Box key={s.id}>
                     <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
                       <RuleIcon sx={{color: (lbl === "yes" ? "success.main" : lbl === "no" ? "error.main" : "text.secondary")}} fontSize="small"/>
-                      <Typography variant="subtitle2">
-                        {s.final_key ?? `Regel ${idx + 1}`} · Ergebnis:&nbsp;
+                      <Typography variant="subtitle2" sx={{display: "flex", alignItems: "center", gap: .5}}>
+                        <PromptName name={s.final_key ?? `Regel ${idx + 1}`} />
+                        · Ergebnis:&nbsp;
                         {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
                       </Typography>
                       <Box sx={{flex: 1}}/>
@@ -645,7 +666,9 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                           return (
                               <TableRow key={a.id ?? i} hover>
                                 <TableCell>{a.attempt_no ?? i + 1}</TableCell>
-                                <TableCell>{a.candidate_key ?? "—"}</TableCell>
+                                <TableCell>
+                                  <PromptName name={a.candidate_key ?? "—"} />
+                                </TableCell>
                                 <TableCell>
                                   {vote ? chip : (typeof vb === "boolean" ? (vb ? "✅ Ja" : "❌ Nein") : "—")}
                                 </TableCell>
@@ -686,8 +709,8 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
                 <Box key={s.id}>
                   <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
                     <AltRouteIcon sx={{color: (s.final_value ? "success.main" : "error.main")}} fontSize="small"/>
-                    <Typography variant="subtitle2">
-                      {s.final_key ?? `Entscheidung ${idx + 1}`} · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
+                    <Typography variant="subtitle2" sx={{display: "flex", alignItems: "center", gap: .5}}>
+                      <PromptName name={s.final_key ?? `Entscheidung ${idx + 1}`} /> · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
                     </Typography>
                     <Box sx={{flex: 1}}/>
                     <ConfidenceBar value={s.final_confidence}/>
@@ -731,15 +754,9 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
   );
 }
 
-/* ===== Schritte (Detail) ===== */
+/* ===== Schritte (kompakte Übersicht) ===== */
 
-function StepsWithAttempts({
-                             detail, pdfUrl, onOpenEvidence
-                           }: {
-  detail: RunDetail;
-  pdfUrl?: string;
-  onOpenEvidence: (page?: number) => void
-}) {
+function StepsOverview({ detail }: { detail: RunDetail }) {
   const steps = (detail.steps ?? []).slice().sort((a, b) => {
     const ao = (a.order_index ?? 0) - (b.order_index ?? 0);
     return ao !== 0 ? ao : (a.id - b.id);
@@ -754,90 +771,61 @@ function StepsWithAttempts({
     );
   }
 
-  // UI-Filter: Attempts ohne Wert ausblenden
-  const hasValue = (a: any) => {
-    const v = valOrObjValue(a?.candidate_value);
-    return !(v == null || (typeof v === "string" && v.trim() === ""));
+  const tMap: Record<RunStep["step_type"], string> = {
+    Extraction: "Extraktion",
+    Decision: "Entscheidung",
+    Score: "Bewertung"
   };
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Schritte & Versuche" subheader="Protokoll je Schritt"/>
+        <CardHeader title="Schritte & Versuche" subheader="Kompakte Pipeline-Übersicht: Typ, Prompt, Value"/>
         <CardContent>
-          {steps.map((s, idx) => (
-              <Accordion key={s.id} defaultExpanded={idx === 0}>
-                <AccordionSummary expandIcon={<ExpandMoreIcon/>}>
-                  <Stack direction="row" alignItems="center" gap={1} sx={{width: "100%"}}>
-                    <Typography variant="body2" sx={{minWidth: 28, color: "text.secondary"}}>
-                      {(s.order_index ?? idx) + 1}.
-                    </Typography>
-                    <StepTypeIcon t={s.step_type}/>
-                    <Typography sx={{flex: 1}}>
-                      {labelForStep(s)}
-                    </Typography>
-                    <StatusChip status={s.status}/>
-                  </Stack>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Stack spacing={1} sx={{mb: 1}}>
-                    <Row label="Finaler Schlüssel"><Chip size="small" label={s.final_key ?? "—"}/></Row>
-                    <Row label="Finaler Wert">
-                      <Typography variant="body2">
-                        {s.step_type === "Score" && s.final_score_label
-                            ? (voteChip(s.final_score_label) as any)
-                            : formatValue(s.final_value)}
-                      </Typography>
-                    </Row>
-                    <Row label="Konfidenz"><ConfidenceBar value={s.final_confidence}/></Row>
-                    <Row label="Zeit">
-                      <Typography variant="body2">{s.started_at ?? "—"} → {s.finished_at ?? "—"}</Typography>
-                    </Row>
-                  </Stack>
+          <Table size="small">
+            <TableHead>
+              <TableRow>
+                <TableCell width={160}>Typ</TableCell>
+                <TableCell>Prompt</TableCell>
+                <TableCell>Value</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {steps.map((s, idx) => {
+                const typeLabel = tMap[s.step_type] ?? s.step_type;
+                const name = s.definition?.json_key || s.final_key || `${s.step_type} ${idx + 1}`;
 
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell width={56}>#</TableCell>
-                        <TableCell>Kandidatentext</TableCell>
-                        <TableCell>Wert</TableCell>
-                        {/* Spalte „Quelle“ entfällt */}
-                        <TableCell width={120}>Evidenz</TableCell>
-                        <TableCell width={90}>Final</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {(s as any).attempts
-                      ?.filter(hasValue)
-                      .map((a: any, i: number) => {
-                        const page = getAttemptPage(a);
-                        const vote: TernaryLabel | undefined = a.vote
-                            ?? (typeof a?.candidate_value?.value === "string" ? a.candidate_value.value : undefined);
-                        const display = vote ? undefined : formatValue(a?.candidate_value);
-                        return (
-                            <TableRow key={a.id ?? i} hover>
-                              <TableCell>{a.attempt_no ?? i + 1}</TableCell>
-                              <TableCell>{a.candidate_key ?? "—"}</TableCell>
-                              <TableCell>
-                                {vote ? voteChip(vote) : <Typography variant="body2">{display}</Typography>}
-                              </TableCell>
-                              <TableCell>
-                                {page
-                                    ? <Chip size="small" variant="outlined" label={`📄 Seite ${page}`}
-                                            onClick={() => onOpenEvidence(page)} clickable/>
-                                    : "—"}
-                              </TableCell>
-                              <TableCell>
-                                {a.is_final ? <Chip size="small" color="success" label="final"/> :
-                                    <Chip size="small" variant="outlined" label="—"/>}
-                              </TableCell>
-                            </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </AccordionDetails>
-              </Accordion>
-          ))}
+                let value: React.ReactNode = "—";
+                if (s.step_type === "Score") {
+                  value = s.final_score_label
+                      ? voteChip(s.final_score_label)
+                      : typeof s.final_value === "boolean"
+                          ? (s.final_value ? "✅ Ja" : "❌ Nein")
+                          : formatValue(s.final_value);
+                } else if (s.step_type === "Decision") {
+                  value = typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : formatValue(s.final_value);
+                } else {
+                  value = formatValue(s.final_value);
+                }
+
+                return (
+                    <TableRow key={s.id}>
+                      <TableCell>
+                        <Stack direction="row" alignItems="center" gap={1}>
+                          <StepTypeIcon t={s.step_type}/>
+                          <Typography variant="body2">{typeLabel}</Typography>
+                        </Stack>
+                      </TableCell>
+                      <TableCell>
+                        <PromptName name={name} maxWidth={420}/>
+                      </TableCell>
+                      <TableCell>
+                        <Typography variant="body2">{value}</Typography>
+                      </TableCell>
+                    </TableRow>
+                );
+              })}
+            </TableBody>
+          </Table>
         </CardContent>
       </Card>
   );
@@ -852,15 +840,4 @@ function Row({label, children}: { label: string; children: React.ReactNode }) {
         <Box sx={{flex: 1}}>{children}</Box>
       </Stack>
   );
-}
-
-function labelForStep(s: RunStep) {
-  const name = s.definition?.json_key || s.final_key || `${s.step_type}`;
-  const tMap: Record<RunStep["step_type"], string> = {
-    Extraction: "Extraktion",
-    Decision: "Entscheidung",
-    Score: "Bewertung"
-  };
-  const t = tMap[s.step_type] ?? s.step_type;
-  return `${name} · ${t}`;
 }
