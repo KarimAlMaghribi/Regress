@@ -197,7 +197,6 @@ fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMes
 
 /// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
 /// Erzwingt response_format=json_object und berücksichtigt function/tool arguments.
-/// **Robust**: Kein früher Abbruch bei Schemaabweichungen; immer erst Roh-JSON auswerten.
 pub async fn call_openai_chat(
     client: &Client,
     model: &str,
@@ -212,7 +211,6 @@ pub async fn call_openai_chat(
         messages: &messages,
         functions: functions.as_deref(),
         function_call,
-        // WICHTIG: response_format NUR setzen, wenn KEINE functions genutzt werden
         response_format: if functions.is_some() { None } else { Some(serde_json::json!({"type":"json_object"})) },
     };
 
@@ -235,7 +233,7 @@ pub async fn call_openai_chat(
     let body_preview = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_string();
     debug!("← body[0..512] = {}", body_preview);
 
-    if (!status.is_success()) {
+    if !status.is_success() {
         return Err(PromptError::Http(status.as_u16()));
     }
 
@@ -300,7 +298,6 @@ pub struct OpenAiAnswer {
 /* ======================= Evidence-Fix (kanonische PDF-Seiten) ======================= */
 
 /// Überschreibt `source.page` in `OpenAiAnswer` anhand Quote/Value mit korrekter 1-basierter PDF-Seite.
-/// `page_map` muss alle Seiteninhalte enthalten: key = 1..N, value = Rohtext der Seite.
 pub fn enrich_with_pdf_evidence_answer(
     answer: &mut OpenAiAnswer,
     page_map: &HashMap<u32, String>,
@@ -320,14 +317,12 @@ pub fn enrich_with_pdf_evidence_answer(
 
     if let Some((page, _score)) = evidence_resolver::resolve_page(quote, value_str, page_map) {
         if let Some(src) = answer.source.as_mut() {
-            // TextPosition.page ist ganzzahlig, interne Repräsentation 1-basiert
             src.page = page;
         }
     }
 }
 
 /// Überschreibt `source.page` in einer Liste von JSON-Extraction-Objekten.
-/// Erwartetes Item-Schema: { "value": ..., "source": { "page": ..., "quote": ... } }
 pub fn enrich_with_pdf_evidence_list(
     items: &mut [JsonValue],
     page_map: &HashMap<u32, String>,
@@ -337,18 +332,24 @@ pub fn enrich_with_pdf_evidence_list(
             .pointer("/source/quote")
             .and_then(|v| v.as_str())
             .unwrap_or_default();
-        // value kann string oder null sein
         let value_str = it.get("value").and_then(|v| v.as_str()).unwrap_or_default();
 
         if let Some((page, score)) = evidence_resolver::resolve_page(quote, value_str, page_map) {
-            // Seite setzen
             if let Some(src) = it.get_mut("source") {
                 src["page"] = JsonValue::from(page);
-                // zusätzliches, nicht störendes Feld zur Nachvollziehbarkeit
                 it["evidence_confidence"] = JsonValue::from(score);
             }
         }
     }
+}
+
+/// Öffentliche Hilfsfunktion für andere Crates: Quote/Value → (Seite, Score)
+pub fn resolve_page_for_quote_value(
+    quote: &str,
+    value: &str,
+    page_map: &HashMap<u32, String>,
+) -> Option<(u32, f32)> {
+    evidence_resolver::resolve_page(quote, value, page_map)
 }
 
 /* ======================= Extraction (STRICT, mit Guard) ======================= */

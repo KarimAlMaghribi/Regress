@@ -1,3 +1,5 @@
+// services/pipeline-runner/src/runner.rs
+
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -42,6 +44,12 @@ pub async fn execute_with_pages(
         batch_cfg.openai_retries
     );
 
+    // Map für Evidence-Resolver: echte Seiten (1-basiert) → Text
+    let page_map: HashMap<u32, String> = pages
+        .iter()
+        .map(|(p, t)| (*p as u32, t.clone()))
+        .collect();
+
     let mut extraction_all: Vec<PromptResult> = Vec::new();
     let mut scoring_all: Vec<ScoringResult> = Vec::new();
     let mut decision_all: Vec<PromptResult> = Vec::new();
@@ -64,7 +72,7 @@ pub async fn execute_with_pages(
             PromptType::ExtractionPrompt => {
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
-                // Extraction: strikt pro Seite (keine Überlappung; klare Zuordnung)
+                // Extraction: strikt pro Seite
                 let batches = make_batches_step(
                     pages,
                     1, // page_batch_size
@@ -85,34 +93,45 @@ pub async fn execute_with_pages(
                             &cfg_clone,
                             &prompt_text_for_log,
                         )
-                        .await
-                        .unwrap_or_else(|e| PromptResult {
-                            prompt_id,
-                            prompt_type: PromptType::ExtractionPrompt,
-                            prompt_text: prompt_text_for_log.clone(),
-                            value: None,
-                            boolean: None,
-                            route: None,
-                            weight: None,
-                            source: None,
-                            openai_raw: String::new(),
-                            json_key: None,
-                            error: Some(format!("extract failed: {e}")),
-                        })
+                            .await
+                            .unwrap_or_else(|e| PromptResult {
+                                prompt_id,
+                                prompt_type: PromptType::ExtractionPrompt,
+                                prompt_text: prompt_text_for_log.clone(),
+                                value: None,
+                                boolean: None,
+                                route: None,
+                                weight: None,
+                                source: None,
+                                openai_raw: String::new(),
+                                json_key: None,
+                                error: Some(format!("extract failed: {e}")),
+                            })
                     }
                 });
 
-                let results: Vec<PromptResult> = stream::iter(futs)
+                let mut results: Vec<PromptResult> = stream::iter(futs)
                     .buffer_unordered(batch_cfg.max_parallel)
                     .collect()
                     .await;
+
+                // Evidence-Fix: korrekte Seitenzuordnung
+                for r in results.iter_mut() {
+                    if let Some(src) = r.source.as_mut() {
+                        let quote = src.quote.clone().unwrap_or_default();
+                        let val = r.value.as_ref().and_then(|v| v.as_str()).unwrap_or_default();
+                        if let Some((page, _)) = ai::resolve_page_for_quote_value(&quote, val, &page_map) {
+                            src.page = page;
+                        }
+                    }
+                }
 
                 extraction_all.extend(results.clone());
 
                 run_log.push(RunStep {
                     seq_no,
-                    step_id: step.id.to_string(),          // FIX: Uuid -> String
-                    prompt_id: step.prompt_id as i64,      // FIX: i32 -> i64
+                    step_id: step.id.to_string(),          // Uuid -> String
+                    prompt_id: step.prompt_id as i64,      // i32 -> i64
                     prompt_type: PromptType::ExtractionPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
@@ -132,7 +151,7 @@ pub async fn execute_with_pages(
             PromptType::ScoringPrompt => {
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
-                // Scoring: kleine Batches + optionale Text-Überlappung, erst ab N Seiten
+                // Scoring: Batches mit optionaler Überlappung
                 let min_pages = env_usize("PIPELINE_MIN_PAGES_FOR_BATCHING", 4);
                 let overlap = env_usize("PIPELINE_OVERLAP_PAGES", 1);
                 let batches = make_batches_step(
@@ -168,19 +187,35 @@ pub async fn execute_with_pages(
                     }
                 });
 
-                let batch_scores: Vec<ScoringResult> = stream::iter(futs)
+                let mut batch_scores: Vec<ScoringResult> = stream::iter(futs)
                     .buffer_unordered(batch_cfg.max_parallel)
                     .collect()
                     .await;
 
-                // Tri-State Konsolidierung über Batches (gewichtete Summe)
-                let consolidated = consolidate_scoring(&batch_scores);
+                // Evidence-Fix für jede Batch-Score
+                for s in batch_scores.iter_mut() {
+                    let q = s.source.quote.clone().unwrap_or_default();
+                    if let Some((page, _)) = ai::resolve_page_for_quote_value(&q, "", &page_map) {
+                        s.source.page = page;
+                    }
+                }
+
+                // Tri-State Konsolidierung
+                let mut consolidated = consolidate_scoring(&batch_scores);
+
+                // Evidence-Fix auch für konsolidiertes Ergebnis
+                if let Some(q) = consolidated.source.quote.clone() {
+                    if let Some((page, _)) = ai::resolve_page_for_quote_value(&q, "", &page_map) {
+                        consolidated.source.page = page;
+                    }
+                }
+
                 scoring_all.push(consolidated.clone());
 
                 run_log.push(RunStep {
                     seq_no,
-                    step_id: step.id.to_string(),          // FIX: Uuid -> String
-                    prompt_id: step.prompt_id as i64,      // FIX: i32 -> i64
+                    step_id: step.id.to_string(),          // Uuid -> String
+                    prompt_id: step.prompt_id as i64,      // i32 -> i64
                     prompt_type: PromptType::ScoringPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
@@ -199,7 +234,7 @@ pub async fn execute_with_pages(
                 let no_key = step.no_key.clone().unwrap_or_else(|| "NO".into());
                 let prompt_text = fetch_prompt_text_for_log(step.prompt_id as i32).await;
 
-                // Decision: versuche EINEN Batch (gesamtes Dokument). Fallback: dynamisch.
+                // Decision: versuche EINEN Batch; Fallback → mehrere
                 let single =
                     make_batches_step(pages, usize::MAX, batch_cfg.max_chars, usize::MAX, 0);
                 let min_pages = env_usize("PIPELINE_MIN_PAGES_FOR_BATCHING", 4);
@@ -231,29 +266,39 @@ pub async fn execute_with_pages(
                             &no_key,
                             &prompt_text_for_log,
                         )
-                        .await
-                        .unwrap_or_else(|e| PromptResult {
-                            prompt_id,
-                            prompt_type: PromptType::DecisionPrompt,
-                            prompt_text: prompt_text_for_log.clone(),
-                            value: None,
-                            boolean: None,
-                            route: Some(no_key.clone()),
-                            weight: None,
-                            source: None,
-                            openai_raw: String::new(),
-                            json_key: None,
-                            error: Some(format!("decision failed: {e}")),
-                        })
+                            .await
+                            .unwrap_or_else(|e| PromptResult {
+                                prompt_id,
+                                prompt_type: PromptType::DecisionPrompt,
+                                prompt_text: prompt_text_for_log.clone(),
+                                value: None,
+                                boolean: None,
+                                route: Some(no_key.clone()),
+                                weight: None,
+                                source: None,
+                                openai_raw: String::new(),
+                                json_key: None,
+                                error: Some(format!("decision failed: {e}")),
+                            })
                     }
                 });
 
-                let decisions: Vec<PromptResult> = stream::iter(futs)
+                let mut decisions: Vec<PromptResult> = stream::iter(futs)
                     .buffer_unordered(batch_cfg.max_parallel)
                     .collect()
                     .await;
 
-                let consolidated =
+                // Evidence-Fix für jede Entscheidung
+                for r in decisions.iter_mut() {
+                    if let Some(src) = r.source.as_mut() {
+                        let q = src.quote.clone().unwrap_or_default();
+                        if let Some((page, _)) = ai::resolve_page_for_quote_value(&q, "", &page_map) {
+                            src.page = page;
+                        }
+                    }
+                }
+
+                let mut consolidated =
                     consolidate_decision(&decisions, &yes_key, &no_key, &prompt_text);
 
                 if let Some(ref r) = consolidated.route {
@@ -262,12 +307,20 @@ pub async fn execute_with_pages(
                     }
                 }
 
+                // Evidence-Fix auch für konsolidierte Entscheidung
+                if let Some(src) = consolidated.source.as_mut() {
+                    let q = src.quote.clone().unwrap_or_default();
+                    if let Some((page, _)) = ai::resolve_page_for_quote_value(&q, "", &page_map) {
+                        src.page = page;
+                    }
+                }
+
                 decision_all.push(consolidated.clone());
 
                 run_log.push(RunStep {
                     seq_no,
-                    step_id: step.id.to_string(),          // FIX: Uuid -> String
-                    prompt_id: step.prompt_id as i64,      // FIX: i32 -> i64
+                    step_id: step.id.to_string(),          // Uuid -> String
+                    prompt_id: step.prompt_id as i64,      // i32 -> i64
                     prompt_type: PromptType::DecisionPrompt,
                     decision_key: None,
                     route: Some(current_route.clone()),
@@ -448,7 +501,7 @@ async fn call_extract_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::extract(prompt_id, text),
         )
-        .await;
+            .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -502,7 +555,7 @@ async fn call_score_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::score(prompt_id, text),
         )
-        .await;
+            .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -548,7 +601,7 @@ async fn call_decide_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::decide(prompt_id, text, &state),
         )
-        .await;
+            .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -628,11 +681,7 @@ fn clamp01f(x: f32) -> f32 {
 }
 
 /// Konsolidiert eine Liste von ScoringResult (Batches) zu einem gewichteten Tri-State Ergebnis.
-/// - map vote yes->+w, no->-w, unsure->0
-/// - w = 0.6*strength + 0.4*confidence (Fallbacks: strength=1.0 bei vorhandenem vote, confidence=0.5)
-/// - finale Score s = (yesW - noW) / (yesW + noW) in [-1,1]
-/// - Label: s>=+0.6 => yes, s<=-0.6 => no, sonst unsure
-/// - **WICHTIG**: Bei **Null-Evidenz** (yesW==0 && noW==0) -> **unsure/0.0** (kein Default-„no“ mehr)
+/// Null-Evidenz -> Unsure.
 fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
     if v.is_empty() {
         return ScoringResult {
@@ -661,7 +710,6 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
         let vote = s
             .vote
             .or_else(|| {
-                // Fallback aus legacy-boolean (nur wenn explizit vorhanden)
                 if s.result {
                     Some(TernaryLabel::Yes)
                 } else {
@@ -687,11 +735,10 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
 
     let total = yes_w + no_w;
 
-    // **Null-Evidenz ⇒ UNSURE/0.0** (kein Rückfall auf bool-Mehrheit)
     if total <= 0.0 {
         return ScoringResult {
             prompt_id: pid,
-            result: false, // bool-Kompat: kein „true“, wenn wir unsicher sind
+            result: false,
             source: v[0].source.clone(),
             explanation: format!(
                 "weighted vote: yes_w={:.3} no_w={:.3} -> score={:.3} label={:?}",
@@ -717,7 +764,7 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
         TernaryLabel::Unsure
     };
 
-    // Quelle: nimm die erste Quelle, die zum finalen Label passt, sonst die erste
+    // Quelle wählen
     let mut chosen_src: Option<TextPosition> = None;
     for sres in v {
         if let Some(vv) = sres.vote {
@@ -736,15 +783,15 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
 
     ScoringResult {
         prompt_id: pid,
-        result: matches!(label, TernaryLabel::Yes), // bool Kompatibilität
+        result: matches!(label, TernaryLabel::Yes),
         source,
         explanation: format!(
             "weighted vote: yes_w={:.3} no_w={:.3} -> score={:.3} label={:?}",
             yes_w, no_w, s, label
         ),
-        vote: Some(label), // konsolidiertes Label
+        vote: Some(label),
         strength: None,
-        confidence: Some((yes_w.max(no_w) / (total.max(1e-6))).min(1.0)), // grobe Konfidenz
+        confidence: Some((yes_w.max(no_w) / (total.max(1e-6))).min(1.0)),
         score: Some(s),
         label: Some(label),
     }

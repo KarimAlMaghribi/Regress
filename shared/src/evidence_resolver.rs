@@ -30,7 +30,6 @@ pub fn normalize(s: &str) -> String {
             while i < chars.len() && chars[i].is_whitespace() {
                 i += 1;
             }
-            // nächstes Zeichen wird normal verarbeitet
             prev_space = false;
             continue;
         }
@@ -101,7 +100,6 @@ pub fn resolve_page(
     }
 
     if let Some((p, s)) = best {
-        // Standard-Schwelle 0.80
         if s >= 0.80 {
             return Some((p, s));
         }
