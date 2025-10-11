@@ -21,6 +21,10 @@ export type ScoringItem = {
   result: boolean;
   explanation?: string;
   source: SourcePos;
+  /** Optional: 1-basierte Seitenspanne (inkl.). Wird genutzt, wenn patchweise über mehrere Seiten bewertet wurde. */
+  pages_span?: [number, number];
+  /** Alias, falls Upstream `page_span` statt `pages_span` liefert. */
+  page_span?: [number, number];
 };
 
 export type DecisionItem = {
@@ -143,18 +147,34 @@ export function ScoringPromptAccordion({
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {list.map((r, i) => (
-                          <TableRow
-                              key={i}
-                              hover
-                              onClick={() => r.source?.page != null && onJumpToPage?.(r.source.page!)}
-                              sx={{ cursor: r.source?.page != null ? "pointer" : "default" }}
-                          >
-                            <TableCell>{r.source?.page ?? "—"}</TableCell>
-                            <TableCell>{r.result ? "Ja" : "Nein"}</TableCell>
-                            <TableCell>{r.explanation ?? "—"}</TableCell>
-                          </TableRow>
-                      ))}
+                      {list.map((r, i) => {
+                        // Unterstütze Spanne über mehrere Seiten.
+                        const span = (r.pages_span ?? r.page_span) as [number, number] | undefined;
+                        const pageLabel = Array.isArray(span)
+                            ? span[0] === span[1]
+                                ? String(span[0])
+                                : `${span[0]}–${span[1]}`
+                            : (r.source?.page ?? "—");
+                        const pageToOpen =
+                            r.source?.page != null
+                                ? r.source.page
+                                : Array.isArray(span)
+                                    ? span[0]
+                                    : undefined;
+
+                        return (
+                            <TableRow
+                                key={i}
+                                hover
+                                onClick={() => pageToOpen != null && onJumpToPage?.(pageToOpen)}
+                                sx={{ cursor: pageToOpen != null ? "pointer" : "default" }}
+                            >
+                              <TableCell>{pageLabel}</TableCell>
+                              <TableCell>{r.result ? "Ja" : "Nein"}</TableCell>
+                              <TableCell>{r.explanation ?? "—"}</TableCell>
+                            </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </AccordionDetails>
