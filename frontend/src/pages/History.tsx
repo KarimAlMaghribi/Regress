@@ -1,6 +1,23 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Box, Paper, Typography, IconButton, Drawer, Stack, TextField, Chip,
+  Box,
+  Paper,
+  Typography,
+  IconButton,
+  Drawer,
+  Stack,
+  TextField,
+  Chip,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  Button,
+  List,
+  ListItem,
+  ListItemButton,
+  ListItemText,
+  Tooltip,
 } from '@mui/material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -44,6 +61,12 @@ interface HistoryEntry {
   pipelineName?: string;
   tenantName?: string;
   pdfNames?: string[]; // NEU
+}
+
+interface PdfSuggestion {
+  key: string;
+  entry: HistoryEntry;
+  pdfName: string;
 }
 
 /** snake/camel normalisieren (nur was wir brauchen) */
@@ -192,6 +215,7 @@ export default function History() {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [selected, setSelected] = useState<HistoryEntry | null>(null);
   const [search, setSearch] = useState('');
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
   const [pipelineNames, setPipelineNames] = useState<Record<string, string>>({});
@@ -339,6 +363,62 @@ export default function History() {
     });
   }, [entries, start, end, search, tenant]);
 
+  const pdfSuggestions = useMemo<PdfSuggestion[]>(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const seen = new Set<string>();
+    const hits: PdfSuggestion[] = [];
+    for (const entry of entries) {
+      const names = entry.pdfNames ?? [];
+      for (const name of names) {
+        if (!name) continue;
+        const lowered = name.toLowerCase();
+        if (!lowered.includes(q)) continue;
+        const key = `${entry.id}:${name}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        hits.push({ key, entry, pdfName: name });
+      }
+    }
+    hits.sort((a, b) => dayjs(b.entry.timestamp).valueOf() - dayjs(a.entry.timestamp).valueOf());
+    return hits.slice(0, 12);
+  }, [entries, search]);
+
+  useEffect(() => {
+    if (search.trim().length > 0) {
+      setSuggestionsOpen(true);
+    } else {
+      setSuggestionsOpen(false);
+    }
+  }, [search]);
+
+  const highlightPdfName = (name: string) => {
+    const q = search.trim();
+    if (!q) return name;
+    const idx = name.toLowerCase().indexOf(q.toLowerCase());
+    if (idx === -1) return name;
+    const before = name.slice(0, idx);
+    const match = name.slice(idx, idx + q.length);
+    const after = name.slice(idx + q.length);
+    return (
+      <>
+        {before}
+        <Box
+            component="span"
+            sx={{
+              bgcolor: 'warning.light',
+              color: 'text.primary',
+              px: 0.5,
+              borderRadius: 0.5,
+            }}
+        >
+          {match}
+        </Box>
+        {after}
+      </>
+    );
+  };
+
   const groups = filtered.reduce<Record<string, HistoryEntry[]>>((acc, cur) => {
     const day = dayjs(cur.timestamp).format('YYYY-MM-DD');
     (acc[day] ||= []).push(cur);
@@ -482,6 +562,51 @@ export default function History() {
               </Box>
           )}
         </Drawer>
+        <Dialog
+            open={suggestionsOpen}
+            onClose={() => setSuggestionsOpen(false)}
+            fullWidth
+            maxWidth="sm"
+        >
+          <DialogTitle>PDF-Vorschläge</DialogTitle>
+          <DialogContent dividers>
+            {pdfSuggestions.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  Keine PDF-Namen gefunden.
+                </Typography>
+            ) : (
+                <List>
+                  {pdfSuggestions.map(s => (
+                      <ListItem
+                          key={s.key}
+                          secondaryAction={(
+                              <Tooltip title="Analyse in neuem Tab öffnen">
+                                <IconButton edge="end" onClick={() => void openRunDetailsPageInNewTab(s.entry)}>
+                                  <OpenInNewIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                          )}
+                      >
+                        <ListItemButton
+                            onClick={() => {
+                              setSelected(s.entry);
+                              setSuggestionsOpen(false);
+                            }}
+                        >
+                          <ListItemText
+                              primary={highlightPdfName(s.pdfName)}
+                              secondary={`${dayjs(s.entry.timestamp).format('LLL')} • Pipeline: ${getPipelineLabel(s.entry)}`}
+                          />
+                        </ListItemButton>
+                      </ListItem>
+                  ))}
+                </List>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setSuggestionsOpen(false)}>Schließen</Button>
+          </DialogActions>
+        </Dialog>
       </Box>
   );
 }

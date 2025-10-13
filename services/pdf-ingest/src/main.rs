@@ -9,7 +9,7 @@ use rdkafka::ClientConfig;
 use sha2::{Digest, Sha256};
 use shared::config::Settings;
 use shared::dto::{PdfUploaded, UploadResponse};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 use tracing::{error, info};
 use uuid::Uuid;
@@ -343,7 +343,41 @@ async fn upload(
     info!(step = "uploads.updated", upload_id, pdf_id = id, status = "ocr", pipeline_id = %pid, "upload updated");
 
     // Quellen speichern (Dateinamen)
-    let names: Vec<String> = files.iter().map(|f| f.1.clone()).collect();
+    fn normalize_source_name(raw: &str) -> Option<String> {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+
+        // ZIP-Einträge können Pfade enthalten – nur den eigentlichen Dateinamen behalten
+        let normalized = trimmed.replace('\', "/");
+        let candidate = normalized
+            .rsplit('/')
+            .next()
+            .map(str::trim)
+            .unwrap_or(trimmed);
+
+        if candidate.is_empty() {
+            None
+        } else {
+            Some(candidate.to_string())
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut names: Vec<String> = Vec::new();
+    for (_, raw_name) in &files {
+        if let Some(clean) = normalize_source_name(raw_name) {
+            if seen.insert(clean.clone()) {
+                names.push(clean);
+            }
+        }
+    }
+
+    if names.is_empty() {
+        names = files.iter().map(|f| f.1.clone()).collect();
+    }
+
     let _ = client
         .execute(
             "INSERT INTO pdf_sources (pdf_id, names, count) VALUES ($1,$2,$3)
