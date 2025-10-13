@@ -38,7 +38,7 @@ import AssessmentIcon from "@mui/icons-material/Assessment"; // Übersicht
 import CloseIcon from "@mui/icons-material/Close";
 
 import {type RunDetail, type RunStep, type TernaryLabel, useRunDetails} from "../hooks/useRunDetails";
-import {computeWeightedScore, ScoringWeightsCard} from "../components/ScoringWeightsCard";
+import {computeWeightedScore, scoreColor, ScoringWeightsCard} from "../components/ScoringWeightsCard";
 import PdfViewer from "../components/PdfViewer";
 
 /* ===== Helfer ===== */
@@ -503,7 +503,7 @@ export default function RunDetailsPage() {
           <SummaryCard detail={data} scoreSum={scoreSum}/>
           <ExtractionCard detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
           {/* Gewichte/aggregierter Score (optional, rendert evtl. nichts wenn keine Gewichte/FinalScores) */}
-          <ScoringWeightsCard detail={data} onOpenEvidence={openEvidence}/>
+          <ScoringWeightsCard detail={data}/>
           {/* Immer als Fallback anzeigen, sobald Score-Steps existieren */}
           <ScoreBreakdownCard detail={data} onOpenEvidence={openEvidence}/>
           <DetailedResultFindingCard detail={data} onOpenEvidence={openEvidence}/>
@@ -588,12 +588,28 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
                   : null;
 
   const scoreValue = rawScore != null ? clamp01(rawScore) : null;
+  const scorePercent = scoreValue != null ? scoreValue * 100 : null;
+  const scoreTone = scoreValue != null ? scoreColor(scoreValue) : "text.secondary";
 
   const runtime = formatRuntime(detail.run.started_at, detail.run.finished_at);
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Übersicht" subheader="Konsolidierte Ergebnisse & Score" />
+        <CardHeader
+            title="Übersicht"
+            subheader={
+              scorePercent != null ? (
+                  <Stack spacing={0.25}>
+                    <Typography variant="subtitle2" sx={{ color: scoreTone, fontWeight: 600 }}>
+                      Gesamtscore: {scorePercent!.toFixed(0)}%
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Konsolidierte Ergebnisse & Score
+                    </Typography>
+                  </Stack>
+              ) : "Konsolidierte Ergebnisse & Score"
+            }
+        />
         <CardContent>
           <Stack spacing={1.5}>
             {/* Gesamtscore zentral */}
@@ -601,8 +617,17 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
               {scoreValue != null ? (
                   <Stack alignItems="center" spacing={1} sx={{width: "100%", maxWidth: 540}}>
                     <Typography variant="body2" color="text.secondary">Gesamtscore</Typography>
-                    <LinearProgress variant="determinate" value={scoreValue * 100} />
-                    <Typography variant="h6">{fmtNum(scoreValue)}</Typography>
+                    <LinearProgress
+                        variant="determinate"
+                        value={scorePercent!}
+                        sx={{
+                          width: "100%",
+                          '& .MuiLinearProgress-bar': { bgcolor: scoreTone },
+                        }}
+                    />
+                    <Typography variant="h5" sx={{ color: scoreTone, fontWeight: 600 }}>
+                      {scorePercent!.toFixed(0)}%
+                    </Typography>
                   </Stack>
               ) : (
                   <Typography variant="body2">—</Typography>
