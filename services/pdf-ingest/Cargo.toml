@@ -24,3 +24,4 @@ native-tls.workspace = true
 uuid = "1"
 sha2 = "0.10"
 deadpool-postgres = "0.10"
+url = "2"
