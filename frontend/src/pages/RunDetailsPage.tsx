@@ -105,6 +105,39 @@ function batchPageSpanForAttempt(detail: RunDetail, step: RunStep, attemptNo1: n
   return pagesSpanFromBatch(batch);
 }
 
+function extractAttemptConfidence(attempt: any): number | undefined {
+  if (typeof attempt?.confidence === "number") return attempt.confidence;
+  if (typeof attempt?.candidate_confidence === "number") return attempt.candidate_confidence;
+  if (typeof attempt?.candidate_value?.confidence === "number") return attempt.candidate_value.confidence;
+  return undefined;
+}
+
+function attemptEvidenceMeta(
+    detail: RunDetail,
+    step: RunStep,
+    attempt: any,
+    attemptIndex0: number
+): {
+  attemptNo: number;
+  hasEvidence: boolean;
+  label: string;
+  pageToOpen?: number;
+} {
+  const attemptNo = (attempt?.attempt_no ?? attemptIndex0 + 1) as number;
+  const pageExact = getAttemptPage(attempt);
+  const span = pageExact == null ? batchPageSpanForAttempt(detail, step, attemptNo) : undefined;
+  const hasEvidence = typeof pageExact === "number" || !!span;
+  const label =
+      typeof pageExact === "number"
+          ? `📄 Seite ${pageExact}`
+          : span
+              ? (span.start === span.end ? `📄 Seite ${span.start}` : `📄 Seiten ${span.start}–${span.end}`)
+              : "—";
+  const pageToOpen = typeof pageExact === "number" ? pageExact : span?.start;
+
+  return {attemptNo, hasEvidence, label, pageToOpen};
+}
+
 /* ===== bestehende Helper ===== */
 function resolvePdfUrl(raw?: string | null, pdfId?: number | null): string | undefined {
   const ipBase = "http://192.168.130.102:8081";
@@ -473,6 +506,7 @@ export default function RunDetailsPage() {
           <ScoringWeightsCard detail={data} onOpenEvidence={openEvidence}/>
           {/* Immer als Fallback anzeigen, sobald Score-Steps existieren */}
           <ScoreBreakdownCard detail={data} onOpenEvidence={openEvidence}/>
+          <DetailedResultFindingCard detail={data} onOpenEvidence={openEvidence}/>
           <StepsOverview detail={data}/>
         </Stack>
 
@@ -745,6 +779,210 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                   </Box>
               );
             })}
+          </Stack>
+        </CardContent>
+      </Card>
+  );
+}
+
+function DetailedResultFindingCard({detail, onOpenEvidence}: {
+  detail: RunDetail;
+  onOpenEvidence: (page?: number) => void
+}) {
+  const extractionSteps = (detail.steps ?? []).filter(s => s.step_type === "Extraction");
+  const scoreSteps = (detail.steps ?? []).filter(s => s.step_type === "Score");
+  const decisionSteps = (detail.steps ?? []).filter(s => s.step_type === "Decision");
+
+  if (!extractionSteps.length && !scoreSteps.length && !decisionSteps.length) return null;
+
+  return (
+      <Card variant="outlined">
+        <CardHeader
+            title="Ergebnisfindung je Prompt"
+            subheader="Alle Kandidaten & Auswahl für Extraktions-, Bewertungs- und Entscheidungs-Prompts"
+        />
+        <CardContent>
+          <Stack spacing={3}>
+            {extractionSteps.length > 0 && (
+                <Box>
+                  <Typography
+                      variant="subtitle1"
+                      sx={{display: "flex", alignItems: "center", gap: 1, mb: 1}}
+                  >
+                    <ArticleIcon sx={{color: "primary.main"}} fontSize="small" />
+                    Extraktion
+                  </Typography>
+                  <Stack spacing={2}>
+                    {extractionSteps.map((s, idx) => (
+                        <Box key={s.id}>
+                          <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
+                            <PromptName name={s.final_key ?? s.definition?.json_key ?? `Extraktion ${idx + 1}`} />
+                            <Typography component="span" variant="body2">
+                              · Ergebnis: {formatValue(s.final_value)}
+                            </Typography>
+                            <Box sx={{flex: 1}} />
+                            <ConfidenceBar value={s.final_confidence} />
+                          </Stack>
+                          <Table size="small">
+                            <TableHead>
+                              <TableRow>
+                                <TableCell width={56}>#</TableCell>
+                                <TableCell>Antwort</TableCell>
+                                <TableCell width={160}>Konfidenz</TableCell>
+                                <TableCell width={160}>Evidenz</TableCell>
+                                <TableCell width={90}>Final</TableCell>
+                              </TableRow>
+                            </TableHead>
+                            <TableBody>
+                              {(s.attempts ?? []).map((a, i) => {
+                                const meta = attemptEvidenceMeta(detail, s, a, i);
+                                const confidence = extractAttemptConfidence(a);
+                                return (
+                                    <TableRow key={a.id ?? i} hover>
+                                      <TableCell>{meta.attemptNo}</TableCell>
+                                      <TableCell>{formatValue(a.candidate_value)}</TableCell>
+                                      <TableCell>
+                                        <ConfidenceBar value={confidence} />
+                                      </TableCell>
+                                      <TableCell>
+                                        {meta.hasEvidence
+                                            ? <Chip size="small" variant="outlined" label={meta.label}
+                                                    onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)} clickable/>
+                                            : "—"}
+                                      </TableCell>
+                                      <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
+                                    </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </Box>
+                    ))}
+                  </Stack>
+                </Box>
+            )}
+
+            {scoreSteps.length > 0 && (
+                <Box>
+                  <Typography
+                      variant="subtitle1"
+                      sx={{display: "flex", alignItems: "center", gap: 1, mb: 1}}
+                  >
+                    <RuleIcon sx={{color: "success.main"}} fontSize="small" />
+                    Bewertung
+                  </Typography>
+                  <Stack spacing={2}>
+                    {scoreSteps.map((s, idx) => {
+                      const lbl = s.final_score_label as TernaryLabel | undefined;
+                      return (
+                          <Box key={s.id}>
+                            <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
+                              <PromptName name={s.final_key ?? `Regel ${idx + 1}`} />
+                              <Typography component="span" variant="body2" sx={{display: "flex", alignItems: "center", gap: .5}}>
+                                · Ergebnis: {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
+                              </Typography>
+                              <Box sx={{flex: 1}} />
+                              <ConfidenceBar value={s.final_confidence} />
+                            </Stack>
+                            <Table size="small">
+                              <TableHead>
+                                <TableRow>
+                                  <TableCell width={56}>#</TableCell>
+                                  <TableCell>Erklärung</TableCell>
+                                  <TableCell width={120}>Stimme</TableCell>
+                                  <TableCell width={160}>Evidenz</TableCell>
+                                  <TableCell width={90}>Final</TableCell>
+                                </TableRow>
+                              </TableHead>
+                              <TableBody>
+                                {(s.attempts ?? []).map((a, i) => {
+                                  const meta = attemptEvidenceMeta(detail, s, a, i);
+                                  const vote: TernaryLabel | undefined = a?.vote
+                                      ?? (typeof a?.candidate_value?.value === "string" ? a.candidate_value.value : undefined);
+                                  const chip = voteChip(vote);
+                                  const vb = vote ? undefined : asBool(a.candidate_value);
+                                  return (
+                                      <TableRow key={a.id ?? i} hover>
+                                        <TableCell>{meta.attemptNo}</TableCell>
+                                        <TableCell>
+                                          <PromptName name={a.candidate_key ?? "—"} />
+                                        </TableCell>
+                                        <TableCell>
+                                          {vote ? chip : (typeof vb === "boolean" ? (vb ? "✅ Ja" : "❌ Nein") : "—")}
+                                        </TableCell>
+                                        <TableCell>
+                                          {meta.hasEvidence
+                                              ? <Chip size="small" variant="outlined" label={meta.label}
+                                                      onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)} clickable/>
+                                              : "—"}
+                                        </TableCell>
+                                        <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
+                                      </TableRow>
+                                  );
+                                })}
+                              </TableBody>
+                            </Table>
+                          </Box>
+                      );
+                    })}
+                  </Stack>
+                </Box>
+            )}
+
+            {decisionSteps.length > 0 && (
+                <Box>
+                  <Typography
+                      variant="subtitle1"
+                      sx={{display: "flex", alignItems: "center", gap: 1, mb: 1}}
+                  >
+                    <AltRouteIcon sx={{color: "warning.main"}} fontSize="small" />
+                    Entscheidung
+                  </Typography>
+                  <Stack spacing={2}>
+                    {decisionSteps.map((s, idx) => (
+                        <Box key={s.id}>
+                          <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
+                            <PromptName name={s.final_key ?? `Entscheidung ${idx + 1}`} />
+                            <Typography component="span" variant="body2">
+                              · Ergebnis: {typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : formatValue(s.final_value)}
+                            </Typography>
+                            <Box sx={{flex: 1}} />
+                            <ConfidenceBar value={s.final_confidence} />
+                          </Stack>
+                          <Table size="small">
+                            <TableHead>
+                              <TableRow>
+                                <TableCell width={56}>#</TableCell>
+                                <TableCell>Antwort</TableCell>
+                                <TableCell width={160}>Evidenz</TableCell>
+                                <TableCell width={90}>Final</TableCell>
+                              </TableRow>
+                            </TableHead>
+                            <TableBody>
+                              {(s.attempts ?? []).map((a, i) => {
+                                const meta = attemptEvidenceMeta(detail, s, a, i);
+                                const v = asBool(a.candidate_value);
+                                return (
+                                    <TableRow key={a.id ?? i} hover>
+                                      <TableCell>{meta.attemptNo}</TableCell>
+                                      <TableCell>{typeof v === "boolean" ? (v ? "✅ Ja" : "❌ Nein") : formatValue(a.candidate_value)}</TableCell>
+                                      <TableCell>
+                                        {meta.hasEvidence
+                                            ? <Chip size="small" variant="outlined" label={meta.label}
+                                                    onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)} clickable/>
+                                            : "—"}
+                                      </TableCell>
+                                      <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
+                                    </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                        </Box>
+                    ))}
+                  </Stack>
+                </Box>
+            )}
           </Stack>
         </CardContent>
       </Card>
