@@ -29,12 +29,14 @@ interface RunStep {
   final_key?: string | null;
   final_value?: any;
   final_confidence?: number | null;
+  final_score_label?: "yes" | "no" | "unsure" | null;
   definition?: { json_key?: string } | null;
   attempts?: Attempt[];
 }
 interface RunCore {
   final_scores?: Record<string, number>;         // Weights
   final_decisions?: Record<string, boolean>;     // Ergebnisse true/false (legacy)
+  final_score_labels?: Record<string, "yes" | "no" | "unsure">; // konsolidierte Labels (optional)
   overall_score?: number | null;
 }
 export interface RunDetail {
@@ -61,6 +63,32 @@ function pickFinalForSlug(detail: RunDetail, slug: string) {
   return { result, conf };
 }
 
+function coerceLabel(value: any): "yes" | "no" | "unsure" | undefined {
+  if (value === true) return "yes";
+  if (value === false) return "no";
+  if (typeof value === "string") {
+    const lower = value.trim().toLowerCase();
+    if (lower === "yes" || lower === "no" || lower === "unsure") return lower;
+    if (lower === "true") return "yes";
+    if (lower === "false") return "no";
+  }
+  return undefined;
+}
+
+function isPositiveLabel(label?: "yes" | "no" | "unsure" | null): boolean {
+  return label === "yes";
+}
+
+function resolveLabel(detail: RunDetail, step: RunStep, slug: string): "yes" | "no" | "unsure" | undefined {
+  const fromStep = step.final_score_label ?? coerceLabel(step.final_value);
+  if (fromStep) return fromStep;
+  const fromRun = detail.run.final_score_labels?.[slug];
+  if (fromRun) return fromRun;
+  const legacyDecision = detail.run.final_decisions?.[slug];
+  if (typeof legacyDecision === "boolean") return legacyDecision ? "yes" : "no";
+  return undefined;
+}
+
 // === Berechnung gewichteter Score
 export function computeWeightedScore(detail: RunDetail): number {
   const scoringSteps = detail.steps.filter((s) => s.step_type === "Score");
@@ -74,9 +102,12 @@ export function computeWeightedScore(detail: RunDetail): number {
   for (const step of scoringSteps) {
     const slug = step.final_key || step.definition?.json_key;
     if (!slug) continue;
-    const weight = Number(detail.run.final_scores?.[slug]) || 0;
+    const weightRaw = detail.run.final_scores?.[slug];
+    const weight = typeof weightRaw === "number" && Number.isFinite(weightRaw) ? weightRaw : 0;
+    if (weight <= 0) continue;
     total += weight;
-    if (step.final_value) positive += weight;
+    const label = resolveLabel(detail, step, slug);
+    if (isPositiveLabel(label)) positive += weight;
   }
 
   if (total <= 0) return 0;
@@ -94,15 +125,18 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
   .filter((s) => s.step_type === "Score")
   .map((s) => {
     const slug = s.final_key || s.definition?.json_key;
-    const weight = Number(weights[slug ?? ""]) || 0;
-    const result = !!s.final_value;
+    const weightRaw = slug ? weights[slug] : undefined;
+    const weight = typeof weightRaw === "number" && Number.isFinite(weightRaw) ? weightRaw : 0;
+    const label = slug ? resolveLabel(detail, s, slug) : undefined;
+    const positive = isPositiveLabel(label);
     const conf = s.final_confidence ?? null;
     return {
       slug: slug ?? "undefined",
       weight,
-      result,
+      label,
+      positive,
       conf,
-      contribution: result ? weight : 0,
+      contribution: positive ? weight : 0,
     };
   })
   .filter((r, i, all) => r.slug !== "undefined" && all.findIndex(x => x.slug === r.slug) === i);
@@ -110,17 +144,17 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
   if (!rows.length) return null;
 
   const totalWeight = rows.reduce((a, r) => a + r.weight, 0);
-  const positive = rows.reduce((a, r) => a + r.contribution, 0);
-  const computedScore = totalWeight > 0 ? positive / totalWeight : 0;
+  const positiveSum = rows.reduce((a, r) => a + r.contribution, 0);
+  const computedScore = totalWeight > 0 ? positiveSum / totalWeight : 0;
 
   const segments = rows
   .sort((a, b) => a.slug.localeCompare(b.slug))
   .map((r) => ({
     key: r.slug,
     widthPct: totalWeight > 0 ? (r.weight / totalWeight) * 100 : 0,
-    color: r.result ? POS : NEG,
+    color: r.positive ? POS : NEG,
     label: r.slug,
-    tooltip: `${r.slug} • Weight ${r.weight.toFixed(2)} • ${r.result ? "zählt" : "zählt nicht"}`,
+    tooltip: `${r.slug} • Weight ${r.weight.toFixed(2)} • ${r.positive ? "zählt" : "zählt nicht"}`,
   }));
 
   return (
@@ -176,7 +210,7 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
                 ∑ Weights: {totalWeight.toFixed(2)}
               </Typography>
               <Typography variant="caption" sx={{ color: POS }}>
-                Positive Contribution: {positive.toFixed(2)}
+                Positive Contribution: {positiveSum.toFixed(2)}
               </Typography>
             </Stack>
           </Stack>
@@ -201,8 +235,10 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
                       <Chip size="small" label={r.slug} />
                     </TableCell>
                     <TableCell align="right">{r.weight.toFixed(2)}</TableCell>
-                    <TableCell align="center">{r.result ? "✅ Ja" : "❌ Nein"}</TableCell>
-                    <TableCell align="center" sx={{ color: r.result ? POS : "text.disabled" }}>
+                    <TableCell align="center">
+                      {r.label === "yes" ? "✅ Ja" : r.label === "no" ? "❌ Nein" : r.label === "unsure" ? "⚪ Unsicher" : "—"}
+                    </TableCell>
+                    <TableCell align="center" sx={{ color: r.positive ? POS : "text.disabled" }}>
                       {r.contribution.toFixed(2)}
                     </TableCell>
                     <TableCell align="center">
