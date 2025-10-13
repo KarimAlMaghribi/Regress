@@ -6,7 +6,6 @@ import {
   Card,
   CardHeader,
   CardContent,
-  Chip,
   LinearProgress,
   Stack,
   Table,
@@ -18,52 +17,9 @@ import {
   Typography,
 } from "@mui/material";
 
-// ==== Types (an deine vorhandenen Typen angelehnt) ====
-type StepType = "Extraction" | "Decision" | "Score";
-interface Attempt {
-  is_final?: boolean;
-  candidate_value?: any;
-}
-interface RunStep {
-  step_type: StepType;
-  final_key?: string | null;
-  final_value?: any;
-  final_confidence?: number | null;
-  final_score_label?: "yes" | "no" | "unsure" | null;
-  definition?: { json_key?: string } | null;
-  attempts?: Attempt[];
-}
-interface RunCore {
-  final_scores?: Record<string, number>;         // Weights
-  final_decisions?: Record<string, boolean>;     // Ergebnisse true/false (legacy)
-  final_score_labels?: Record<string, "yes" | "no" | "unsure">; // konsolidierte Labels (optional)
-  overall_score?: number | null;
-}
-export interface RunDetail {
-  run: RunCore;
-  steps: RunStep[];
-}
+import {type RunDetail, type RunStep, type TernaryLabel} from "../hooks/useRunDetails";
 
-// === Hilfsfunktion: finalen bool-Wert & Confidence je Slug ermitteln
-function pickFinalForSlug(detail: RunDetail, slug: string) {
-  const step =
-      detail.steps.find(
-          (s) =>
-              s.step_type === "Score" &&
-              (s.final_key === slug || s.definition?.json_key === slug)
-      ) ?? null;
-
-  const result =
-      detail.run.final_decisions && slug in detail.run.final_decisions
-          ? !!detail.run.final_decisions[slug]
-          : !!step?.final_value;
-
-  const conf = step?.final_confidence ?? null;
-
-  return { result, conf };
-}
-
-function coerceLabel(value: any): "yes" | "no" | "unsure" | undefined {
+function coerceLabel(value: any): TernaryLabel | undefined {
   if (value === true) return "yes";
   if (value === false) return "no";
   if (typeof value === "string") {
@@ -75,11 +31,11 @@ function coerceLabel(value: any): "yes" | "no" | "unsure" | undefined {
   return undefined;
 }
 
-function isPositiveLabel(label?: "yes" | "no" | "unsure" | null): boolean {
+function isPositiveLabel(label?: TernaryLabel | null): boolean {
   return label === "yes";
 }
 
-function resolveLabel(detail: RunDetail, step: RunStep, slug: string): "yes" | "no" | "unsure" | undefined {
+function resolveLabel(detail: RunDetail, step: RunStep, slug: string): TernaryLabel | undefined {
   const fromStep = step.final_score_label ?? coerceLabel(step.final_value);
   if (fromStep) return fromStep;
   const fromRun = detail.run.final_score_labels?.[slug];
@@ -118,6 +74,28 @@ export function computeWeightedScore(detail: RunDetail): number {
 const POS = "#28a745"; // grün
 const NEG = "#9aa0a6"; // grau
 
+export function scoreColor(score: number): string {
+  if (score >= 0.75) return "success.main";
+  if (score >= 0.5) return "warning.main";
+  return "error.main";
+}
+
+function prettyPromptLabel(raw?: string | null) {
+  if (!raw) return "—";
+  return raw.replace(/_/g, " ").trim();
+}
+
+function PromptLabel({label}: {label?: string | null}) {
+  const pretty = prettyPromptLabel(label);
+  return (
+      <Tooltip title={pretty} placement="top-start">
+        <Box sx={{maxWidth: 260, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>
+          {pretty}
+        </Box>
+      </Tooltip>
+  );
+}
+
 export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
   const weights = detail.run.final_scores ?? {};
 
@@ -130,8 +108,10 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
     const label = slug ? resolveLabel(detail, s, slug) : undefined;
     const positive = isPositiveLabel(label);
     const conf = s.final_confidence ?? null;
+    const prettyName = slug ?? "";
     return {
       slug: slug ?? "undefined",
+      prettyName,
       weight,
       label,
       positive,
@@ -146,6 +126,7 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
   const totalWeight = rows.reduce((a, r) => a + r.weight, 0);
   const positiveSum = rows.reduce((a, r) => a + r.contribution, 0);
   const computedScore = totalWeight > 0 ? positiveSum / totalWeight : 0;
+  const scorePct = computedScore * 100;
 
   const segments = rows
   .sort((a, b) => a.slug.localeCompare(b.slug))
@@ -153,15 +134,19 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
     key: r.slug,
     widthPct: totalWeight > 0 ? (r.weight / totalWeight) * 100 : 0,
     color: r.positive ? POS : NEG,
-    label: r.slug,
-    tooltip: `${r.slug} • Weight ${r.weight.toFixed(2)} • ${r.positive ? "zählt" : "zählt nicht"}`,
+    label: prettyPromptLabel(r.prettyName),
+    tooltip: `${prettyPromptLabel(r.prettyName)} • Gewicht ${r.weight.toFixed(2)} • ${r.positive ? "in Score" : "ignoriert"}`,
   }));
 
   return (
       <Card variant="outlined">
         <CardHeader
             title="Scoring-Ergebnisse"
-            subheader="Gewichtete Regeln und Beitrag zum Endscore"
+            subheader={
+              <Typography variant="subtitle2" sx={{color: scoreColor(computedScore), fontWeight: 600}}>
+                Gesamt-Score: {scorePct.toFixed(0)}%
+              </Typography>
+            }
         />
         <CardContent>
           {/* Zusammenfassung */}
@@ -171,10 +156,14 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
                 Endscore
               </Typography>
               <Box sx={{ flex: 1 }}>
-                <LinearProgress variant="determinate" value={computedScore * 100} />
+                <LinearProgress
+                    variant="determinate"
+                    value={computedScore * 100}
+                    sx={{ '& .MuiLinearProgress-bar': { bgcolor: scoreColor(computedScore) } }}
+                />
               </Box>
-              <Typography variant="body2" sx={{ width: 56, textAlign: "right" }}>
-                {(computedScore * 100).toFixed(0)}%
+              <Typography variant="body2" sx={{ width: 56, textAlign: "right", color: scoreColor(computedScore), fontWeight: 600 }}>
+                {scorePct.toFixed(0)}%
               </Typography>
             </Stack>
 
@@ -210,7 +199,7 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
                 ∑ Weights: {totalWeight.toFixed(2)}
               </Typography>
               <Typography variant="caption" sx={{ color: POS }}>
-                Positive Contribution: {positiveSum.toFixed(2)}
+                Aktive Weights (true): {positiveSum.toFixed(2)}
               </Typography>
             </Stack>
           </Stack>
@@ -232,7 +221,7 @@ export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
               .map((r) => (
                   <TableRow key={r.slug} hover>
                     <TableCell>
-                      <Chip size="small" label={r.slug} />
+                      <PromptLabel label={r.prettyName} />
                     </TableCell>
                     <TableCell align="right">{r.weight.toFixed(2)}</TableCell>
                     <TableCell align="center">
