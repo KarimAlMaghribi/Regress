@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Tabs, Tab, Paper, Button, Typography,
   Table, TableHead, TableRow, TableCell, TableBody,
-  Stack, FormControlLabel, Checkbox, Tooltip, TextField, LinearProgress
+  Stack, FormControlLabel, Checkbox, Tooltip, TextField, LinearProgress, Chip
 } from '@mui/material';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import dayjs, { Dayjs } from 'dayjs';
@@ -16,6 +16,8 @@ import TenantFilter from '../components/TenantFilter';
 declare global { interface Window { __ENV__?: any } }
 
 interface PromptCfg { text: string }
+type AnalysisStatus = 'running' | 'completed' | 'pending';
+
 interface Entry {
   id: number;           // Analyse-ID (History)
   pdfId: number;
@@ -81,6 +83,23 @@ const KEY_LABELS: Record<string, string> = {
 
 function translateKeyHeader(key: string): string {
   return KEY_LABELS[key] ?? key;
+}
+
+function getStatusChip(status: string | undefined) {
+  const normalized = (status ?? '').toLowerCase();
+  let color: 'default' | 'success' | 'warning' | 'info' | 'error' | 'primary' | 'secondary' = 'default';
+  if (normalized === 'completed') color = 'success';
+  else if (normalized === 'running') color = 'warning';
+  else if (normalized === 'pending') color = 'info';
+  const label = status ? status.charAt(0).toUpperCase() + status.slice(1) : '—';
+  return (
+      <Chip
+          size="small"
+          label={label}
+          color={color}
+          variant="outlined"
+      />
+  );
 }
 
 /* -------- Backend-Auflösung (run_id & Konsolidat) -------- */
@@ -338,18 +357,31 @@ export default function Analyses() {
         import.meta.env.VITE_HISTORY_URL ||
         '/hist';
 
-    const urlFor = (status: 'running' | 'completed') => {
+    const urlFor = (status: AnalysisStatus) => {
       const u = new URL(`${base}/analyses`, window.location.origin);
       u.searchParams.set('status', status);
       if (tenant) u.searchParams.set('tenant', tenant);
       return u.toString();
     };
 
+    const loadStatus = async (status: AnalysisStatus): Promise<any[]> => {
+      try {
+        const r = await fetch(urlFor(status));
+        if (!r.ok) return [];
+        const json = await r.json();
+        return Array.isArray(json) ? json : [];
+      } catch (err) {
+        console.error(`Analysen laden status ${status}`, err);
+        return [];
+      }
+    };
+
     Promise.all([
-      fetch(urlFor('running')).then(r => r.json()),
-      fetch(urlFor('completed')).then(r => r.json()),
+      loadStatus('running'),
+      loadStatus('pending'),
+      loadStatus('completed'),
     ])
-    .then(([runningData, doneData]: [any[], any[]]) => {
+    .then(([runningData, pendingData, doneData]) => {
       const map = (d: any): Entry => {
         let prompts: PromptCfg[] = [];
         try {
@@ -402,13 +434,15 @@ export default function Analyses() {
         };
       };
 
-      const r = runningData.map(map);
+      const runningCombined = [...runningData, ...pendingData].map(map);
+      const runningUnique = Array.from(new Map(runningCombined.map(e => [e.id, e])).values())
+          .sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
       const c = doneData.map(map).sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
-      setRunning(r);
+      setRunning(runningUnique);
       setDone(c);
 
       // Namen für Einträge ohne Namen nachladen
-      void resolvePipelineNamesForEntries([...r, ...c]);
+      void resolvePipelineNamesForEntries([...runningUnique, ...c]);
     })
     .catch(e => console.error('Analysen laden', e));
   };
@@ -502,7 +536,7 @@ export default function Analyses() {
   const renderList = (items: Entry[], finished: boolean) => {
     const emptyColSpan = finished
         ? (1 /* PDF */ + 1 /* Datei */ + 1 /* Pipeline */ + 1 /* Score */ + finalCols.length + 1 /* Details */)
-        : (1 /* PDF */ + 1 /* Datei */ + 1 /* Pipeline */);
+        : (1 /* PDF */ + 1 /* Datei */ + 1 /* Pipeline */ + 1 /* Status */);
     return (
         <Paper sx={{ p: 2 }}>
           <Table size="small">
@@ -511,6 +545,7 @@ export default function Analyses() {
                 <TableCell>PDF</TableCell>
                 <TableCell>Datei</TableCell>
                 <TableCell>Pipeline</TableCell>
+                {!finished && <TableCell>Status</TableCell>}
                 {finished && <TableCell>Gesamtscore</TableCell>}
                 {finished && finalCols.map(col => (
                     <TableCell key={`col-${col}`}>{translateKeyHeader(col)}</TableCell>
@@ -532,6 +567,9 @@ export default function Analyses() {
                       <TableCell>{`PDF ${e.pdfId}`}</TableCell>
                       <TableCell>{e.pdfNames?.[0] ?? '—'}</TableCell>
                       <TableCell>{getPipelineLabel(e, pipelineNames)}</TableCell>
+                      {!finished && (
+                          <TableCell>{getStatusChip(e.status)}</TableCell>
+                      )}
 
                       {finished && (
                           <TableCell>

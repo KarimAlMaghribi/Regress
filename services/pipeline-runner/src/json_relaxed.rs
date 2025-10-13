@@ -25,27 +25,49 @@ fn strip_code_fences(s: &str) -> &str {
 }
 
 fn extract_first_balanced_json(s: &str) -> Option<String> {
-    let bytes = s.as_bytes();
-    let mut start = None;
-    let mut depth = 0_i32;
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] as char {
-            '{' => {
-                depth += 1;
-                if start.is_none() { start = Some(i); }
+    let mut in_str = false;
+    let mut esc = false;
+    let mut stack: Vec<char> = Vec::new();
+    let mut start: Option<usize> = None;
+
+    for (i, ch) in s.char_indices() {
+        if in_str {
+            if esc {
+                esc = false;
+            } else if ch == '\\' {
+                esc = true;
+            } else if ch == '"' {
+                in_str = false;
             }
-            '}' => {
-                if depth > 0 { depth -= 1; }
-                if depth == 0 && start.is_some() {
-                    let st = start.unwrap();
-                    let end = i + 1;
-                    return Some(s[st..end].to_string());
+            continue;
+        }
+
+        match ch {
+            '"' => in_str = true,
+            '{' | '[' => {
+                if start.is_none() {
+                    start = Some(i);
+                }
+                stack.push(ch);
+            }
+            '}' | ']' => {
+                if let Some(open) = stack.pop() {
+                    let matches = (open == '{' && ch == '}') || (open == '[' && ch == ']');
+                    if !matches {
+                        stack.clear();
+                        start = None;
+                        continue;
+                    }
+                    if stack.is_empty() {
+                        let st = start.unwrap_or(0);
+                        return Some(s[st..=i].to_string());
+                    }
+                } else {
+                    start = None;
                 }
             }
             _ => {}
         }
-        i += 1;
     }
     None
 }

@@ -30,6 +30,8 @@ function getPipelineApiBase(): string {
 
 const LS_PREFIX = 'run-view:';
 
+type HistoryStatus = 'running' | 'completed' | 'pending';
+
 interface HistoryEntry {
   id: number; // unique analysis id
   pdfId: number;
@@ -206,24 +208,39 @@ export default function History() {
   useEffect(() => {
     const load = async () => {
       try {
-        const urlFor = (status: 'running' | 'completed') => {
+        const urlFor = (status: HistoryStatus) => {
           const u = new URL(`${BASE_HIST}/analyses`, window.location.origin);
           u.searchParams.set('status', status);
           if (tenant) u.searchParams.set('tenant', tenant);
           return u.toString();
         };
 
-        const [rRunning, rCompleted] = await Promise.all([
-          fetch(urlFor('running')).then(r => r.json()),
-          fetch(urlFor('completed')).then(r => r.json()),
+        const loadStatus = async (status: HistoryStatus): Promise<any[]> => {
+          try {
+            const r = await fetch(urlFor(status));
+            if (!r.ok) return [];
+            const json = await r.json();
+            return Array.isArray(json) ? json : [];
+          } catch (err) {
+            console.error(`history load status ${status}`, err);
+            return [];
+          }
+        };
+
+        const [rRunning, rCompleted, rPending] = await Promise.all([
+          loadStatus('running'),
+          loadStatus('completed'),
+          loadStatus('pending'),
         ]);
-        const initial = [...rRunning, ...rCompleted].map(normalizeEntry);
-        initial.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
-        setEntries(initial);
+        const initialRaw = [...rRunning, ...rCompleted, ...rPending].map(normalizeEntry);
+        const dedup = new Map(initialRaw.map(item => [item.id, item] as const));
+        const merged = Array.from(dedup.values());
+        merged.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
+        setEntries(merged);
 
         const pdfIdParam = new URLSearchParams(location.search).get('pdfId');
         if (pdfIdParam) {
-          const wanted = initial.find(e => String(e.pdfId) === pdfIdParam);
+          const wanted = merged.find(e => String(e.pdfId) === pdfIdParam);
           if (wanted) setSelected(wanted);
         }
       } catch (e) {
@@ -376,7 +393,13 @@ export default function History() {
           <Chip
               size="small"
               label={params.row.status || ''}
-              color={params.row.status === 'completed' ? 'success' : params.row.status === 'running' ? 'warning' : 'default'}
+              color={params.row.status === 'completed'
+                  ? 'success'
+                  : params.row.status === 'running'
+                      ? 'warning'
+                      : params.row.status === 'pending'
+                          ? 'info'
+                          : 'default'}
               variant="outlined"
           />
       ),

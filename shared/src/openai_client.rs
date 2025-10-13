@@ -11,7 +11,8 @@ use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
 use tracing::{debug, error, warn};
-#[path = "evidence_resolver.rs"] mod evidence_resolver;
+#[path = "evidence_resolver.rs"]
+mod evidence_resolver;
 
 /* ======================= Deutsch-Guard (globale Vorgabe) ======================= */
 
@@ -142,8 +143,9 @@ fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
 fn extract_first_balanced_json(s: &str) -> Option<String> {
     let mut in_str = false;
     let mut esc = false;
-    let mut depth: i32 = 0;
+    let mut stack: Vec<char> = Vec::new();
     let mut start: Option<usize> = None;
+
     for (i, ch) in s.char_indices() {
         if in_str {
             if esc {
@@ -154,26 +156,33 @@ fn extract_first_balanced_json(s: &str) -> Option<String> {
                 in_str = false;
             }
             continue;
-        } else {
-            match ch {
-                '"' => in_str = true,
-                '{' => {
-                    depth += 1;
-                    if start.is_none() {
-                        start = Some(i);
-                    }
+        }
+
+        match ch {
+            '"' => in_str = true,
+            '{' | '[' => {
+                if start.is_none() {
+                    start = Some(i);
                 }
-                '}' => {
-                    if depth > 0 {
-                        depth -= 1;
-                        if depth == 0 {
-                            let st = start.unwrap_or(0);
-                            return Some(s[st..=i].to_string());
-                        }
-                    }
-                }
-                _ => {}
+                stack.push(ch);
             }
+            '}' | ']' => {
+                if let Some(open) = stack.pop() {
+                    let matches = (open == '{' && ch == '}') || (open == '[' && ch == ']');
+                    if !matches {
+                        stack.clear();
+                        start = None;
+                        continue;
+                    }
+                    if stack.is_empty() {
+                        let st = start.unwrap_or(0);
+                        return Some(s[st..=i].to_string());
+                    }
+                } else {
+                    start = None;
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -211,7 +220,11 @@ pub async fn call_openai_chat(
         messages: &messages,
         functions: functions.as_deref(),
         function_call,
-        response_format: if functions.is_some() { None } else { Some(serde_json::json!({"type":"json_object"})) },
+        response_format: if functions.is_some() {
+            None
+        } else {
+            Some(serde_json::json!({"type":"json_object"}))
+        },
     };
 
     let base = std::env::var("OPENAI_API_BASE").unwrap_or_else(|_| "https://api.openai.com".into());
@@ -229,7 +242,10 @@ pub async fn call_openai_chat(
 
     let status = res.status();
     debug!(status = %status, "← headers = {:?}", res.headers());
-    let bytes = res.body().await.map_err(|e| PromptError::Network(e.to_string()))?;
+    let bytes = res
+        .body()
+        .await
+        .map_err(|e| PromptError::Network(e.to_string()))?;
     let body_preview = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_string();
     debug!("← body[0..512] = {}", body_preview);
 
@@ -251,7 +267,10 @@ pub async fn call_openai_chat(
     if let Ok(chat) = serde_json::from_slice::<ChatCompletion>(&bytes) {
         if let Some(primary) = chat.choices.get(0).and_then(|c| {
             c.message.content.clone().or_else(|| {
-                c.message.function_call.as_ref().map(|fc| fc.arguments.clone())
+                c.message
+                    .function_call
+                    .as_ref()
+                    .map(|fc| fc.arguments.clone())
             })
         }) {
             let trimmed = primary.trim();
@@ -298,10 +317,7 @@ pub struct OpenAiAnswer {
 /* ======================= Evidence-Fix (kanonische PDF-Seiten) ======================= */
 
 /// Überschreibt `source.page` in `OpenAiAnswer` anhand Quote/Value mit korrekter 1-basierter PDF-Seite.
-pub fn enrich_with_pdf_evidence_answer(
-    answer: &mut OpenAiAnswer,
-    page_map: &HashMap<u32, String>,
-) {
+pub fn enrich_with_pdf_evidence_answer(answer: &mut OpenAiAnswer, page_map: &HashMap<u32, String>) {
     let quote = answer
         .source
         .as_ref()
@@ -323,10 +339,7 @@ pub fn enrich_with_pdf_evidence_answer(
 }
 
 /// Überschreibt `source.page` in einer Liste von JSON-Extraction-Objekten.
-pub fn enrich_with_pdf_evidence_list(
-    items: &mut [JsonValue],
-    page_map: &HashMap<u32, String>,
-) {
+pub fn enrich_with_pdf_evidence_list(items: &mut [JsonValue], page_map: &HashMap<u32, String>) {
     for it in items.iter_mut() {
         let quote = it
             .pointer("/source/quote")
@@ -441,7 +454,9 @@ pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, Prom
         msgs,
         Some(vec![schema.clone()]),
         Some(serde_json::json!({"name":"ternary_answer"})),
-    ).await {
+    )
+    .await
+    {
         match parse_json_block(&ans) {
             Ok(v) => {
                 let vote_str = v.get("vote").and_then(|s| s.as_str()).unwrap_or("");
@@ -461,8 +476,9 @@ pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, Prom
                     None => legacy_bool.unwrap_or(false),
                 };
 
-                let mut source: Option<TextPosition> =
-                    v.get("source").and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok());
+                let mut source: Option<TextPosition> = v
+                    .get("source")
+                    .and_then(|s| serde_json::from_value::<TextPosition>(s.clone()).ok());
                 if let Some(s) = source.as_mut() {
                     if s.bbox.len() != 4 {
                         s.bbox = [0.0, 0.0, 0.0, 0.0];
@@ -476,8 +492,15 @@ pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, Prom
                 }
 
                 let strength = v.get("strength").and_then(|x| x.as_f64()).map(|f| f as f32);
-                let confidence = v.get("confidence").and_then(|x| x.as_f64()).map(|f| f as f32);
-                let explanation = v.get("explanation").and_then(|e| e.as_str()).unwrap_or("").to_string();
+                let confidence = v
+                    .get("confidence")
+                    .and_then(|x| x.as_f64())
+                    .map(|f| f as f32);
+                let explanation = v
+                    .get("explanation")
+                    .and_then(|e| e.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
                 return Ok(ScoringResult {
                     prompt_id,
@@ -536,7 +559,10 @@ pub async fn decide(
                         v["route"] = serde_json::Value::String(ansb.to_string());
                     }
                 }
-                let route = v.get("route").and_then(|r| r.as_str()).map(|s| s.to_string());
+                let route = v
+                    .get("route")
+                    .and_then(|r| r.as_str())
+                    .map(|s| s.to_string());
 
                 let source = v
                     .get("source")
@@ -614,12 +640,18 @@ pub async fn fetch_prompt_text(id: i32) -> Result<String, PromptError> {
 
 fn extract_choice_content_from_raw_json(raw: &JsonValue) -> Option<String> {
     // 1) content als String
-    if let Some(s) = raw.pointer("/choices/0/message/content").and_then(|v| v.as_str()) {
+    if let Some(s) = raw
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_str())
+    {
         return Some(s.to_string());
     }
 
     // 1b) content als Array (neues Format)
-    if let Some(arr) = raw.pointer("/choices/0/message/content").and_then(|v| v.as_array()) {
+    if let Some(arr) = raw
+        .pointer("/choices/0/message/content")
+        .and_then(|v| v.as_array())
+    {
         let mut buf = String::new();
         for part in arr {
             if let Some(txt) = part.get("text").and_then(|x| x.as_str()) {
