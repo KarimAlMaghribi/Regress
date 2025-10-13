@@ -350,7 +350,7 @@ async fn upload(
         }
 
         // ZIP-Einträge können Pfade enthalten – nur den eigentlichen Dateinamen behalten
-        let normalized = trimmed.replace('\', "/");
+        let normalized = trimmed.replace('\\', "/");
         let candidate = normalized
             .rsplit('/')
             .next()
