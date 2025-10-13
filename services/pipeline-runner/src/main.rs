@@ -18,9 +18,25 @@ use uuid::Uuid;
 mod runner;
 
 fn ensure_sslmode_disable(url: &str) -> String {
-    if url.contains("sslmode=") {
-        url.to_string()
-    } else if url.contains('?') {
+    let has_sslmode = url
+        .to_ascii_lowercase()
+        .contains("sslmode=");
+
+    if has_sslmode {
+        return url.to_string();
+    }
+
+    let disable_for_local = url::Url::parse(url)
+        .ok()
+        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
+        .map(|host| matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1"))
+        .unwrap_or(false);
+
+    if !disable_for_local {
+        return url.to_string();
+    }
+
+    if url.contains('?') {
         format!("{url}&sslmode=disable")
     } else {
         format!("{url}?sslmode=disable")

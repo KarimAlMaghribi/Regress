@@ -20,6 +20,7 @@ openai = { workspace = true }
 uuid = "1"
 shared = { path = "../../shared" }
 futures = "0.3.31"
+url = "2"
 
 [dev-dependencies]
 wiremock = "0.6"
