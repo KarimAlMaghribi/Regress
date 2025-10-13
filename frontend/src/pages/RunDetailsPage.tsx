@@ -38,7 +38,7 @@ import AssessmentIcon from "@mui/icons-material/Assessment"; // Übersicht
 import CloseIcon from "@mui/icons-material/Close";
 
 import {type RunDetail, type RunStep, type TernaryLabel, useRunDetails} from "../hooks/useRunDetails";
-import {computeWeightedScore, ScoringWeightsCard} from "../components/ScoringWeightsCard";
+import {computeWeightedScore, scoreColor, ScoringWeightsCard} from "../components/ScoringWeightsCard";
 import PdfViewer from "../components/PdfViewer";
 
 /* ===== Helfer ===== */
@@ -503,7 +503,9 @@ export default function RunDetailsPage() {
           <SummaryCard detail={data} scoreSum={scoreSum}/>
           <ExtractionCard detail={data} pdfUrl={resolvedPdfUrl} onOpenEvidence={openEvidence}/>
           {/* Gewichte/aggregierter Score (optional, rendert evtl. nichts wenn keine Gewichte/FinalScores) */}
-          <ScoringWeightsCard detail={data} onOpenEvidence={openEvidence}/>
+          <ScoringWeightsCard detail={data}/>
+          {/* Immer als Fallback anzeigen, sobald Score-Steps existieren */}
+          <ScoreBreakdownCard detail={data} onOpenEvidence={openEvidence}/>
           <DetailedResultFindingCard detail={data} onOpenEvidence={openEvidence}/>
           <StepsOverview detail={data}/>
         </Stack>
@@ -586,12 +588,28 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
                   : null;
 
   const scoreValue = rawScore != null ? clamp01(rawScore) : null;
+  const scorePercent = scoreValue != null ? scoreValue * 100 : null;
+  const scoreTone = scoreValue != null ? scoreColor(scoreValue) : "text.secondary";
 
   const runtime = formatRuntime(detail.run.started_at, detail.run.finished_at);
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Übersicht" subheader="Konsolidierte Ergebnisse & Score" />
+        <CardHeader
+            title="Übersicht"
+            subheader={
+              scorePercent != null ? (
+                  <Stack spacing={0.25}>
+                    <Typography variant="subtitle2" sx={{ color: scoreTone, fontWeight: 600 }}>
+                      Gesamtscore: {scorePercent!.toFixed(0)}%
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Konsolidierte Ergebnisse & Score
+                    </Typography>
+                  </Stack>
+              ) : "Konsolidierte Ergebnisse & Score"
+            }
+        />
         <CardContent>
           <Stack spacing={1.5}>
             {/* Gesamtscore zentral */}
@@ -599,8 +617,17 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
               {scoreValue != null ? (
                   <Stack alignItems="center" spacing={1} sx={{width: "100%", maxWidth: 540}}>
                     <Typography variant="body2" color="text.secondary">Gesamtscore</Typography>
-                    <LinearProgress variant="determinate" value={scoreValue * 100} />
-                    <Typography variant="h6">{fmtNum(scoreValue)}</Typography>
+                    <LinearProgress
+                        variant="determinate"
+                        value={scorePercent!}
+                        sx={{
+                          width: "100%",
+                          '& .MuiLinearProgress-bar': { bgcolor: scoreTone },
+                        }}
+                    />
+                    <Typography variant="h5" sx={{ color: scoreTone, fontWeight: 600 }}>
+                      {scorePercent!.toFixed(0)}%
+                    </Typography>
                   </Stack>
               ) : (
                   <Typography variant="body2">—</Typography>
@@ -676,6 +703,108 @@ function ExtractionCard({
               ))}
             </TableBody>
           </Table>
+        </CardContent>
+      </Card>
+  );
+}
+
+function ScoreBreakdownCard({detail, onOpenEvidence}: {
+  detail: RunDetail;
+  onOpenEvidence: (page?: number) => void
+}) {
+  const scoreSteps = (detail.steps ?? []).filter(s => s.step_type === "Score");
+  if (!scoreSteps.length) return null;
+
+  const scoreByKey: Record<string, number | undefined> = detail.run.final_scores ?? {};
+
+  return (
+      <Card variant="outlined">
+        <CardHeader title="Bewertungs-Details" subheader="Alle Regeln, Stimmen & Evidenzen" />
+        <CardContent>
+          <Stack spacing={2}>
+            {scoreSteps.map((s, idx) => {
+              const rawScore = typeof s.final_key === "string" ? scoreByKey[s.final_key] : undefined;
+              const norm = normFromScore(rawScore);
+              const lbl = s.final_score_label as TernaryLabel | undefined;
+
+              return (
+                  <Box key={s.id}>
+                    <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
+                      <RuleIcon sx={{color: (lbl === "yes" ? "success.main" : lbl === "no" ? "error.main" : "text.secondary")}} fontSize="small"/>
+                      <Typography variant="subtitle2" sx={{display: "flex", alignItems: "center", gap: .5}}>
+                        <PromptName name={s.final_key ?? `Regel ${idx + 1}`} />
+                        · Ergebnis:&nbsp;
+                        {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
+                      </Typography>
+                      <Box sx={{flex: 1}}/>
+                      {/* Zeige Tri‑State‑Score als Balken (−1..+1 → 0..1), falls vorhanden */}
+                      {typeof norm === "number" ? (
+                          <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 200 }}>
+                            <LinearProgress variant="determinate" value={norm * 100}/>
+                            <Typography variant="caption" sx={{width: 40, textAlign: "right"}}>{fmtNum(norm)}</Typography>
+                          </Stack>
+                      ) : (
+                          <ConfidenceBar value={s.final_confidence}/>
+                      )}
+                    </Stack>
+
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell width={56}>#</TableCell>
+                          <TableCell>Erklärung</TableCell>
+                          <TableCell width={120}>Stimme</TableCell>
+                          <TableCell width={160}>Evidenz</TableCell>
+                          <TableCell width={90}>Final</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {(s.attempts ?? []).map((a, i) => {
+                          const pageExact = getAttemptPage(a);
+                          const attemptNo = (a?.attempt_no ?? i + 1) as number;
+                          const span = pageExact == null ? batchPageSpanForAttempt(detail, s, attemptNo) : undefined;
+
+                          const vote: TernaryLabel | undefined =
+                              a?.vote ?? (typeof a?.candidate_value?.value === "string" ? a.candidate_value.value : undefined);
+                          const chip = voteChip(vote);
+
+                          // Backwards-Compat (falls nur bool vorhanden)
+                          const vb = vote ? undefined : asBool(a.candidate_value);
+
+                          const hasEvidence = typeof pageExact === "number" || !!span;
+                          const label =
+                              typeof pageExact === "number"
+                                  ? `📄 Seite ${pageExact}`
+                                  : span
+                                      ? (span.start === span.end ? `📄 Seite ${span.start}` : `📄 Seiten ${span.start}–${span.end}`)
+                                      : "—";
+                          const pageToOpen = typeof pageExact === "number" ? pageExact : span?.start;
+
+                          return (
+                              <TableRow key={a.id ?? i} hover>
+                                <TableCell>{attemptNo}</TableCell>
+                                <TableCell>
+                                  <PromptName name={a.candidate_key ?? "—"} />
+                                </TableCell>
+                                <TableCell>
+                                  {vote ? chip : (typeof vb === "boolean" ? (vb ? "✅ Ja" : "❌ Nein") : "—")}
+                                </TableCell>
+                                <TableCell>
+                                  {hasEvidence
+                                      ? <Chip size="small" variant="outlined" label={label}
+                                              onClick={() => pageToOpen != null && onOpenEvidence(pageToOpen)} clickable/>
+                                      : "—"}
+                                </TableCell>
+                                <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
+                              </TableRow>
+                          );
+                        })}
+                      </TableBody>
+                    </Table>
+                  </Box>
+              );
+            })}
+          </Stack>
         </CardContent>
       </Card>
   );
