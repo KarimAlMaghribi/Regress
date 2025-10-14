@@ -538,6 +538,174 @@ async fn analyses(
     HttpResponse::Ok().json(items)
 }
 
+#[derive(Deserialize)]
+struct PdfNameSearchQuery {
+    q: Option<String>,
+    limit: Option<i64>,
+    tenant_id: Option<Uuid>,
+    tenant: Option<String>,
+    pipeline_id: Option<Uuid>,
+    pipeline: Option<String>,
+    status: Option<String>,
+    pdf_id: Option<i32>,
+}
+
+#[derive(Serialize)]
+struct PdfNameSearchHit {
+    analysis_id: i32,
+    pdf_id: i32,
+    pipeline_id: Uuid,
+    pipeline_name: Option<String>,
+    tenant_id: Option<Uuid>,
+    tenant_name: Option<String>,
+    status: String,
+    timestamp: DateTime<Utc>,
+    pdf_name: String,
+}
+
+#[derive(Serialize)]
+struct PdfNameSearchResponse {
+    total: i64,
+    hits: Vec<PdfNameSearchHit>,
+}
+
+async fn search_pdf_names(
+    state: web::Data<AppState>,
+    query: web::Query<PdfNameSearchQuery>,
+) -> impl Responder {
+    let search = match query
+        .q
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned())
+    {
+        Some(s) => s,
+        None => {
+            return HttpResponse::Ok().json(PdfNameSearchResponse { total: 0, hits: vec![] });
+        }
+    };
+
+    let limit = query.limit.unwrap_or(12).clamp(1, 100);
+
+    let tenant_like = query
+        .tenant
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned());
+
+    let pipeline_like = query
+        .pipeline
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned());
+
+    let status_like = query
+        .status
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_owned());
+
+    let rows = match state
+        .db
+        .query(
+            "WITH filtered AS (
+                SELECT
+                    v.id,
+                    v.pdf_id,
+                    v.pipeline_id,
+                    v.status,
+                    v.timestamp,
+                    v.tenant_id,
+                    v.tenant_name,
+                    COALESCE(v.state->>'pipeline_name', v.state->'pipeline'->>'name') AS pipeline_name,
+                    jsonb_array_elements_text(
+                        CASE
+                            WHEN v.pdf_names IS NULL OR v.pdf_names = '' THEN '[]'::jsonb
+                            ELSE v.pdf_names::jsonb
+                        END
+                    ) AS pdf_name
+                FROM v_analysis_history_with_tenant v
+                WHERE ($2::uuid IS NULL OR v.tenant_id = $2)
+                  AND ($7::text IS NULL OR v.tenant_name ILIKE '%' || $7 || '%')
+                  AND ($3::uuid IS NULL OR v.pipeline_id = $3)
+                  AND (
+                        $8::text IS NULL
+                        OR COALESCE(v.state->>'pipeline_name', v.state->'pipeline'->>'name')
+                            ILIKE '%' || $8 || '%'
+                  )
+                  AND ($4::text IS NULL OR v.status = $4)
+                  AND ($5::int IS NULL OR v.pdf_id = $5)
+            )
+            SELECT
+                COUNT(*) OVER() AS total,
+                id,
+                pdf_id,
+                pipeline_id,
+                pipeline_name,
+                status,
+                timestamp,
+                tenant_id,
+                tenant_name,
+                pdf_name
+            FROM filtered
+            WHERE pdf_name ILIKE '%' || $1 || '%'
+            ORDER BY timestamp DESC
+            LIMIT $6",
+            &[
+                &search,
+                &query.tenant_id,
+                &query.pipeline_id,
+                &status_like,
+                &query.pdf_id,
+                &limit,
+                &tenant_like,
+                &pipeline_like,
+            ],
+        )
+        .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            error!(%e, "search_pdf_names: db error");
+            return HttpResponse::InternalServerError().finish();
+        }
+    };
+
+    let mut hits = Vec::with_capacity(rows.len());
+    let mut total: i64 = 0;
+
+    for row in rows {
+        total = row.get::<_, i64>(0);
+        let analysis_id: i32 = row.get(1);
+        let pdf_id: i32 = row.get(2);
+        let pipeline_id: Uuid = row.get(3);
+        let pipeline_name: Option<String> = row.get(4);
+        let status: String = row.get(5);
+        let timestamp: DateTime<Utc> = row.get(6);
+        let tenant_id: Option<Uuid> = row.get(7);
+        let tenant_name: Option<String> = row.get(8);
+        let pdf_name: String = row.get(9);
+
+        hits.push(PdfNameSearchHit {
+            analysis_id,
+            pdf_id,
+            pipeline_id,
+            pipeline_name,
+            tenant_id,
+            tenant_name,
+            status,
+            timestamp,
+            pdf_name,
+        });
+    }
+
+    HttpResponse::Ok().json(PdfNameSearchResponse { total, hits })
+}
+
 async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Responder {
     let pdf_id = path.into_inner();
     match state.db.query_opt(
@@ -843,6 +1011,7 @@ async fn main() -> std::io::Result<()> {
             .app_data(state.clone())
             .route("/classifications", web::get().to(classifications))
             .route("/analyses", web::get().to(analyses))
+            .route("/analyses/search", web::get().to(search_pdf_names))
             .route("/results/{id}", web::get().to(result))
             // WebSocket (Root)
             .route("/", web::get().to(ws_index))
