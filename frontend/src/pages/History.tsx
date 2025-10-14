@@ -19,12 +19,16 @@ import {
   ListItemText,
   Tooltip,
   LinearProgress,
+  Popper,
+  ClickAwayListener,
+  InputAdornment,
 } from '@mui/material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import PageHeader from '../components/PageHeader';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import SearchIcon from '@mui/icons-material/Search';
 import dayjs, { Dayjs } from 'dayjs';
 import { PipelineRunResult } from '../types/pipeline';
 import RunDetails from '../components/RunDetails';
@@ -217,9 +221,11 @@ export default function History() {
   const [selected, setSelected] = useState<HistoryEntry | null>(null);
   const [search, setSearch] = useState('');
   const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [dropdownOpen, setDropdownOpen] = useState(false);
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
   const [pipelineNames, setPipelineNames] = useState<Record<string, string>>({});
+  const searchAnchorRef = React.useRef<HTMLDivElement | null>(null);
 
   const [params, setParams] = useSearchParams();
   const tenant = params.get('tenant') ?? undefined;
@@ -386,12 +392,44 @@ export default function History() {
   }, [entries, search]);
 
   useEffect(() => {
-    if (search.trim().length > 0) {
-      setSuggestionsOpen(true);
-    } else {
+    if (!search.trim()) {
       setSuggestionsOpen(false);
+      setDropdownOpen(false);
     }
   }, [search]);
+
+  useEffect(() => {
+    if (suggestionsOpen) {
+      setDropdownOpen(false);
+    }
+  }, [suggestionsOpen]);
+
+  const handleOpenSuggestions = () => {
+    setSuggestionsOpen(true);
+    setDropdownOpen(false);
+  };
+
+  const handleSearchChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const value = event.target.value;
+    setSearch(value);
+    const hasQuery = value.trim().length > 0;
+    setDropdownOpen(hasQuery);
+  };
+
+  const handleSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      handleOpenSuggestions();
+    }
+  };
+
+  const handleDropdownClickAway = (event: MouseEvent | TouchEvent) => {
+    const anchor = searchAnchorRef.current;
+    if (anchor && anchor.contains(event.target as Node)) {
+      return;
+    }
+    setDropdownOpen(false);
+  };
 
   const highlightPdfName = (name: string) => {
     const q = search.trim();
@@ -533,7 +571,56 @@ export default function History() {
         <PageHeader title="History" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'History' }]} />
 
         <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 2 }}>
-          <TextField label="Suche (inkl. PDF-Name)" size="small" value={search} onChange={e => setSearch(e.target.value)} />
+          <Box ref={searchAnchorRef} sx={{ flexGrow: { xs: 1, sm: 0 } }}>
+            <TextField
+                label="Suche (inkl. PDF-Name)"
+                size="small"
+                value={search}
+                onChange={handleSearchChange}
+                onFocus={() => {
+                  if (search.trim()) setDropdownOpen(true);
+                }}
+                onKeyDown={handleSearchKeyDown}
+                InputProps={{
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton
+                          size="small"
+                          onClick={handleOpenSuggestions}
+                          edge="end"
+                          aria-label="PDF-Vorschläge öffnen"
+                      >
+                        <SearchIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                }}
+            />
+            <Popper
+                open={dropdownOpen && !!search.trim() && !suggestionsOpen}
+                anchorEl={searchAnchorRef.current}
+                placement="bottom-start"
+                modifiers={[{ name: 'offset', options: { offset: [0, 8] } }]}
+              >
+              <ClickAwayListener onClickAway={handleDropdownClickAway}>
+                <Paper sx={{ minWidth: 260 }}>
+                  <List dense disablePadding>
+                    <ListItem disablePadding>
+                      <ListItemButton
+                          onClick={handleOpenSuggestions}
+                          onMouseDown={event => event.preventDefault()}
+                      >
+                        <ListItemText
+                            primary={`Vorschläge öffnen (${pdfSuggestions.length} Treffer)`}
+                            secondary="Enter drücken oder auf die Lupe klicken"
+                        />
+                      </ListItemButton>
+                    </ListItem>
+                  </List>
+                </Paper>
+              </ClickAwayListener>
+            </Popper>
+          </Box>
           <DatePicker label="Start" value={start} onChange={d => setStart(d)} slotProps={{ textField: { size: 'small' } }} />
           <DatePicker label="Ende" value={end} onChange={d => setEnd(d)} slotProps={{ textField: { size: 'small' } }} />
           <TenantFilter value={tenant} onChange={setTenant} />
