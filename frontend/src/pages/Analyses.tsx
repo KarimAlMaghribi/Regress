@@ -520,7 +520,6 @@ export default function Analyses() {
       );
       return {
         pdf: `PDF ${e.pdfId}`,
-        dateiname: e.pdfNames?.[0] ?? '',
         pipeline: getPipelineLabel(e, pipelineNames),
         gesamtscore: run?.overall_score ?? '',
         tenant: e.tenantName ?? '',
@@ -535,15 +534,14 @@ export default function Analyses() {
 
   const renderList = (items: Entry[], finished: boolean) => {
     const emptyColSpan = finished
-        ? (1 /* PDF */ + 1 /* Datei */ + 1 /* Pipeline */ + 1 /* Score */ + finalCols.length + 1 /* Details */)
-        : (1 /* PDF */ + 1 /* Datei */ + 1 /* Pipeline */ + 1 /* Status */);
+        ? (1 /* PDF */ + 1 /* Pipeline */ + 1 /* Score */ + finalCols.length + 1 /* Details */)
+        : (1 /* PDF */ + 1 /* Pipeline */ + 1 /* Status */);
     return (
         <Paper sx={{ p: 2 }}>
           <Table size="small">
             <TableHead>
               <TableRow>
                 <TableCell>PDF</TableCell>
-                <TableCell>Datei</TableCell>
                 <TableCell>Pipeline</TableCell>
                 {!finished && <TableCell>Status</TableCell>}
                 {finished && <TableCell>Gesamtscore</TableCell>}
@@ -555,9 +553,9 @@ export default function Analyses() {
             </TableHead>
             <TableBody>
               {items.map(e => {
-                const run = normalizeRunShape(e.result);
-                const ex = run?.extracted || {};
-                return (
+                  const run = normalizeRunShape(e.result);
+                  const ex = run?.extracted || {};
+                  return (
                     <TableRow
                         key={e.id}
                         hover
@@ -565,7 +563,6 @@ export default function Analyses() {
                         sx={{ cursor: finished ? 'pointer' : 'default' }}
                     >
                       <TableCell>{`PDF ${e.pdfId}`}</TableCell>
-                      <TableCell>{e.pdfNames?.[0] ?? '—'}</TableCell>
                       <TableCell>{getPipelineLabel(e, pipelineNames)}</TableCell>
                       {!finished && (
                           <TableCell>{getStatusChip(e.status)}</TableCell>
@@ -596,7 +593,7 @@ export default function Analyses() {
                               ) : '—'}
                             </TableCell>
                         );
-                      })}
+              })}
 
                       {finished && (
                           <TableCell align="right">

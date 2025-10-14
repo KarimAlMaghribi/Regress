@@ -446,13 +446,6 @@ export default function History() {
       width: 120,
       valueGetter: p => String(p.row.pdfId ?? ''),
     },
-    // NEU: erste Datei anzeigen
-    {
-      field: 'datei',
-      headerName: 'Datei',
-      flex: 1.0,
-      valueGetter: p => p.row.pdfNames?.[0] ?? '—',
-    },
     {
       field: 'pipeline',
       headerName: 'Pipeline',
