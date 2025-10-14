@@ -26,6 +26,15 @@ export interface Attempt {
   is_final?: boolean;
 }
 
+function toPromptId(value: any): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim().length > 0) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
 export interface RunStep {
   id: number;
   step_type: StepType;
@@ -39,6 +48,10 @@ export interface RunStep {
       | "canceled";
   order_index?: number;
   definition?: { json_key?: string } | null;
+
+  // Zuordnung zum Prompt (für Weights etc.) – optional, da historische Runs es evtl. nicht enthalten
+  prompt_id?: number | null;
+  prompt_weight?: number | null;
 
   final_key?: string | null;
   final_value?: any;                 // Backwards-compat (bool bei Score/Decision)
@@ -75,6 +88,9 @@ export interface RunCore {
 
   // optional: Label-Map falls Backend sie irgendwann mitsendet (keine Pflicht)
   final_score_labels?: Record<string, TernaryLabel>;
+
+  // Optional: Prompt-Weights (Index per prompt_id)
+  prompt_weights?: Record<number, number>;
 }
 
 export interface RunDetail {
@@ -180,6 +196,10 @@ export function useRunDetails(
 
         const normalized = toRunDetail(payload);
         if (!alive) return;
+
+        await attachPromptWeights(normalized);
+        if (!alive) return;
+
         setData(normalized);
 
         // nützlich: persistieren (pdfId) für spätere Reiter
@@ -454,6 +474,7 @@ function toRunDetail(payload: any): RunDetail {
       const keySlug = slug(entry?.decision_key ?? entry?.result?.prompt_text ?? "step");
 
       if (ptype === "Extraction") {
+        const promptId = toPromptId(entry?.prompt_id);
         const res: any[] = Array.isArray(entry?.result?.results) ? entry.result.results : [];
         const bat: any[] = Array.isArray(entry?.result?.batches) ? entry.result.batches : [];
 
@@ -507,6 +528,7 @@ function toRunDetail(payload: any): RunDetail {
           status: "finalized",
           order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
+          prompt_id: promptId,
           final_key: keySlug,
           final_value,
           final_confidence,
@@ -517,6 +539,7 @@ function toRunDetail(payload: any): RunDetail {
       }
 
       if (ptype === "Score") {
+        const promptId = toPromptId(entry?.prompt_id);
         const scores: any[] = Array.isArray(entry?.result?.scores) ? entry.result.scores : [];
         const bat: any[] = Array.isArray(entry?.result?.batches) ? entry.result.batches : [];
 
@@ -624,6 +647,7 @@ function toRunDetail(payload: any): RunDetail {
           status: "finalized",
           order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
+          prompt_id: promptId,
           final_key: keySlug,
           // Backwards-Compat: final_value bleibt boolean (für ältere Karten)
           final_value: finalLabel === "yes" ? true : finalLabel === "no" ? false : undefined,
@@ -636,6 +660,7 @@ function toRunDetail(payload: any): RunDetail {
       }
 
       if (ptype === "Decision") {
+        const promptId = toPromptId(entry?.prompt_id);
         const votes: any[] = Array.isArray(entry?.result?.votes) ? entry.result.votes : [];
         const alts: any[] = Array.isArray(entry?.result?.results) ? entry.result.results : [];
         const bat: any[] = Array.isArray(entry?.result?.batches) ? entry.result.batches : [];
@@ -694,6 +719,7 @@ function toRunDetail(payload: any): RunDetail {
           status: "finalized",
           order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
+          prompt_id: promptId,
           final_key: keySlug,
           final_value: consolidated,
           final_confidence: confidence,
@@ -714,6 +740,13 @@ function toRunDetail(payload: any): RunDetail {
     );
     for (const [keySlug, items] of groupsByKey) {
       orderCounter++;
+      const promptId = (() => {
+        for (const it of items) {
+          const pid = toPromptId(it?.prompt_id);
+          if (pid != null) return pid;
+        }
+        return null;
+      })();
       const { final_value, final_confidence, attempts } = consolidateExtractionGroup(items, keySlug);
 
       // Finale Extraktion inkl. confidence
@@ -725,6 +758,7 @@ function toRunDetail(payload: any): RunDetail {
         status: "finalized",
         order_index: orderCounter - 1,
         definition: { json_key: keySlug },
+        prompt_id: promptId,
         final_key: keySlug,
         final_value,
         final_confidence,
@@ -743,6 +777,13 @@ function toRunDetail(payload: any): RunDetail {
       );
       for (const [keySlug, items] of dGroups) {
         orderCounter++;
+        const promptId = (() => {
+          for (const it of items) {
+            const pid = toPromptId(it?.prompt_id);
+            if (pid != null) return pid;
+          }
+          return null;
+        })();
         const { value, confidence, attempts } = consolidateDecisionGroup(items, keySlug);
         runCore.final_decisions![keySlug] = value;
 
@@ -752,6 +793,7 @@ function toRunDetail(payload: any): RunDetail {
           status: "finalized",
           order_index: orderCounter - 1,
           definition: { json_key: keySlug },
+          prompt_id: promptId,
           final_key: keySlug,
           final_value: value,
           final_confidence: confidence,
@@ -766,6 +808,7 @@ function toRunDetail(payload: any): RunDetail {
     const scoringArr: any[] = Array.isArray(payload?.scoring) ? payload.scoring : [];
     for (const s of scoringArr) {
       const keySlug = slug(s?.prompt_text ?? "scoring");
+      const promptId = toPromptId(s?.prompt_id);
       const scores: any[] = Array.isArray(s?.scores) ? s.scores : [];
       const attemptsRaw: Attempt[] = scores.map((x: any, i: number) => ({
         id: `${keySlug}:${i + 1}`,
@@ -796,6 +839,7 @@ function toRunDetail(payload: any): RunDetail {
         status: "finalized",
         order_index: orderCounter - 1,
         definition: { json_key: keySlug },
+        prompt_id: promptId,
         final_key: keySlug,
         final_value: consolidated,
         final_confidence: confidence,
@@ -900,6 +944,80 @@ function consolidateDecisionGroup(items: any[], keySlug: string) {
 function getHistoryBase(): string {
   const w = (window as any);
   return w.__ENV__?.HISTORY_URL || (import.meta as any)?.env?.VITE_HISTORY_URL || "/hist";
+}
+
+function getPromptApiBase(): string {
+  const w = (window as any);
+  return (
+      w.__ENV__?.PROMPT_API_URL ||
+      (import.meta as any)?.env?.VITE_PROMPT_API_URL ||
+      "http://localhost:8082"
+  );
+}
+
+async function attachPromptWeights(detail: RunDetail): Promise<void> {
+  const scoringIds = new Set<number>();
+  const decisionIds = new Set<number>();
+
+  for (const step of detail.steps ?? []) {
+    const pid = toPromptId(step?.prompt_id);
+    if (pid == null) continue;
+    if (step.step_type === "Score") scoringIds.add(pid);
+    else if (step.step_type === "Decision") decisionIds.add(pid);
+  }
+
+  if (scoringIds.size === 0 && decisionIds.size === 0) {
+    return;
+  }
+
+  const needed = new Set<number>([...scoringIds, ...decisionIds]);
+  const base = getPromptApiBase();
+
+  const fetchType = async (type: "ScoringPrompt" | "DecisionPrompt") => {
+    try {
+      const res = await fetch(`${base}/prompts?type=${type}`, {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) return [] as any[];
+      const json = await res.json();
+      return Array.isArray(json) ? json : [];
+    } catch (err) {
+      console.warn("Prompt-Weights laden fehlgeschlagen", type, err);
+      return [] as any[];
+    }
+  };
+
+  const [scoringPrompts, decisionPrompts] = await Promise.all([
+    scoringIds.size ? fetchType("ScoringPrompt") : Promise.resolve([] as any[]),
+    decisionIds.size ? fetchType("DecisionPrompt") : Promise.resolve([] as any[]),
+  ]);
+
+  const weights: Record<number, number> = {};
+
+  const absorb = (list: any[]) => {
+    for (const item of list) {
+      const pid = toPromptId(item?.id);
+      const weight = typeof item?.weight === "number" ? item.weight : Number(item?.weight);
+      if (pid == null || !Number.isFinite(weight) || !needed.has(pid)) continue;
+      weights[pid] = weight;
+    }
+  };
+
+  absorb(scoringPrompts);
+  absorb(decisionPrompts);
+
+  if (Object.keys(weights).length === 0) {
+    return;
+  }
+
+  detail.run.prompt_weights = weights;
+  detail.steps = detail.steps.map((step) => {
+    const pid = toPromptId(step?.prompt_id);
+    if (pid != null && typeof weights[pid] === "number") {
+      return { ...step, prompt_weight: weights[pid] };
+    }
+    return step;
+  });
 }
 
 function groupBy<T>(arr: T[], keyer: (v: T) => string): Map<string, T[]> {
