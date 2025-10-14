@@ -102,6 +102,22 @@ function getStatusChip(status: string | undefined) {
   );
 }
 
+function renderStatusIndicator(status: string | undefined) {
+  const chip = getStatusChip(status);
+  const normalized = (status ?? '').toLowerCase();
+  if (normalized !== 'running' && normalized !== 'pending') return chip;
+
+  return (
+      <Stack spacing={0.5} alignItems="flex-start" sx={{ minWidth: 120 }}>
+        {chip}
+        <LinearProgress
+            variant="indeterminate"
+            sx={{ width: '100%', maxWidth: 160, height: 4, borderRadius: 999 }}
+        />
+      </Stack>
+  );
+}
+
 /* -------- Backend-Auflösung (run_id & Konsolidat) -------- */
 
 async function resolveRunIdIfMissing(normalized: any, entry: Entry): Promise<string | undefined> {
@@ -565,7 +581,7 @@ export default function Analyses() {
                       <TableCell>{`PDF ${e.pdfId}`}</TableCell>
                       <TableCell>{getPipelineLabel(e, pipelineNames)}</TableCell>
                       {!finished && (
-                          <TableCell>{getStatusChip(e.status)}</TableCell>
+                          <TableCell>{renderStatusIndicator(e.status)}</TableCell>
                       )}
 
                       {finished && (
