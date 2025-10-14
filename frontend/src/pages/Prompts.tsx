@@ -203,9 +203,9 @@ export default function Prompts() {
                     </Typography>
                     <Stack direction="row" spacing={1} alignItems="center">
                       <Slider
-                          min={0}
-                          max={5}
-                          step={0.1}
+                          min={1}
+                          max={10}
+                          step={1}
                           value={newWeight}
                           onChange={(_, v) => setNewWeight(v as number)}
                           sx={{ flex: 1 }}
@@ -215,7 +215,7 @@ export default function Prompts() {
                           size="small"
                           value={newWeight}
                           onChange={(e) => setNewWeight(parseFloat(e.target.value))}
-                          inputProps={{ step: 1, min: 0, max: 10 }}
+                          inputProps={{ step: 1, min: 1, max: 10 }}
                           sx={{ width: 90 }}
                       />
                     </Stack>
@@ -287,9 +287,9 @@ export default function Prompts() {
                             </Typography>
                             <Stack direction="row" spacing={1} alignItems="center">
                               <Slider
-                                  min={0}
-                                  max={5}
-                                  step={0.1}
+                                  min={1}
+                                  max={10}
+                                  step={1}
                                   value={p.weight}
                                   onChange={(_, v) =>
                                       setPrompts((ps) => ps.map((it) => (it.id === p.id ? { ...it, weight: v as number } : it)))
@@ -305,7 +305,7 @@ export default function Prompts() {
                                           ps.map((it) => (it.id === p.id ? { ...it, weight: parseFloat(e.target.value) } : it))
                                       )
                                   }
-                                  inputProps={{ step: 1, min: 0, max: 10 }}
+                                  inputProps={{ step: 1, min: 1, max: 10 }}
                                   sx={{ width: 90 }}
                               />
                             </Stack>

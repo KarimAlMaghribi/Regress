@@ -220,22 +220,6 @@ async fn ensure_schema_db(db: &Db) {
     info!("database schema ensured");
 }
 
-fn row_to_entry(r: Row) -> HistoryEntry {
-    HistoryEntry {
-        id: r.get(0),
-        pdf_id: r.get(1),
-        pipeline_id: r.get(2),
-        prompt: None,
-        result: r.get(3),
-        pdf_url: r.get(4),
-        timestamp: r.get(5),
-        status: r.get(6),
-        score: r.get(7),
-        result_label: r.get(8),
-        tenant_name: None,
-    }
-}
-
 // Mapping für Selektierungen aus der View (enthält zusätzlich tenant_name)
 fn row_to_entry_with_tenant(r: Row) -> HistoryEntry {
     HistoryEntry {
@@ -255,11 +239,11 @@ fn row_to_entry_with_tenant(r: Row) -> HistoryEntry {
 
 async fn latest_db(db: &Db, limit: i64) -> Vec<HistoryEntry> {
     match db.query(
-        "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
-         FROM analysis_history ORDER BY timestamp DESC LIMIT $1",
+        "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label, tenant_name \
+         FROM v_analysis_history_with_tenant ORDER BY timestamp DESC LIMIT $1",
         &[&limit],
     ).await {
-        Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
+        Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
         Err(e) => {
             error!(%e, "latest_db: query failed");
             vec![]
@@ -269,11 +253,11 @@ async fn latest_db(db: &Db, limit: i64) -> Vec<HistoryEntry> {
 
 async fn all_entries_db(db: &Db) -> Vec<HistoryEntry> {
     match db.query(
-        "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
-         FROM analysis_history ORDER BY timestamp DESC",
+        "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label, tenant_name \
+         FROM v_analysis_history_with_tenant ORDER BY timestamp DESC",
         &[],
     ).await {
-        Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
+        Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
         Err(e) => {
             error!(%e, "all_entries_db: query failed");
             vec![]
@@ -286,13 +270,13 @@ async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntr
         match db.query(
             "SELECT * FROM ( \
                SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, \
-                      pdf_url, timestamp, status, score, label AS result_label \
-               FROM analysis_history WHERE status = $1 \
+                      pdf_url, timestamp, status, score, label AS result_label, tenant_name \
+               FROM v_analysis_history_with_tenant WHERE status = $1 \
                ORDER BY pdf_id, timestamp DESC \
              ) AS t ORDER BY timestamp DESC",
             &[&s],
         ).await {
-            Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
+            Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
             Err(e) => {
                 error!(%e, "latest_by_status_db(status): query failed");
                 vec![]
@@ -302,13 +286,13 @@ async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntr
         match db.query(
             "SELECT * FROM ( \
                SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, \
-                      pdf_url, timestamp, status, score, label AS result_label \
-               FROM analysis_history \
+                      pdf_url, timestamp, status, score, label AS result_label, tenant_name \
+               FROM v_analysis_history_with_tenant \
                ORDER BY pdf_id, timestamp DESC \
              ) AS t ORDER BY timestamp DESC",
             &[],
         ).await {
-            Ok(rows) => rows.into_iter().map(row_to_entry).collect(),
+            Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
             Err(e) => {
                 error!(%e, "latest_by_status_db(all): query failed");
                 vec![]
@@ -407,6 +391,24 @@ async fn latest_by_status_with_tenant_db(
                     vec![]
                 }
             }
+        }
+    }
+}
+
+async fn fetch_entry_by_id(db: &Db, id: i32) -> Option<HistoryEntry> {
+    match db
+        .query_opt(
+            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label, tenant_name \
+             FROM v_analysis_history_with_tenant WHERE id = $1",
+            &[&id],
+        )
+        .await
+    {
+        Ok(Some(row)) => Some(row_to_entry_with_tenant(row)),
+        Ok(None) => None,
+        Err(e) => {
+            error!(%e, id, "fetch_entry_by_id: query failed");
+            None
         }
     }
 }
@@ -516,11 +518,11 @@ async fn analyses(
     // NEU: run_id-Suche (liefert Liste mit max. 1 Eintrag, kompatibel zum Frontend)
     if let Some(rid) = query.get("run_id") {
         match state.db.query_opt(
-            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label \
-             FROM analysis_history WHERE state->>'run_id' = $1 ORDER BY timestamp DESC LIMIT 1",
+            "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label, tenant_name \
+             FROM v_analysis_history_with_tenant WHERE state->>'run_id' = $1 ORDER BY timestamp DESC LIMIT 1",
             &[rid],
         ).await {
-            Ok(Some(row)) => return HttpResponse::Ok().json(vec![row_to_entry(row)]),
+            Ok(Some(row)) => return HttpResponse::Ok().json(vec![row_to_entry_with_tenant(row)]),
             Ok(None) => return HttpResponse::Ok().json(Vec::<HistoryEntry>::new()),
             Err(e) => {
                 error!(%e, "analyses(run_id): db error");
@@ -732,21 +734,26 @@ async fn start_kafka(
                                     let pdf_url = format!("{}/pdf/{}", pdf_base, data.pdf_id);
 
                                     let id = mark_pending_db(&db, data.pdf_id, data.pipeline_id, &pdf_url, ts).await;
-
-                                    let entry = HistoryEntry {
-                                        id,
-                                        pdf_id: data.pdf_id,
-                                        pipeline_id: data.pipeline_id,
-                                        prompt: None,
-                                        result: None,
-                                        pdf_url,
-                                        timestamp: ts,
-                                        status: "running".into(),
-                                        score: None,
-                                        result_label: None,
-                                        tenant_name: None,
-                                    };
-                                    let _ = tx.send(entry);
+                                    if id > 0 {
+                                        if let Some(entry) = fetch_entry_by_id(&db, id).await {
+                                            let _ = tx.send(entry);
+                                        } else {
+                                            let fallback = HistoryEntry {
+                                                id,
+                                                pdf_id: data.pdf_id,
+                                                pipeline_id: data.pipeline_id,
+                                                prompt: None,
+                                                result: None,
+                                                pdf_url,
+                                                timestamp: ts,
+                                                status: "running".into(),
+                                                score: None,
+                                                result_label: None,
+                                                tenant_name: None,
+                                            };
+                                            let _ = tx.send(fallback);
+                                        }
+                                    }
                                 }
                                 Err(e) => error!(%e, "failed to parse pdf-merged payload"),
                             }
@@ -772,8 +779,15 @@ async fn start_kafka(
 
                                     let id = insert_result_db(&db, &entry).await;
                                     entry.id = id;
-
-                                    let _ = tx.send(entry);
+                                    if id > 0 {
+                                        if let Some(updated) = fetch_entry_by_id(&db, id).await {
+                                            let _ = tx.send(updated);
+                                        } else {
+                                            let _ = tx.send(entry);
+                                        }
+                                    } else {
+                                        let _ = tx.send(entry);
+                                    }
                                 }
                                 Err(e) => error!(%e, "failed to parse pipeline-result payload"),
                             }
