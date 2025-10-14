@@ -653,16 +653,37 @@ fn extract_choice_content_from_raw_json(raw: &JsonValue) -> Option<String> {
         .and_then(|v| v.as_array())
     {
         let mut buf = String::new();
+        let mut json_candidate: Option<String> = None;
         for part in arr {
             if let Some(txt) = part.get("text").and_then(|x| x.as_str()) {
                 buf.push_str(txt);
-            } else if let Some(s) = part.as_str() {
+                continue;
+            }
+
+            if let Some(json_val) = part.get("json") {
+                if let Ok(json_txt) = serde_json::to_string(json_val) {
+                    json_candidate.get_or_insert(json_txt);
+                }
+                continue;
+            }
+
+            if let Some(s) = part.as_str() {
                 buf.push_str(s);
-            } else if let Some(obj) = part.as_object() {
+                continue;
+            }
+
+            if let Some(obj) = part.as_object() {
                 if let Some(JsonValue::String(t)) = obj.get("text") {
                     buf.push_str(t);
+                } else if let Some(json_val) = obj.get("json") {
+                    if let Ok(json_txt) = serde_json::to_string(json_val) {
+                        json_candidate.get_or_insert(json_txt);
+                    }
                 }
             }
+        }
+        if let Some(json) = json_candidate {
+            return Some(json);
         }
         if !buf.is_empty() {
             return Some(buf);
