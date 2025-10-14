@@ -48,6 +48,7 @@ export interface RunStep {
       | "canceled";
   order_index?: number;
   definition?: { json_key?: string } | null;
+  prompt_text?: string | null;
 
   // Zuordnung zum Prompt (für Weights etc.) – optional, da historische Runs es evtl. nicht enthalten
   prompt_id?: number | null;
@@ -528,6 +529,7 @@ function toRunDetail(payload: any): RunDetail {
           status: "finalized",
           order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
+          prompt_text: entry?.result?.prompt_text ?? entry?.prompt_text ?? null,
           prompt_id: promptId,
           final_key: keySlug,
           final_value,
@@ -647,6 +649,7 @@ function toRunDetail(payload: any): RunDetail {
           status: "finalized",
           order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
+          prompt_text: entry?.result?.prompt_text ?? entry?.prompt_text ?? null,
           prompt_id: promptId,
           final_key: keySlug,
           // Backwards-Compat: final_value bleibt boolean (für ältere Karten)
@@ -719,6 +722,7 @@ function toRunDetail(payload: any): RunDetail {
           status: "finalized",
           order_index: entry?.seq_no ?? orderCounter - 1,
           definition: { json_key: keySlug },
+          prompt_text: entry?.result?.prompt_text ?? entry?.prompt_text ?? null,
           prompt_id: promptId,
           final_key: keySlug,
           final_value: consolidated,
@@ -747,6 +751,13 @@ function toRunDetail(payload: any): RunDetail {
         }
         return null;
       })();
+      const promptText = (() => {
+        for (const it of items) {
+          const text = typeof it?.prompt_text === "string" ? it.prompt_text : undefined;
+          if (text && text.trim()) return text;
+        }
+        return null;
+      })();
       const { final_value, final_confidence, attempts } = consolidateExtractionGroup(items, keySlug);
 
       // Finale Extraktion inkl. confidence
@@ -758,6 +769,7 @@ function toRunDetail(payload: any): RunDetail {
         status: "finalized",
         order_index: orderCounter - 1,
         definition: { json_key: keySlug },
+        prompt_text: promptText,
         prompt_id: promptId,
         final_key: keySlug,
         final_value,
@@ -784,6 +796,13 @@ function toRunDetail(payload: any): RunDetail {
           }
           return null;
         })();
+        const promptText = (() => {
+          for (const it of items) {
+            const text = typeof it?.prompt_text === "string" ? it.prompt_text : undefined;
+            if (text && text.trim()) return text;
+          }
+          return null;
+        })();
         const { value, confidence, attempts } = consolidateDecisionGroup(items, keySlug);
         runCore.final_decisions![keySlug] = value;
 
@@ -793,6 +812,7 @@ function toRunDetail(payload: any): RunDetail {
           status: "finalized",
           order_index: orderCounter - 1,
           definition: { json_key: keySlug },
+          prompt_text: promptText,
           prompt_id: promptId,
           final_key: keySlug,
           final_value: value,
@@ -839,6 +859,7 @@ function toRunDetail(payload: any): RunDetail {
         status: "finalized",
         order_index: orderCounter - 1,
         definition: { json_key: keySlug },
+        prompt_text: typeof s?.prompt_text === "string" ? s.prompt_text : null,
         prompt_id: promptId,
         final_key: keySlug,
         final_value: consolidated,
