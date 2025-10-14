@@ -161,20 +161,35 @@ function voteChip(v?: TernaryLabel) {
   return <Chip size="small" variant="outlined" label="—" />;
 }
 
-/* Prompts hübsch anzeigen: Unterstriche entfernen, ellipsieren, Hover = Volltext */
+/* Prompts hübsch anzeigen: Unterstriche entfernen, Texte vollständig anzeigen */
 function prettyPromptName(name?: string | null) {
   if (typeof name !== "string" || name.trim() === "") return "—";
   return name.replace(/_/g, " ").trim();
 }
 
-function PromptName({name, maxWidth = 260}: {name?: string | null; maxWidth?: number}) {
-  const full = prettyPromptName(name);
+function PromptName({
+  name,
+  displayName,
+  maxWidth,
+  multiline = true,
+}: {
+  name?: string | null;
+  displayName?: string | null;
+  maxWidth?: number;
+  multiline?: boolean;
+}) {
+  const rawDisplay = typeof displayName === "string" && displayName.trim() !== "" ? displayName : undefined;
+  const full = rawDisplay ?? prettyPromptName(name);
+  const style: React.CSSProperties = {
+    whiteSpace: multiline ? "normal" : "nowrap",
+    overflowWrap: multiline ? "anywhere" : undefined,
+    display: "inline-block",
+  };
+  if (maxWidth != null) style.maxWidth = maxWidth;
   return (
-      <Tooltip title={full}>
-        <Box sx={{maxWidth, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis"}}>
-          {full}
-        </Box>
-      </Tooltip>
+      <Box sx={style}>
+        {full}
+      </Box>
   );
 }
 
@@ -345,7 +360,10 @@ function EvidenceModal({
                         {byPage.extraction.map((r, i) => (
                             <TableRow key={i} hover>
                               <TableCell>
-                                <PromptName name={r.step.final_key ?? r.step.definition?.json_key ?? "—"} />
+                                <PromptName
+                                    name={r.step.final_key ?? r.step.definition?.json_key ?? "—"}
+                                    displayName={r.step.prompt_text}
+                                />
                               </TableCell>
                               <TableCell>{formatValue(r.attempt.candidate_value)}</TableCell>
                               <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
@@ -376,7 +394,10 @@ function EvidenceModal({
                           return (
                               <TableRow key={i} hover>
                                 <TableCell>
-                                  <PromptName name={r.step.final_key ?? r.step.definition?.json_key ?? "—"} />
+                                  <PromptName
+                                      name={r.step.final_key ?? r.step.definition?.json_key ?? "—"}
+                                      displayName={r.step.prompt_text}
+                                  />
                                 </TableCell>
                                 <TableCell>{chip}</TableCell>
                                 <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
@@ -404,7 +425,10 @@ function EvidenceModal({
                           return (
                               <TableRow key={i} hover>
                                 <TableCell>
-                                  <PromptName name={r.step.final_key ?? r.step.definition?.json_key ?? "—"} />
+                                  <PromptName
+                                      name={r.step.final_key ?? r.step.definition?.json_key ?? "—"}
+                                      displayName={r.step.prompt_text}
+                                  />
                                 </TableCell>
                                 <TableCell>{v ? "✅ Ja" : "❌ Nein"}</TableCell>
                                 <TableCell>{r.attempt.is_final ? "⭐" : "—"}</TableCell>
@@ -666,6 +690,16 @@ function ExtractionCard({
 }) {
   const map = detail.run.final_extraction ?? {};
   const entries = useMemo(() => Object.entries(map), [map]);
+  const labelByKey = useMemo(() => {
+    const labels = new Map<string, string>();
+    (detail.steps ?? []).forEach(s => {
+      const label = typeof s.prompt_text === "string" && s.prompt_text.trim() !== "" ? s.prompt_text : undefined;
+      if (!label) return;
+      if (s.final_key) labels.set(s.final_key, label);
+      if (s.definition?.json_key) labels.set(s.definition.json_key, label);
+    });
+    return labels;
+  }, [detail.steps]);
 
   const confByKey = useMemo(() => {
     const m = new Map<string, number>();
@@ -695,7 +729,7 @@ function ExtractionCard({
               {entries.map(([k, v]) => (
                   <TableRow key={k}>
                     <TableCell>
-                      <PromptName name={k}/>
+                      <PromptName name={k} displayName={labelByKey.get(k)}/>
                     </TableCell>
                     <TableCell>{formatValue(v)}</TableCell>
                     <TableCell align="right"><ConfidenceBar value={confByKey.get(k)}/></TableCell>
@@ -732,7 +766,7 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                     <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
                       <RuleIcon sx={{color: (lbl === "yes" ? "success.main" : lbl === "no" ? "error.main" : "text.secondary")}} fontSize="small"/>
                       <Typography variant="subtitle2" sx={{display: "flex", alignItems: "center", gap: .5}}>
-                        <PromptName name={s.final_key ?? `Regel ${idx + 1}`} />
+                        <PromptName name={s.final_key ?? `Regel ${idx + 1}`} displayName={s.prompt_text} />
                         · Ergebnis:&nbsp;
                         {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
                       </Typography>
@@ -752,7 +786,7 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                       <TableHead>
                         <TableRow>
                           <TableCell width={56}>#</TableCell>
-                          <TableCell>Erklärung</TableCell>
+                          <TableCell sx={{ width: "60%", minWidth: 420 }}>Erklärung</TableCell>
                           <TableCell width={120}>Stimme</TableCell>
                           <TableCell width={160}>Evidenz</TableCell>
                           <TableCell width={90}>Final</TableCell>
@@ -783,8 +817,8 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                           return (
                               <TableRow key={a.id ?? i} hover>
                                 <TableCell>{attemptNo}</TableCell>
-                                <TableCell>
-                                  <PromptName name={a.candidate_key ?? "—"} />
+                                <TableCell sx={{ width: "60%", minWidth: 420 }}>
+                                  <PromptName name={a.candidate_key ?? "—"} multiline/>
                                 </TableCell>
                                 <TableCell>
                                   {vote ? chip : (typeof vb === "boolean" ? (vb ? "✅ Ja" : "❌ Nein") : "—")}
@@ -841,7 +875,10 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                     {extractionSteps.map((s, idx) => (
                         <Box key={s.id}>
                           <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                            <PromptName name={s.final_key ?? s.definition?.json_key ?? `Extraktion ${idx + 1}`} />
+                            <PromptName
+                                name={s.final_key ?? s.definition?.json_key ?? `Extraktion ${idx + 1}`}
+                                displayName={s.prompt_text}
+                            />
                             <Typography component="span" variant="body2">
                               · Ergebnis: {formatValue(s.final_value)}
                             </Typography>
@@ -902,7 +939,7 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                       return (
                           <Box key={s.id}>
                             <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                              <PromptName name={s.final_key ?? `Regel ${idx + 1}`} />
+                              <PromptName name={s.final_key ?? `Regel ${idx + 1}`} displayName={s.prompt_text} />
                               <Typography component="span" variant="body2" sx={{display: "flex", alignItems: "center", gap: .5}}>
                                 · Ergebnis: {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
                               </Typography>
@@ -913,7 +950,7 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                               <TableHead>
                                 <TableRow>
                                   <TableCell width={56}>#</TableCell>
-                                  <TableCell>Erklärung</TableCell>
+                                  <TableCell sx={{ width: "60%", minWidth: 420 }}>Erklärung</TableCell>
                                   <TableCell width={120}>Stimme</TableCell>
                                   <TableCell width={160}>Evidenz</TableCell>
                                   <TableCell width={90}>Final</TableCell>
@@ -929,8 +966,8 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                                   return (
                                       <TableRow key={a.id ?? i} hover>
                                         <TableCell>{meta.attemptNo}</TableCell>
-                                        <TableCell>
-                                          <PromptName name={a.candidate_key ?? "—"} />
+                                        <TableCell sx={{ width: "60%", minWidth: 420 }}>
+                                          <PromptName name={a.candidate_key ?? "—"} multiline/>
                                         </TableCell>
                                         <TableCell>
                                           {vote ? chip : (typeof vb === "boolean" ? (vb ? "✅ Ja" : "❌ Nein") : "—")}
@@ -967,7 +1004,10 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                     {decisionSteps.map((s, idx) => (
                         <Box key={s.id}>
                           <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                            <PromptName name={s.final_key ?? `Entscheidung ${idx + 1}`} />
+                            <PromptName
+                                name={s.final_key ?? `Entscheidung ${idx + 1}`}
+                                displayName={s.prompt_text}
+                            />
                             <Typography component="span" variant="body2">
                               · Ergebnis: {typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : formatValue(s.final_value)}
                             </Typography>
@@ -1031,7 +1071,7 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
                   <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
                     <AltRouteIcon sx={{color: (s.final_value ? "success.main" : "error.main")}} fontSize="small"/>
                     <Typography variant="subtitle2" sx={{display: "flex", alignItems: "center", gap: .5}}>
-                      <PromptName name={s.final_key ?? `Entscheidung ${idx + 1}`} /> · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
+                      <PromptName name={s.final_key ?? `Entscheidung ${idx + 1}`} displayName={s.prompt_text} /> · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
                     </Typography>
                     <Box sx={{flex: 1}}/>
                     <ConfidenceBar value={s.final_confidence}/>
@@ -1123,7 +1163,7 @@ function StepsOverview({ detail }: { detail: RunDetail }) {
             <TableBody>
               {steps.map((s, idx) => {
                 const typeLabel = tMap[s.step_type] ?? s.step_type;
-                const name = s.definition?.json_key || s.final_key || `${s.step_type} ${idx + 1}`;
+                const name = s.prompt_text || s.definition?.json_key || s.final_key || `${s.step_type} ${idx + 1}`;
 
                 let value: React.ReactNode = "—";
                 if (s.step_type === "Score") {
@@ -1147,7 +1187,7 @@ function StepsOverview({ detail }: { detail: RunDetail }) {
                         </Stack>
                       </TableCell>
                       <TableCell>
-                        <PromptName name={name} maxWidth={420}/>
+                        <PromptName name={name} displayName={s.prompt_text}/>
                       </TableCell>
                       <TableCell>
                         <Typography variant="body2">{value}</Typography>
