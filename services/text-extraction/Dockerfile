@@ -17,6 +17,7 @@ FROM ${BASE_RUNTIME}
 # pdftotext wird hier benötigt
 RUN apt-get update && apt-get install -y --no-install-recommends \
       libssl3 ca-certificates poppler-utils \
+      tesseract-ocr tesseract-ocr-deu tesseract-ocr-eng \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /usr/local/bin
 COPY --from=builder /src/target/release/text-extraction .
