@@ -18,6 +18,7 @@ import {
   ListItemButton,
   ListItemText,
   Tooltip,
+  LinearProgress,
 } from '@mui/material';
 import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
@@ -433,6 +434,38 @@ export default function History() {
     return '—';
   };
 
+  const renderStatus = (status?: string) => {
+    const normalized = (status ?? '').toLowerCase();
+    const color: 'default' | 'success' | 'warning' | 'info' = normalized === 'completed'
+        ? 'success'
+        : normalized === 'running'
+            ? 'warning'
+            : normalized === 'pending'
+                ? 'info'
+                : 'default';
+    const label = status ? status.charAt(0).toUpperCase() + status.slice(1) : '—';
+    const chip = (
+        <Chip
+            size="small"
+            label={label}
+            color={color}
+            variant="outlined"
+        />
+    );
+
+    if (normalized !== 'running' && normalized !== 'pending') return chip;
+
+    return (
+        <Stack spacing={0.5} alignItems="flex-start" sx={{ width: '100%', maxWidth: 180 }}>
+          {chip}
+          <LinearProgress
+              variant="indeterminate"
+              sx={{ width: '100%', height: 4, borderRadius: 999 }}
+          />
+        </Stack>
+    );
+  };
+
   const cols: GridColDef<HistoryEntry>[] = [
     {
       field: 'timestamp',
@@ -462,20 +495,7 @@ export default function History() {
       field: 'status',
       headerName: 'Status',
       width: 120,
-      renderCell: params => (
-          <Chip
-              size="small"
-              label={params.row.status || ''}
-              color={params.row.status === 'completed'
-                  ? 'success'
-                  : params.row.status === 'running'
-                      ? 'warning'
-                      : params.row.status === 'pending'
-                          ? 'info'
-                          : 'default'}
-              variant="outlined"
-          />
-      ),
+      renderCell: params => renderStatus(params.row.status),
     },
     {
       field: 'overall',
