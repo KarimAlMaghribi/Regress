@@ -26,6 +26,11 @@ export interface Attempt {
   is_final?: boolean;
 }
 
+function isScoreParseErrorMessage(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  return value.toLowerCase().includes("score failed: parse error: invalid json");
+}
+
 function toPromptId(value: any): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim().length > 0) {
@@ -585,7 +590,7 @@ function toRunDetail(payload: any): RunDetail {
         });
 
         // Keine Filterung mehr auf reine Booleans → Tri‑State bleibt sichtbar
-        const attempts = attemptsRaw;
+        const attempts = attemptsRaw.filter((a) => !isScoreParseErrorMessage(a.candidate_key));
 
         // Konsolidiert: bevorzugt Tri‑State vom Modell; sonst Boolean-Mehrheit wie bisher
         const cons = entry?.result?.consolidated ?? {};
@@ -839,7 +844,9 @@ function toRunDetail(payload: any): RunDetail {
         source: "llm",
         is_final: false,
       }));
-      const attempts = attemptsRaw.filter((a) => typeof a.candidate_value === "boolean");
+      const attempts = attemptsRaw
+          .filter((a) => typeof a.candidate_value === "boolean")
+          .filter((a) => !isScoreParseErrorMessage(a.candidate_key));
 
       let t = 0,
           f = 0;
