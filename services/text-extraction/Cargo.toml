@@ -25,6 +25,10 @@ rdkafka.workspace = true
 anyhow = { workspace = true }
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
+html-escape = "0.2"
+once_cell = "1.19"
+quick-xml = "0.31"
+regex = "1"
 
 [dev-dependencies]
 base64 = "0.21"
