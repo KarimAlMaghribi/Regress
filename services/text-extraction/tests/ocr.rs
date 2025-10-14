@@ -1,5 +1,5 @@
 use base64;
-use text_extraction::extract_text;
+use text_extraction::{extract_text, extract_text_pages};
 
 #[tokio::test]
 async fn pdf_to_text() {
@@ -9,4 +9,32 @@ async fn pdf_to_text() {
     let txt = extract_text(path).await.unwrap();
     assert!(txt.len() > 0);
     let _ = tokio::fs::remove_file(path).await;
+}
+
+#[tokio::test]
+async fn ocr_image_pdf() {
+    std::env::set_var("OCR_ENABLED", "1");
+    std::env::set_var("LAYOUT_ENABLED", "0");
+    std::env::set_var("MAX_PARALLEL_OCR", "1");
+
+    let path = "/tmp/ocr_image.pdf";
+    let pdf_data = base64::decode(include_str!("ocr_sample.b64")).unwrap();
+    tokio::fs::write(path, pdf_data).await.unwrap();
+
+    let pages = extract_text_pages(path).await.unwrap();
+    assert!(!pages.is_empty());
+    let page = &pages[0];
+    assert!(page.ocr_used, "expected ocr fallback to be used");
+    let char_count = page
+        .text
+        .to_lowercase()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .count();
+    assert!(char_count > 0);
+
+    let _ = tokio::fs::remove_file(path).await;
+    std::env::remove_var("OCR_ENABLED");
+    std::env::remove_var("LAYOUT_ENABLED");
+    std::env::remove_var("MAX_PARALLEL_OCR");
 }

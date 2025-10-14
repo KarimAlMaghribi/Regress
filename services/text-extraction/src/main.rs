@@ -13,11 +13,11 @@ use shared::{
     kafka,
 };
 use std::{str::FromStr, time::Duration};
-use tokio_postgres::NoTls;
+use tokio_postgres::{types::Json, NoTls};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use text_extraction::{extract_text_pages};
+use text_extraction::extract_text_pages;
 
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
@@ -277,7 +277,7 @@ async fn main() -> std::io::Result<()> {
                                     };
                                     let concat = pages
                                         .iter()
-                                        .map(|(_, t)| t.as_str())
+                                        .map(|p| p.text.as_str())
                                         .collect::<Vec<_>>()
                                         .join("\n")
                                         .to_lowercase();
@@ -304,10 +304,18 @@ async fn main() -> std::io::Result<()> {
                                         continue;
                                     }
                                     let ins = match tx
-                                        .prepare("INSERT INTO pdf_texts (merged_pdf_id, page_no, text)
-                                                  VALUES ($1,$2,$3)
-                                                  ON CONFLICT (merged_pdf_id, page_no)
-                                                  DO UPDATE SET text=EXCLUDED.text")
+                                        .prepare(
+                                            "INSERT INTO pdf_texts (
+                                                merged_pdf_id, page_no, text, ocr_used, char_count, lang, has_bbox, layout_json
+                                             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                                             ON CONFLICT (merged_pdf_id, page_no)
+                                             DO UPDATE SET text=EXCLUDED.text,
+                                                           ocr_used=EXCLUDED.ocr_used,
+                                                           char_count=EXCLUDED.char_count,
+                                                           lang=EXCLUDED.lang,
+                                                           has_bbox=EXCLUDED.has_bbox,
+                                                           layout_json=EXCLUDED.layout_json"
+                                        )
                                         .await
                                     {
                                         Ok(s) => s,
@@ -319,15 +327,46 @@ async fn main() -> std::io::Result<()> {
                                         }
                                     };
                                     let mut ok = true;
-                                    for (page_no, txt) in pages {
+                                    for page in pages {
+                                        let normalized_text = page.text.to_lowercase();
+                                        let char_count: i32 = normalized_text
+                                            .chars()
+                                            .filter(|c| !c.is_whitespace())
+                                            .count() as i32;
+                                        let lang: Option<&str> = None;
+                                        let has_bbox = page
+                                            .layout
+                                            .as_ref()
+                                            .map(|layout| !layout.words.is_empty());
+                                        let layout_value: Option<Json<serde_json::Value>> = page
+                                            .layout
+                                            .as_ref()
+                                            .map(|layout| serde_json::to_value(layout).map(Json))
+                                            .transpose()
+                                            .map_err(|e| {
+                                                warn!(page = page.page_no, %e, "serialize layout failed");
+                                                e
+                                            })
+                                            .ok()
+                                            .flatten();
+
                                         if let Err(e) = tx
                                             .execute(
                                                 &ins,
-                                                &[&evt.pdf_id, &page_no, &txt.to_lowercase()],
+                                                &[
+                                                    &evt.pdf_id,
+                                                    &page.page_no,
+                                                    &normalized_text,
+                                                    &page.ocr_used,
+                                                    &char_count,
+                                                    &lang,
+                                                    &has_bbox,
+                                                    &layout_value,
+                                                ],
                                             )
                                             .await
                                         {
-                                            error!(%e, page_no, "insert page failed");
+                                            error!(%e, page_no = page.page_no, "insert page failed");
                                             ok = false;
                                             break;
                                         }
