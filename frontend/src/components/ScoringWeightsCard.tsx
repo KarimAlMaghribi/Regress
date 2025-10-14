@@ -45,6 +45,19 @@ function resolveLabel(detail: RunDetail, step: RunStep, slug: string): TernaryLa
   return undefined;
 }
 
+function resolveWeight(detail: RunDetail, step: RunStep): number {
+  const direct = typeof step.prompt_weight === "number" ? step.prompt_weight : undefined;
+  if (typeof direct === "number" && Number.isFinite(direct) && direct > 0) return direct;
+
+  const pid = typeof step.prompt_id === "number" ? step.prompt_id : undefined;
+  if (pid != null) {
+    const fromRun = detail.run.prompt_weights?.[pid];
+    if (typeof fromRun === "number" && Number.isFinite(fromRun) && fromRun > 0) return fromRun;
+  }
+
+  return 1;
+}
+
 // === Berechnung gewichteter Score
 export function computeWeightedScore(detail: RunDetail): number {
   const scoringSteps = detail.steps.filter((s) => s.step_type === "Score");
@@ -58,8 +71,7 @@ export function computeWeightedScore(detail: RunDetail): number {
   for (const step of scoringSteps) {
     const slug = step.final_key || step.definition?.json_key;
     if (!slug) continue;
-    const weightRaw = detail.run.final_scores?.[slug];
-    const weight = typeof weightRaw === "number" && Number.isFinite(weightRaw) ? weightRaw : 0;
+    const weight = resolveWeight(detail, step);
     if (weight <= 0) continue;
     total += weight;
     const label = resolveLabel(detail, step, slug);
@@ -97,14 +109,11 @@ function PromptLabel({label}: {label?: string | null}) {
 }
 
 export function ScoringWeightsCard({ detail }: { detail: RunDetail }) {
-  const weights = detail.run.final_scores ?? {};
-
   const rows = detail.steps
   .filter((s) => s.step_type === "Score")
   .map((s) => {
     const slug = s.final_key || s.definition?.json_key;
-    const weightRaw = slug ? weights[slug] : undefined;
-    const weight = typeof weightRaw === "number" && Number.isFinite(weightRaw) ? weightRaw : 0;
+    const weight = resolveWeight(detail, s);
     const label = slug ? resolveLabel(detail, s, slug) : undefined;
     const positive = isPositiveLabel(label);
     const conf = s.final_confidence ?? null;
