@@ -7,8 +7,25 @@ import {
   JobsResponse,
 } from '../types/ingest';
 
-const BASE_URL = (import.meta.env.VITE_INGEST_API_BASE as string | undefined) || 'http://localhost:8080';
-const ADMIN_TOKEN = import.meta.env.VITE_INGEST_ADMIN_TOKEN as string | undefined;
+type RuntimeEnv = {
+  INGEST_API_URL?: string;
+  INGEST_ADMIN_TOKEN?: string;
+  INGEST_POLL_MS?: string;
+};
+
+const runtimeEnv: RuntimeEnv =
+  (typeof window !== 'undefined' &&
+    ((window as unknown as { __ENV__?: RuntimeEnv }).__ENV__ ?? {})) ||
+  {};
+
+const BASE_URL =
+  (import.meta.env.VITE_INGEST_API_BASE as string | undefined) ||
+  runtimeEnv.INGEST_API_URL ||
+  '/ingest';
+
+const ADMIN_TOKEN =
+  (import.meta.env.VITE_INGEST_ADMIN_TOKEN as string | undefined) ||
+  runtimeEnv.INGEST_ADMIN_TOKEN;
 
 const client = axios.create({
   baseURL: BASE_URL,
@@ -27,7 +44,11 @@ client.interceptors.request.use((config) => {
   return config;
 });
 
-const pollRaw = Number(import.meta.env.VITE_INGEST_POLL_MS ?? '3000');
+const pollRaw = Number(
+  runtimeEnv.INGEST_POLL_MS ??
+    (import.meta.env.VITE_INGEST_POLL_MS as string | undefined) ??
+    '3000',
+);
 export const INGEST_POLL_INTERVAL = Number.isFinite(pollRaw) && pollRaw > 0 ? pollRaw : 3000;
 
 export async function fetchFolders() {
