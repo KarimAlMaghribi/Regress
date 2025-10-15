@@ -326,11 +326,11 @@ export default function PipelineEditor() {
         >
           <Box>
             <Typography variant="h4" sx={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1, color: '#0f172a' }}>
-              🧪 Pipeline Atelier
+              Pipeline Editor
             </Typography>
             <Typography variant="subtitle1" sx={{ color: '#475569' }}>
               {name
-                  ? `„${name}“ – Feinschliff für deine perfekte Analyse-Pipeline.`
+                  ? `„${name}“ – Editiere deine Pipeline zur optimalen Dokumentenanalyse.`
                   : 'Verleihe deiner neuen Pipeline einen klaren Namen.'}
             </Typography>
           </Box>
@@ -369,7 +369,7 @@ export default function PipelineEditor() {
                   onClick={() => { if (confirmIfDirty()) navigate('/pipeline'); }}
                   sx={{ fontWeight: 600, borderRadius: 3 }}
               >
-                ⬅️ Zur Pipeline-Übersicht
+                ⬅️ BACK
               </Button>
               <TextField
                   size="small"
@@ -390,7 +390,7 @@ export default function PipelineEditor() {
                 }}
                 sx={{ fontWeight: 700, borderRadius: 3, boxShadow: 'none', textTransform: 'none' }}
             >
-              ✨ Schritt hinzufügen
+              Schritt hinzufügen
             </Button>
           </Stack>
         </Paper>
@@ -402,11 +402,11 @@ export default function PipelineEditor() {
               <TableCell sx={{ fontWeight: 700 }}>🔢 Nr.</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>⚙️ Aktionen</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>🎭 Prompt-Typ</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>📝 Vollständiger Prompt-Name</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>📝 Prompt-Name</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>✅ Yes-Key</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>🚫 No-Key</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>🛣️ Route</TableCell>
-              <TableCell sx={{ fontWeight: 700 }}>💡 Aktiv</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}> Aktiv</TableCell>
               <TableCell sx={{ fontWeight: 700 }}>🔍 Details</TableCell>
             </TableRow>
             </TableHead>
@@ -535,7 +535,7 @@ export default function PipelineEditor() {
                             </IconButton>
                           </Tooltip>
                           <Button size="small" variant="outlined" onClick={() => setEdit(r.step)}>
-                            ✏️ Bearbeiten
+                            ✏️
                           </Button>
                         </Stack>
                       </TableCell>
