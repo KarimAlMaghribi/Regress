@@ -89,8 +89,8 @@ async fn init_db(pool: &PgPool) {
             updated_at TIMESTAMPTZ DEFAULT now()
         )",
     )
-        .execute(pool)
-        .await
+    .execute(pool)
+    .await
     {
         error!(%e, "failed to create table pipelines");
     }
@@ -99,7 +99,20 @@ async fn init_db(pool: &PgPool) {
         .execute(pool)
         .await;
 
-    info!("ensured pipelines table exists");
+    if let Err(e) = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )",
+    )
+    .execute(pool)
+    .await
+    {
+        error!(%e, "failed to create table app_settings");
+    }
+
+    info!("ensured pipelines and settings tables exist");
 }
 
 /* ------------------------------ Config R/W ------------------------------ */
@@ -118,18 +131,131 @@ async fn fetch_config(pool: &PgPool, id: Uuid) -> Result<PipelineConfig, HttpRes
 }
 
 async fn store_config(pool: &PgPool, id: Uuid, cfg: &PipelineConfig) -> Result<(), HttpResponse> {
-    let json = serde_json::to_value(cfg).map_err(|_| HttpResponse::InternalServerError().finish())?;
-    let res = sqlx::query("UPDATE pipelines SET name=$2, config_json=$3, updated_at=now() WHERE id=$1")
-        .bind(id)
-        .bind(&cfg.name)
-        .bind(json)
-        .execute(pool)
-        .await
-        .map_err(|_| HttpResponse::InternalServerError().finish())?;
+    let json =
+        serde_json::to_value(cfg).map_err(|_| HttpResponse::InternalServerError().finish())?;
+    let res =
+        sqlx::query("UPDATE pipelines SET name=$2, config_json=$3, updated_at=now() WHERE id=$1")
+            .bind(id)
+            .bind(&cfg.name)
+            .bind(json)
+            .execute(pool)
+            .await
+            .map_err(|_| HttpResponse::InternalServerError().finish())?;
     if res.rows_affected() == 1 {
         Ok(())
     } else {
         Err(HttpResponse::NotFound().finish())
+    }
+}
+
+const OPENAI_VERSION_KEY: &str = "openai.version";
+
+const OPENAI_VERSION_OPTIONS: &[(&str, &str)] = &[
+    (
+        "gpt-4o",
+        "https://claims-manager.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
+    ),
+    (
+        "gpt-4o-mini",
+        "https://claims-manager.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview",
+    ),
+    (
+        "responses",
+        "https://claims-manager.openai.azure.com/openai/responses?api-version=2025-04-01-preview",
+    ),
+];
+
+const DEFAULT_OPENAI_VERSION: &str = OPENAI_VERSION_OPTIONS[0].0;
+
+fn is_valid_openai_version(key: &str) -> bool {
+    OPENAI_VERSION_OPTIONS.iter().any(|(k, _)| *k == key)
+}
+
+fn openai_endpoint_for(key: &str) -> &'static str {
+    OPENAI_VERSION_OPTIONS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, url)| *url)
+        .unwrap_or(OPENAI_VERSION_OPTIONS[0].1)
+}
+
+async fn fetch_setting(pool: &PgPool, key: &str) -> Result<Option<String>, sqlx::Error> {
+    sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = $1")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+}
+
+async fn store_setting(pool: &PgPool, key: &str, value: &str) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO app_settings (key, value, updated_at)
+         VALUES ($1, $2, now())
+         ON CONFLICT (key)
+         DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
+    )
+    .bind(key)
+    .bind(value)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+#[derive(Serialize)]
+struct OpenAiVersionResponse {
+    key: String,
+    endpoint: &'static str,
+}
+
+#[derive(Deserialize)]
+struct UpdateOpenAiVersion {
+    version: String,
+}
+
+async fn get_openai_version(data: web::Data<AppState>) -> impl Responder {
+    match fetch_setting(&data.pool, OPENAI_VERSION_KEY).await {
+        Ok(Some(key)) if is_valid_openai_version(&key) => {
+            HttpResponse::Ok().json(OpenAiVersionResponse {
+                key: key.clone(),
+                endpoint: openai_endpoint_for(&key),
+            })
+        }
+        Ok(Some(invalid)) => {
+            warn!(key = %invalid, "invalid openai version found in settings, falling back to default");
+            HttpResponse::Ok().json(OpenAiVersionResponse {
+                key: DEFAULT_OPENAI_VERSION.to_string(),
+                endpoint: openai_endpoint_for(DEFAULT_OPENAI_VERSION),
+            })
+        }
+        Ok(None) => HttpResponse::Ok().json(OpenAiVersionResponse {
+            key: DEFAULT_OPENAI_VERSION.to_string(),
+            endpoint: openai_endpoint_for(DEFAULT_OPENAI_VERSION),
+        }),
+        Err(e) => {
+            error!(%e, "failed to read openai version setting");
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+async fn put_openai_version(
+    data: web::Data<AppState>,
+    payload: Json<UpdateOpenAiVersion>,
+) -> impl Responder {
+    if !is_valid_openai_version(&payload.version) {
+        return HttpResponse::BadRequest().json(json!({
+            "error": "invalid openai version",
+        }));
+    }
+
+    match store_setting(&data.pool, OPENAI_VERSION_KEY, &payload.version).await {
+        Ok(()) => HttpResponse::Ok().json(OpenAiVersionResponse {
+            key: payload.version.clone(),
+            endpoint: openai_endpoint_for(&payload.version),
+        }),
+        Err(e) => {
+            error!(%e, "failed to store openai version setting");
+            HttpResponse::InternalServerError().finish()
+        }
     }
 }
 
@@ -147,7 +273,7 @@ async fn list_pipelines(data: web::Data<AppState>) -> impl Responder {
                     let cfg: PipelineConfig = serde_json::from_value(
                         r.try_get::<serde_json::Value, _>("config_json").ok()?,
                     )
-                        .ok()?;
+                    .ok()?;
                     let id: Uuid = r.try_get("id").ok()?;
                     Some(PipelineInfo {
                         id,
@@ -178,9 +304,9 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
     let meta = match sqlx::query_as::<_, RunMetaRow>(
         "SELECT pipeline_id, pdf_id, overall_score FROM pipeline_runs WHERE id=$1",
     )
-        .bind(run_id)
-        .fetch_one(&data.pool)
-        .await
+    .bind(run_id)
+    .fetch_one(&data.pool)
+    .await
     {
         Ok(m) => m,
         Err(_) => return HttpResponse::NotFound().finish(),
@@ -194,9 +320,9 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
         ORDER BY prompt_type, final_key
         "#,
     )
-        .bind(run_id)
-        .fetch_all(&data.pool)
-        .await
+    .bind(run_id)
+    .fetch_all(&data.pool)
+    .await
     {
         Ok(rows) => rows,
         Err(e) => {
@@ -237,10 +363,10 @@ async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl
         r#"SELECT seq_no, step_id, prompt_id, prompt_type, decision_key, route, result
            FROM pipeline_run_steps WHERE run_id=$1 ORDER BY seq_no"#,
     )
-        .bind(run_id)
-        .fetch_all(&data.pool)
-        .await
-        .unwrap_or_default();
+    .bind(run_id)
+    .fetch_all(&data.pool)
+    .await
+    .unwrap_or_default();
 
     let steps: Vec<RunStep> = step_rows
         .into_iter()
@@ -527,8 +653,7 @@ async fn reorder_steps(
         return HttpResponse::BadRequest().finish();
     }
 
-    let mut map: HashMap<Uuid, PipelineStep> =
-        cfg.steps.into_iter().map(|s| (s.id, s)).collect();
+    let mut map: HashMap<Uuid, PipelineStep> = cfg.steps.into_iter().map(|s| (s.id, s)).collect();
 
     let mut new_steps: Vec<PipelineStep> = Vec::with_capacity(map.len());
     for id_str in input.order.iter() {
@@ -579,11 +704,13 @@ async fn run_pipeline(
         .execute(&data.pool)
         .await;
 
-    let payload =
-        match serde_json::to_string(&PdfUploaded { pdf_id, pipeline_id: *path }) {
-            Ok(p) => p,
-            Err(_) => return HttpResponse::InternalServerError().finish(),
-        };
+    let payload = match serde_json::to_string(&PdfUploaded {
+        pdf_id,
+        pipeline_id: *path,
+    }) {
+        Ok(p) => p,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
 
     let _ = data
         .producer
@@ -678,9 +805,14 @@ async fn main() -> std::io::Result<()> {
                     .route(web::patch().to(update_step))
                     .route(web::delete().to(delete_step)),
             )
+            .service(
+                web::resource("/settings/openai-version")
+                    .route(web::get().to(get_openai_version))
+                    .route(web::put().to(put_openai_version)),
+            )
             .route("/runs/{id}", web::get().to(get_run))
     })
-        .bind(("0.0.0.0", 8084))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8084))?
+    .run()
+    .await
 }

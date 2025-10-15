@@ -95,7 +95,7 @@ function TabPanel({ children, value, index }: TabPanelProps) {
   );
 }
 
-export default function SharePointIngest() {
+export default function SharePointUpload() {
   const [tab, setTab] = React.useState(0);
   const [folders, setFolders] = React.useState<FolderSummary[]>([]);
   const [folderMeta, setFolderMeta] = React.useState<{ base: string; total: number } | null>(null);
@@ -394,9 +394,9 @@ export default function SharePointIngest() {
   return (
     <Box>
       <PageHeader
-        title="SharePoint Ingest"
+        title="SharePoint Upload"
         icon={<UploadFileIcon />}
-        breadcrumb={[{ label: 'SharePoint Ingest' }]}
+        breadcrumb={[{ label: 'SharePoint Upload' }]}
         subtitle="Anlagen zusammenführen und Upload-Jobs steuern"
       />
 
@@ -414,7 +414,7 @@ export default function SharePointIngest() {
         <Tabs
           value={tab}
           onChange={(_, newValue) => setTab(newValue)}
-          aria-label="SharePoint Ingest Tabs"
+          aria-label="SharePoint Upload Tabs"
           variant="fullWidth"
         >
           <Tab label="Anlagen" />

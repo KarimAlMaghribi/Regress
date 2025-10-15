@@ -15,7 +15,8 @@ import {AnimatePresence, motion} from 'framer-motion';
 import PipelineList from './pages/PipelineList';
 import RunDetailsPage from "./pages/RunDetailsPage";
 import TenantsPage from "./pages/TenantsPage";
-import SharePointIngest from './pages/SharePointIngest';
+import SharePointUpload from './pages/SharePointUpload';
+import Settings from './pages/Settings';
 
 export default function App() {
   return (
@@ -46,6 +47,8 @@ function AnimatedRoutes() {
       {pattern: /^\/result\//, title: 'Result'},
       {pattern: /^\/history$/, title: 'History'},
       {pattern: /^\/tenants$/, title: 'Tenants'},
+      {pattern: /^\/settings$/, title: 'Settings'},
+      {pattern: /^\/ingest$/, title: 'SharePoint Upload'},
     ];
 
     const baseTitle = 'Regress';
@@ -66,7 +69,8 @@ function AnimatedRoutes() {
           <Route path="/result/:id" element={<PageFade><Result/></PageFade>}/>
           <Route path="/history" element={<PageFade><History/></PageFade>}/>
           <Route path="/tenants" element={<PageFade><TenantsPage/></PageFade>}/>
-          <Route path="/ingest" element={<PageFade><SharePointIngest/></PageFade>}/>
+          <Route path="/ingest" element={<PageFade><SharePointUpload/></PageFade>}/>
+          <Route path="/settings" element={<PageFade><Settings/></PageFade>}/>
           <Route path="*" element={<PageFade><Dashboard/></PageFade>}/>
         </Routes>
       </AnimatePresence>
