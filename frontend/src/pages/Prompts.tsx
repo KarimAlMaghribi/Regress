@@ -23,6 +23,7 @@ import TextSnippetIcon from '@mui/icons-material/TextSnippet';
 import LeaderboardIcon from '@mui/icons-material/Leaderboard';
 import AltRouteIcon from '@mui/icons-material/AltRoute';
 import LabelOutlinedIcon from '@mui/icons-material/LabelOutlined';
+import { alpha, useTheme } from '@mui/material/styles';
 import PageHeader from '../components/PageHeader';
 
 type PromptType = 'ExtractionPrompt' | 'ScoringPrompt' | 'DecisionPrompt';
@@ -47,19 +48,26 @@ const getBase = () =>
     import.meta.env?.VITE_PROMPT_API_URL ||
     'http://localhost:8082';
 
-// Farblogik + Icons pro Typ
+// Meta-Information für die Darstellung der Prompt-Typen
 const typeMeta = (t: PromptType) => {
   switch (t) {
     case 'ExtractionPrompt':
-      return { color: 'success' as const, label: 'Extraktion', icon: <TextSnippetIcon fontSize="small" /> };
+      return { label: 'Extraktion', icon: <TextSnippetIcon fontSize="small" /> };
     case 'ScoringPrompt':
-      return { color: 'secondary' as const, label: 'Bewertung', icon: <LeaderboardIcon fontSize="small" /> };
+      return { label: 'Bewertung', icon: <LeaderboardIcon fontSize="small" /> };
     case 'DecisionPrompt':
-      return { color: 'info' as const, label: 'Entscheidung', icon: <AltRouteIcon fontSize="small" /> };
+      return { label: 'Entscheidung', icon: <AltRouteIcon fontSize="small" /> };
   }
 };
 
 export default function Prompts() {
+  const theme = useTheme();
+  const accent = {
+    border: alpha(theme.palette.primary.main, 0.18),
+    subtleBorder: alpha(theme.palette.primary.main, 0.08),
+    background: alpha(theme.palette.primary.main, 0.06),
+    strong: theme.palette.primary.main,
+  };
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [newText, setNewText] = useState('');
   const [newWeight, setNewWeight] = useState(1);
@@ -127,7 +135,7 @@ export default function Prompts() {
   };
 
   return (
-      <Box>
+      <Stack spacing={3}>
         <PageHeader
             title="Prompts"
             subtitle="Erstellen & verwalten von Prompt-Vorlagen"
@@ -149,10 +157,25 @@ export default function Prompts() {
         />
 
         {/* Neu-Formular */}
-        <Card sx={{ mb: 2, borderLeft: '5px solid', borderColor: 'info.main' }}>
-          <CardContent>
-            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
-              <TextField value={newText} onChange={(e) => setNewText(e.target.value)} label="Text" fullWidth />
+        <Card
+            variant="outlined"
+            sx={{
+              borderRadius: 3,
+              borderColor: accent.border,
+              background: `linear-gradient(135deg, ${alpha(theme.palette.background.paper, 0.96)}, ${alpha(theme.palette.background.paper, 0.92)})`,
+            }}
+        >
+          <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <Box>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                Neuen Prompt anlegen
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Definiere Text, Typ und optional eine Gewichtung oder einen Namen für Extraktionen.
+              </Typography>
+            </Box>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2.5} alignItems={{ md: 'center' }}>
+              <TextField value={newText} onChange={(e) => setNewText(e.target.value)} label="Text" fullWidth size="small" />
 
               {/* Typ-Auswahl NUR Icons (mit Tooltip) */}
               <ToggleButtonGroup
@@ -170,15 +193,16 @@ export default function Prompts() {
                             aria-label={meta.label}
                             sx={{
                               border: 1,
-                              borderColor: 'divider',
+                              borderColor: accent.subtleBorder,
                               p: 1,
+                              bgcolor: 'background.paper',
                               '&.Mui-selected': {
-                                bgcolor: (theme) => theme.palette[meta.color].light,
-                                color: (theme) => theme.palette[meta.color].contrastText,
-                                borderColor: (theme) => theme.palette[meta.color].main,
+                                bgcolor: accent.background,
+                                color: accent.strong,
+                                borderColor: accent.border,
                               },
                               '&:hover': {
-                                borderColor: (theme) => theme.palette[meta.color].main,
+                                borderColor: accent.border,
                               },
                             }}
                         >
@@ -195,6 +219,7 @@ export default function Prompts() {
                       value={newJsonKey}
                       onChange={(e) => setNewJsonKey(e.target.value)}
                       sx={{ width: { xs: '100%', md: 220 } }}
+                      size="small"
                   />
               ) : (
                   <Box sx={{ width: { xs: '100%', md: 280 } }}>
@@ -208,7 +233,7 @@ export default function Prompts() {
                           step={1}
                           value={newWeight}
                           onChange={(_, v) => setNewWeight(v as number)}
-                          sx={{ flex: 1 }}
+                          sx={{ flex: 1, color: accent.strong }}
                       />
                       <TextField
                           type="number"
@@ -222,7 +247,7 @@ export default function Prompts() {
                   </Box>
               )}
 
-              <Button variant="contained" disabled={!canCreate} onClick={create} startIcon={<SaveIcon />}>
+              <Button variant="contained" disabled={!canCreate} onClick={create} startIcon={<SaveIcon />} sx={{ borderRadius: 2 }}>
                 {/* kein Label – nur Icon wie gewünscht */}
               </Button>
             </Stack>
@@ -230,29 +255,54 @@ export default function Prompts() {
         </Card>
 
         {/* Liste */}
-        <Stack spacing={1.25}>
+        <Stack spacing={1.5}>
           {prompts.map((p) => {
             const meta = typeMeta(p.type);
             const canSave = p.type !== 'ExtractionPrompt' || (p.json_key && p.json_key.trim().length > 0);
             return (
-                <Card key={p.id} sx={{ borderLeft: '5px solid', borderColor: `${meta.color}.main` }}>
-                  <CardContent>
-                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
+                <Card
+                    key={p.id}
+                    variant="outlined"
+                    sx={{
+                      borderRadius: 3,
+                      borderColor: accent.border,
+                      backgroundColor: alpha(theme.palette.background.paper, 0.98),
+                    }}
+                >
+                  <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <Stack direction={{ xs: 'column', md: 'row' }} spacing={2.5} alignItems={{ md: 'center' }}>
                       {/* Typ-Chip + Favorit */}
-                      <Stack direction="row" spacing={1} alignItems="center" sx={{ minWidth: 220 }}>
-                        <Chip icon={meta.icon} label={meta.label} color={meta.color} size="small" />
+                      <Stack direction="row" spacing={1.5} alignItems="center" sx={{ minWidth: 220 }}>
+                        <Box
+                            sx={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 1,
+                              px: 1.25,
+                              py: 0.6,
+                              borderRadius: 999,
+                              bgcolor: accent.background,
+                              color: accent.strong,
+                              border: `1px solid ${accent.border}`,
+                            }}
+                        >
+                          {meta.icon}
+                          <Typography variant="body2" fontWeight={600}>
+                            {meta.label}
+                          </Typography>
+                        </Box>
                         <Tooltip title={p.favorite ? 'Als nicht favorisiert markieren' : 'Als Favorit markieren'}>
                           <Button
                               size="small"
                               variant={p.favorite ? 'contained' : 'outlined'}
-                              color={p.favorite ? 'warning' : 'inherit'}
+                              color={p.favorite ? 'primary' : 'inherit'}
                               onClick={() => {
                                 const next = { ...p, favorite: !p.favorite };
                                 setPrompts((ps) => ps.map((it) => (it.id === p.id ? next : it)));
                                 save(next);
                               }}
                               startIcon={p.favorite ? <StarIcon /> : <StarBorderIcon />}
-                              sx={{ minWidth: 0, px: 1.25 }}
+                              sx={{ minWidth: 0, px: 1.25, borderRadius: 2 }}
                           >
                             Favorit
                           </Button>
@@ -263,6 +313,7 @@ export default function Prompts() {
                       <TextField
                           label="Text"
                           fullWidth
+                          size="small"
                           value={p.text}
                           onChange={(e) =>
                               setPrompts((ps) => ps.map((it) => (it.id === p.id ? { ...it, text: e.target.value } : it)))
@@ -274,6 +325,7 @@ export default function Prompts() {
                           <TextField
                               label="Name"
                               value={p.json_key || ''}
+                              size="small"
                               onChange={(e) =>
                                   setPrompts((ps) => ps.map((it) => (it.id === p.id ? { ...it, json_key: e.target.value } : it)))
                               }
@@ -294,7 +346,7 @@ export default function Prompts() {
                                   onChange={(_, v) =>
                                       setPrompts((ps) => ps.map((it) => (it.id === p.id ? { ...it, weight: v as number } : it)))
                                   }
-                                  sx={{ flex: 1 }}
+                                  sx={{ flex: 1, color: accent.strong }}
                               />
                               <TextField
                                   type="number"
@@ -313,22 +365,28 @@ export default function Prompts() {
                       )}
                     </Stack>
 
-                    <Divider sx={{ my: 1.25 }} />
+                    <Divider sx={{ my: 1 }} />
 
                     {/* Sekundärinfos */}
                     <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
                       {p.type === 'ExtractionPrompt' && p.json_key && (
-                          <Chip size="small" icon={<LabelOutlinedIcon />} label={`Name: ${p.json_key}`} variant="outlined" />
+                          <Chip
+                              size="small"
+                              icon={<LabelOutlinedIcon />}
+                              label={`Name: ${p.json_key}`}
+                              variant="outlined"
+                              sx={{ borderRadius: 2 }}
+                          />
                       )}
-                      <Chip size="small" label={`ID: ${p.id}`} variant="outlined" />
+                      <Chip size="small" label={`ID: ${p.id}`} variant="outlined" sx={{ borderRadius: 2 }} />
                     </Stack>
                   </CardContent>
 
-                  <CardActions sx={{ justifyContent: 'flex-end', pt: 0 }}>
-                    <Button onClick={() => save(p)} variant="contained" size="small" startIcon={<SaveIcon />} disabled={!canSave}>
+                  <CardActions sx={{ justifyContent: 'flex-end', pt: 0, gap: 1 }}>
+                    <Button onClick={() => save(p)} variant="contained" size="small" startIcon={<SaveIcon />} disabled={!canSave} sx={{ borderRadius: 2 }}>
                       {/* kein Label – nur Icon */}
                     </Button>
-                    <Button onClick={() => del(p.id)} size="small" startIcon={<DeleteIcon />}>
+                    <Button onClick={() => del(p.id)} size="small" startIcon={<DeleteIcon />} sx={{ borderRadius: 2 }}>
                       {/* kein Label – nur Icon */}
                     </Button>
                   </CardActions>
@@ -336,6 +394,6 @@ export default function Prompts() {
             );
           })}
         </Stack>
-      </Box>
+      </Stack>
   );
 }
