@@ -15,6 +15,7 @@ import { Link, useLocation } from 'react-router-dom';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardIcon from '@mui/icons-material/Dashboard';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
+import UploadIcon from '@mui/icons-material/Upload';
 import BuildIcon from '@mui/icons-material/Build';
 import HistoryIcon from '@mui/icons-material/History';
 import ListAltIcon from '@mui/icons-material/ListAlt';
@@ -60,6 +61,7 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
   const primary = [
     { text: 'Dashboard', to: '/', icon: <DashboardIcon /> },
     { text: 'Upload', to: '/upload', icon: <CloudUploadIcon /> },
+    { text: 'SharePoint Ingest', to: '/ingest', icon: <UploadIcon /> },
     { text: 'Pipeline', to: '/pipeline', icon: <BuildIcon /> },
     { text: 'Analyses', to: '/analyses', icon: <AssessmentIcon /> },
     { text: 'History', to: '/history', icon: <HistoryIcon /> },
