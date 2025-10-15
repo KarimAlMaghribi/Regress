@@ -19,6 +19,7 @@ import {
   ListItemText,
   Tooltip,
   LinearProgress,
+  CircularProgress,
   Popper,
   ClickAwayListener,
   InputAdornment,
@@ -64,6 +65,7 @@ interface HistoryEntry {
   status?: string;
   pipelineId?: string;
   pipelineName?: string;
+  tenantId?: string;
   tenantName?: string;
   pdfNames?: string[]; // NEU
 }
@@ -72,6 +74,33 @@ interface PdfSuggestion {
   key: string;
   entry: HistoryEntry;
   pdfName: string;
+  meta: {
+    analysisId: number;
+    pdfId: number;
+    pipelineId?: string;
+    pipelineName?: string;
+    tenantId?: string;
+    tenantName?: string;
+    status?: string;
+    timestamp: string;
+  };
+}
+
+interface PdfNameSearchApiHit {
+  analysis_id: number;
+  pdf_id: number;
+  pipeline_id?: string | null;
+  pipeline_name?: string | null;
+  tenant_id?: string | null;
+  tenant_name?: string | null;
+  status?: string | null;
+  timestamp: string;
+  pdf_name: string;
+}
+
+interface PdfNameSearchApiResponse {
+  total?: number;
+  hits?: PdfNameSearchApiHit[];
 }
 
 /** snake/camel normalisieren (nur was wir brauchen) */
@@ -130,6 +159,7 @@ function normalizeEntry(e: any): HistoryEntry {
     status: e.status,
     pipelineId,
     pipelineName,
+    tenantId: e.tenant_id ? String(e.tenant_id) : e.tenantId,
     tenantName: e.tenant_name ?? e.tenantName,
     pdfNames,
   };
@@ -225,7 +255,13 @@ export default function History() {
   const [start, setStart] = useState<Dayjs | null>(null);
   const [end, setEnd] = useState<Dayjs | null>(null);
   const [pipelineNames, setPipelineNames] = useState<Record<string, string>>({});
+  const [pdfSuggestions, setPdfSuggestions] = useState<PdfSuggestion[]>([]);
+  const [suggestionCount, setSuggestionCount] = useState(0);
+  const [suggestionLoading, setSuggestionLoading] = useState(false);
+  const [suggestionError, setSuggestionError] = useState<string | null>(null);
+  const entriesRef = React.useRef<HistoryEntry[]>(entries);
   const searchAnchorRef = React.useRef<HTMLDivElement | null>(null);
+  const suggestionAbortRef = React.useRef<AbortController | null>(null);
 
   const [params, setParams] = useSearchParams();
   const tenant = params.get('tenant') ?? undefined;
@@ -234,6 +270,10 @@ export default function History() {
     if (t) p.set('tenant', t); else p.delete('tenant');
     setParams(p, { replace: true });
   };
+
+  useEffect(() => {
+    entriesRef.current = entries;
+  }, [entries]);
 
   // Initial REST Load (running + completed)
   useEffect(() => {
@@ -361,7 +401,10 @@ export default function History() {
           JSON.stringify(e.result ?? {}).toLowerCase(),
           String(e.pdfId),
           e.pipelineName?.toLowerCase() ?? '',
+          e.pipelineId?.toLowerCase() ?? '',
           e.tenantName?.toLowerCase() ?? '',
+          e.tenantId?.toLowerCase() ?? '',
+          e.status?.toLowerCase() ?? '',
           (e.pdfNames ?? []).join(' ').toLowerCase(), // NEU: Dateinamen einbeziehen
         ].join(' ');
         if (!hay.includes(s)) return false;
@@ -370,31 +413,16 @@ export default function History() {
     });
   }, [entries, start, end, search, tenant]);
 
-  const pdfSuggestions = useMemo<PdfSuggestion[]>(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return [];
-    const seen = new Set<string>();
-    const hits: PdfSuggestion[] = [];
-    for (const entry of entries) {
-      const names = entry.pdfNames ?? [];
-      for (const name of names) {
-        if (!name) continue;
-        const lowered = name.toLowerCase();
-        if (!lowered.includes(q)) continue;
-        const key = `${entry.id}:${name}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        hits.push({ key, entry, pdfName: name });
-      }
-    }
-    hits.sort((a, b) => dayjs(b.entry.timestamp).valueOf() - dayjs(a.entry.timestamp).valueOf());
-    return hits.slice(0, 12);
-  }, [entries, search]);
-
   useEffect(() => {
     if (!search.trim()) {
       setSuggestionsOpen(false);
       setDropdownOpen(false);
+      suggestionAbortRef.current?.abort();
+      suggestionAbortRef.current = null;
+      setPdfSuggestions([]);
+      setSuggestionCount(0);
+      setSuggestionError(null);
+      setSuggestionLoading(false);
     }
   }, [search]);
 
@@ -403,6 +431,121 @@ export default function History() {
       setDropdownOpen(false);
     }
   }, [suggestionsOpen]);
+
+  useEffect(() => {
+    const query = search.trim();
+    if (!query) {
+      return;
+    }
+
+    const controller = new AbortController();
+    suggestionAbortRef.current?.abort();
+    suggestionAbortRef.current = controller;
+    setSuggestionLoading(true);
+    setSuggestionError(null);
+
+    const params = new URLSearchParams({ q: query, limit: '12' });
+    if (tenant) params.set('tenant', tenant);
+
+    fetch(`${BASE_HIST}/analyses/search?${params.toString()}`, {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    })
+        .then(res => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((json: PdfNameSearchApiResponse) => {
+          const hitsRaw = (Array.isArray(json?.hits) ? json?.hits : []) as PdfNameSearchApiHit[];
+          const totalRaw = typeof json?.total === 'number' ? json.total : undefined;
+
+          const mapped: PdfSuggestion[] = hitsRaw.map((hit, index) => {
+            const pdfName = hit.pdf_name ?? '';
+            const analysisId = hit.analysis_id;
+            const pdfId = hit.pdf_id;
+            const pipelineId = hit.pipeline_id ? String(hit.pipeline_id) : undefined;
+            const pipelineName = hit.pipeline_name ?? undefined;
+            const tenantId = hit.tenant_id ? String(hit.tenant_id) : undefined;
+            const tenantName = hit.tenant_name ?? undefined;
+            const status = hit.status ?? undefined;
+            const timestamp = hit.timestamp;
+
+            const existing = entriesRef.current.find(e => e.id === analysisId);
+            let entry: HistoryEntry;
+
+            if (existing) {
+              entry = {
+                ...existing,
+                pipelineId: existing.pipelineId ?? pipelineId,
+                pipelineName: existing.pipelineName ?? pipelineName,
+                tenantId: existing.tenantId ?? tenantId,
+                tenantName: existing.tenantName ?? tenantName,
+                status: existing.status ?? status,
+                pdfNames:
+                    existing.pdfNames && existing.pdfNames.length > 0
+                        ? existing.pdfNames
+                        : pdfName
+                            ? [pdfName]
+                            : [],
+              };
+            } else {
+              entry = {
+                id: analysisId,
+                pdfId,
+                pdfUrl: '',
+                timestamp,
+                result: null,
+                prompt: null,
+                status,
+                pipelineId,
+                pipelineName,
+                tenantId,
+                tenantName,
+                pdfNames: pdfName ? [pdfName] : [],
+              };
+            }
+
+            const key = `${analysisId}:${pdfName || index}`;
+
+            return {
+              key,
+              pdfName: pdfName || '—',
+              entry,
+              meta: {
+                analysisId,
+                pdfId,
+                pipelineId,
+                pipelineName,
+                tenantId,
+                tenantName,
+                status,
+                timestamp,
+              },
+            };
+          });
+
+          setPdfSuggestions(mapped);
+          const total = totalRaw ?? hitsRaw.length;
+          setSuggestionCount(total > 0 ? total : mapped.length);
+        })
+        .catch(err => {
+          if ((err as any)?.name === 'AbortError') return;
+          console.error('history pdf search', err);
+          setSuggestionError(err instanceof Error ? err.message : 'Unbekannter Fehler');
+          setPdfSuggestions([]);
+          setSuggestionCount(0);
+        })
+        .finally(() => {
+          setSuggestionLoading(false);
+          if (suggestionAbortRef.current === controller) {
+            suggestionAbortRef.current = null;
+          }
+        });
+
+    return () => {
+      controller.abort();
+    };
+  }, [search, tenant]);
 
   const handleOpenSuggestions = () => {
     setSuggestionsOpen(true);
@@ -566,6 +709,17 @@ export default function History() {
     },
   ];
 
+  const suggestionPrimaryText = suggestionLoading
+      ? 'Suche läuft …'
+      : suggestionError
+          ? 'Fehler beim Laden der Vorschläge'
+          : `Vorschläge öffnen (${suggestionCount} Treffer)`;
+  const suggestionSecondaryText = suggestionLoading
+      ? 'Bitte warten …'
+      : suggestionError
+          ? suggestionError
+          : 'Enter drücken oder auf die Lupe klicken';
+
   return (
       <Box>
         <PageHeader title="History" breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'History' }]} />
@@ -611,8 +765,8 @@ export default function History() {
                           onMouseDown={event => event.preventDefault()}
                       >
                         <ListItemText
-                            primary={`Vorschläge öffnen (${pdfSuggestions.length} Treffer)`}
-                            secondary="Enter drücken oder auf die Lupe klicken"
+                            primary={suggestionPrimaryText}
+                            secondary={suggestionSecondaryText}
                         />
                       </ListItemButton>
                     </ListItem>
@@ -668,15 +822,40 @@ export default function History() {
             fullWidth
             maxWidth="sm"
         >
-          <DialogTitle>PDF-Vorschläge</DialogTitle>
+          <DialogTitle>
+            PDF-Vorschläge
+            {!suggestionLoading && ` (${suggestionCount} Treffer)`}
+          </DialogTitle>
           <DialogContent dividers>
-            {pdfSuggestions.length === 0 ? (
+            {suggestionLoading ? (
+                <Stack alignItems="center" spacing={2} sx={{ py: 3 }}>
+                  <CircularProgress size={28} />
+                  <Typography variant="body2" color="text.secondary">
+                    Suche läuft …
+                  </Typography>
+                </Stack>
+            ) : suggestionError ? (
+                <Typography variant="body2" color="error">
+                  Fehler bei der Suche: {suggestionError}
+                </Typography>
+            ) : pdfSuggestions.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   Keine PDF-Namen gefunden.
                 </Typography>
             ) : (
                 <List>
-                  {pdfSuggestions.map(s => (
+                  {pdfSuggestions.map(s => {
+                    const subtitleParts = [
+                      dayjs(s.meta.timestamp || s.entry.timestamp).format('LLL'),
+                      `PDF-ID: ${s.meta.pdfId}`,
+                      `Pipeline: ${s.meta.pipelineName ?? getPipelineLabel(s.entry)}`,
+                    ];
+                    const statusLabel = s.meta.status ?? s.entry.status;
+                    if (statusLabel) subtitleParts.push(`Status: ${statusLabel}`);
+                    const tenantLabel = s.meta.tenantName ?? s.entry.tenantName;
+                    if (tenantLabel) subtitleParts.push(`Tenant: ${tenantLabel}`);
+
+                    return (
                       <ListItem
                           key={s.key}
                           secondaryAction={(
@@ -695,11 +874,12 @@ export default function History() {
                         >
                           <ListItemText
                               primary={highlightPdfName(s.pdfName)}
-                              secondary={`${dayjs(s.entry.timestamp).format('LLL')} • Pipeline: ${getPipelineLabel(s.entry)}`}
+                              secondary={subtitleParts.join(' • ')}
                           />
                         </ListItemButton>
                       </ListItem>
-                  ))}
+                    );
+                  })}
                 </List>
             )}
           </DialogContent>
