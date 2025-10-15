@@ -1,0 +1,37 @@
+### Healthcheck
+GET http://localhost:8080/healthz
+Authorization: Bearer {{ADMIN_TOKEN}}
+
+### Folders
+GET http://localhost:8080/folders
+Authorization: Bearer {{ADMIN_TOKEN}}
+
+### Create jobs
+POST http://localhost:8080/jobs
+Authorization: Bearer {{ADMIN_TOKEN}}
+Content-Type: application/json
+
+{
+  "folder_ids": ["0123456789"],
+  "order": "alpha"
+}
+
+### Pause job
+POST http://localhost:8080/jobs/{{JOB_ID}}/pause
+Authorization: Bearer {{ADMIN_TOKEN}}
+
+### Resume job
+POST http://localhost:8080/jobs/{{JOB_ID}}/resume
+Authorization: Bearer {{ADMIN_TOKEN}}
+
+### Cancel job
+POST http://localhost:8080/jobs/{{JOB_ID}}/cancel
+Authorization: Bearer {{ADMIN_TOKEN}}
+
+### Retry job
+POST http://localhost:8080/jobs/{{JOB_ID}}/retry
+Authorization: Bearer {{ADMIN_TOKEN}}
+
+### List jobs
+GET http://localhost:8080/jobs
+Authorization: Bearer {{ADMIN_TOKEN}}

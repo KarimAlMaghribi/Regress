@@ -15,6 +15,7 @@ import {AnimatePresence, motion} from 'framer-motion';
 import PipelineList from './pages/PipelineList';
 import RunDetailsPage from "./pages/RunDetailsPage";
 import TenantsPage from "./pages/TenantsPage";
+import SharePointIngest from './pages/SharePointIngest';
 
 export default function App() {
   return (
@@ -49,6 +50,7 @@ function AnimatedRoutes() {
           <Route path="/result/:id" element={<PageFade><Result/></PageFade>}/>
           <Route path="/history" element={<PageFade><History/></PageFade>}/>
           <Route path="/tenants" element={<PageFade><TenantsPage/></PageFade>}/>
+          <Route path="/ingest" element={<PageFade><SharePointIngest/></PageFade>}/>
           <Route path="*" element={<PageFade><Dashboard/></PageFade>}/>
         </Routes>
       </AnimatePresence>
