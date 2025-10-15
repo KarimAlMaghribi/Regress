@@ -234,6 +234,8 @@ async fn app_main() -> anyhow::Result<()> {
 
                 // Per-Scoring-Step Konfiguration (promptId → min_signal)
                 let mut scoring_cfg: HashMap<i32, f64> = HashMap::new();
+                // Per-Decision-Step Konfiguration (promptId → min_confidence)
+                let mut decision_cfg: HashMap<i32, f64> = HashMap::new();
                 if let Some(steps) = config_json.get("steps").and_then(|v| v.as_array()) {
                     for s in steps {
                         let t = s.get("type").and_then(|v| v.as_str()).unwrap_or_default();
@@ -252,6 +254,24 @@ async fn app_main() -> anyhow::Result<()> {
                                     })
                                     .unwrap_or(0.0);
                                 scoring_cfg.insert(pid64 as i32, min_signal);
+                            }
+                        } else if t == "DecisionPrompt" {
+                            let pid = s.get("promptId").and_then(|v| v.as_i64())
+                                .or_else(|| s.get("prompt_id").and_then(|v| v.as_i64()));
+                            if let Some(pid64) = pid {
+                                let cfgv = s.get("config");
+                                let min_conf = cfgv
+                                    .and_then(|c| {
+                                        c.get("min_confidence")
+                                            .or_else(|| c.get("decision_threshold"))
+                                            .or_else(|| c.get("threshold"))
+                                    })
+                                    .and_then(|v| v.as_f64())
+                                    .map(|v| v.clamp(0.0, 1.0))
+                                    .unwrap_or(0.0);
+                                if min_conf > 0.0 {
+                                    decision_cfg.insert(pid64 as i32, min_conf);
+                                }
                             }
                         }
                     }
@@ -779,6 +799,11 @@ async fn app_main() -> anyhow::Result<()> {
                                 let mut confidence = (best_cnt as f32) / (total_votes as f32);
                                 if !confidence.is_finite() { confidence = 0.0; }
                                 let confidence = confidence.clamp(0.0, 1.0);
+
+                                let min_conf = decision_cfg.get(&pid).copied().unwrap_or(0.0) as f32;
+                                if confidence < min_conf {
+                                    continue;
+                                }
 
                                 let answer = route_to_bool(&best_route);
 
