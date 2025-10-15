@@ -16,6 +16,9 @@ variables:
   REGISTRY_URL: "docker.adesso.claims"
   REGISTRY_REPO: "docker.adesso.claims/regress"
 
+  # Öffentlicher Port für sharepoint-ingest, falls direkt aus dem Browser genutzt
+  INGEST_PORT: "8091"
+
 ci_noop:
   stage: build
   image: alpine:3.19
@@ -124,6 +127,14 @@ build_history_service:
     - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
     - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/history-service/**/* ]
 
+build_sharepoint_ingest:
+  <<: *docker-build
+  variables: { IMAGE_NAME: "sharepoint-ingest", DOCKERFILE: "services/sharepoint-ingest/Dockerfile" }
+  rules:
+    - if: '$FORCE_BUILD_ALL == "1"'
+    - changes: [ .gitlab-ci.yml, docker-compose.prod.yml ]
+    - changes: [ Cargo.toml, Cargo.lock, shared/**/*, services/sharepoint-ingest/**/* ]
+
 build_frontend:
   <<: *docker-build
   variables:
@@ -137,12 +148,14 @@ build_frontend:
       PUBLIC_HOST="${PUBLIC_HOST:-helium.adesso.claims}";
       SCHEME="${SCHEME:-http}";
       WS_SCHEME="${WS_SCHEME:-ws}";
+      # Wenn sharepoint-ingest direkt veröffentlicht wird, verwende $INGEST_PORT
+      INGEST_URL="$SCHEME://$PUBLIC_HOST:${INGEST_PORT:-8091}";
       docker buildx build --pull --push
       --build-arg BUILDKIT_INLINE_CACHE=1
       --cache-from=type=local,src="$CACHE_DIR"
       --cache-to=type=local,dest="$CACHE_DIR-new",mode=max
       --build-arg PUBLIC_HOST="$PUBLIC_HOST"
-      --build-arg VITE_INGEST_URL="$SCHEME://$PUBLIC_HOST:8080"
+      --build-arg VITE_INGEST_URL="$INGEST_URL"
       --build-arg VITE_HISTORY_URL="$SCHEME://$PUBLIC_HOST:8090"
       --build-arg VITE_HISTORY_WS="$WS_SCHEME://$PUBLIC_HOST:8090"
       --build-arg VITE_API_URL="$SCHEME://$PUBLIC_HOST:8084"
@@ -196,7 +209,7 @@ deploy_manual_info:
   rules: [ { when: manual, allow_failure: false } ]
   script: |
     set -e
-    SERVICES="api-gateway pdf-ingest text-extraction pipeline-runner prompt-manager pipeline-api metrics history-service frontend"
+    SERVICES="api-gateway pdf-ingest text-extraction pipeline-runner prompt-manager pipeline-api metrics history-service frontend sharepoint-ingest"
     echo "Registry repo: $REGISTRY_REPO"
     echo
     echo "Pull diese Tags in Portainer (Images → Pull):"
