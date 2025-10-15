@@ -1,20 +1,25 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.7-labs
+ARG BASE_RUST=docker.io/library/rust:1.80-slim
+ARG BASE_RUNTIME=docker.io/library/debian:bookworm-slim
 
-FROM rust:1.75 as builder
-WORKDIR /app
+FROM --platform=$BUILDPLATFORM ${BASE_RUST} AS builder
+WORKDIR /src
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential pkg-config clang lld libssl-dev ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+COPY . .
+# Build mit Cache-Mounts wie gewohnt
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo build --release \
+      --manifest-path services/sharepoint-ingest/Cargo.toml --locked
 
-ENV RUSTFLAGS="-C target-cpu=native"
-
-COPY Cargo.toml Cargo.lock ./
-COPY shared ./shared
-COPY services ./services
-
-RUN cargo build --release -p sharepoint-ingest
-
-FROM gcr.io/distroless/cc-debian12
-WORKDIR /app
-COPY --from=builder /app/target/release/sharepoint-ingest /usr/local/bin/sharepoint-ingest
-
+FROM ${BASE_RUNTIME}
+# Für rustls reicht i.d.R. ca-certificates; libssl3 kannst du drinlassen für Konsistenz
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libssl3 && \
+    rm -rf /var/lib/apt/lists/*
+WORKDIR /usr/local/bin
+COPY --from=builder /src/target/release/sharepoint-ingest .
 ENV RUST_LOG=info
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/sharepoint-ingest"]
+CMD ["./sharepoint-ingest"]
