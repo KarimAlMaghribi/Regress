@@ -156,16 +156,34 @@ async fn main() -> std::io::Result<()> {
             std::io::Error::new(std::io::ErrorKind::Other, "db-pool-get")
         })?;
 
-        // Seitenweise Texte
+        // pdf_texts vollständig anlegen (für Neuinstallationen)
         let _ = client
             .execute(
                 "CREATE TABLE IF NOT EXISTS pdf_texts (
                     merged_pdf_id INTEGER NOT NULL,
                     page_no INTEGER NOT NULL,
                     text TEXT NOT NULL,
+                    ocr_used BOOLEAN NOT NULL DEFAULT false,
+                    char_count INTEGER NOT NULL DEFAULT 0,
+                    lang TEXT,
+                    has_bbox BOOLEAN,
+                    layout_json JSONB,
                     UNIQUE (merged_pdf_id, page_no)
                  )",
                 &[],
+            )
+            .await;
+
+        // Für bestehende Installationen Spalten nachziehen
+        let _ = client
+            .batch_execute(
+                "
+                ALTER TABLE pdf_texts ADD COLUMN IF NOT EXISTS ocr_used BOOLEAN NOT NULL DEFAULT false;
+                ALTER TABLE pdf_texts ADD COLUMN IF NOT EXISTS char_count INTEGER NOT NULL DEFAULT 0;
+                ALTER TABLE pdf_texts ADD COLUMN IF NOT EXISTS lang TEXT;
+                ALTER TABLE pdf_texts ADD COLUMN IF NOT EXISTS has_bbox BOOLEAN;
+                ALTER TABLE pdf_texts ADD COLUMN IF NOT EXISTS layout_json JSONB;
+                ",
             )
             .await;
 
@@ -307,7 +325,7 @@ async fn main() -> std::io::Result<()> {
                                         .prepare(
                                             "INSERT INTO pdf_texts (
                                                 merged_pdf_id, page_no, text, ocr_used, char_count, lang, has_bbox, layout_json
-                                             ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                                             ) VALUES ($1,$2,$3,$4,$5,$6::text,$7::bool,$8::jsonb)
                                              ON CONFLICT (merged_pdf_id, page_no)
                                              DO UPDATE SET text=EXCLUDED.text,
                                                            ocr_used=EXCLUDED.ocr_used,
