@@ -9,7 +9,8 @@ members = [
     "services/metrics",
     "services/pipeline-runner",
     "services/pipeline-api",
-    "services/upload-api"
+    "services/upload-api",
+    "services/sharepoint-ingest"
 ]
 resolver = "2"
 
