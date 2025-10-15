@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   Box,
   IconButton,
@@ -7,9 +7,6 @@ import {
   ListItemIcon,
   ListItemText,
   Divider,
-  Avatar,
-  Menu,
-  MenuItem,
 } from '@mui/material';
 import { Link, useLocation } from 'react-router-dom';
 import MenuIcon from '@mui/icons-material/Menu';
@@ -21,10 +18,8 @@ import HistoryIcon from '@mui/icons-material/History';
 import ListAltIcon from '@mui/icons-material/ListAlt';
 import SettingsIcon from '@mui/icons-material/Settings';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
-import DarkModeIcon from '@mui/icons-material/DarkMode';
 import AssessmentIcon from '@mui/icons-material/Assessment'; // neu: für "Analyses"
 import DomainIcon from '@mui/icons-material/Domain'; // neu: für "Tenants"
-import { ColorModeContext } from '../ColorModeContext';
 import { motion } from 'framer-motion';
 import { useTheme } from '@mui/material/styles';
 import logoWhite from '../imgs/logo_white.svg';
@@ -41,12 +36,10 @@ const collapsedWidth = 80;
 const expandedWidth = 240;
 
 export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: SidebarProps) {
-  const { toggle } = useContext(ColorModeContext);
   const theme = useTheme();
   const logo = theme.palette.mode === 'dark' ? logoWhite : logoBlack;
   const location = useLocation();
   const ref = useRef<HTMLDivElement>(null);
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
 
   useEffect(() => {
     const handleClick = (e: MouseEvent) => {
@@ -60,16 +53,16 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
 
   const primary = [
     { text: 'Dashboard', to: '/', icon: <DashboardIcon /> },
-    { text: 'Upload', to: '/upload', icon: <CloudUploadIcon /> },
-    { text: 'SharePoint Ingest', to: '/ingest', icon: <UploadIcon /> },
     { text: 'Pipeline', to: '/pipeline', icon: <BuildIcon /> },
     { text: 'Analyses', to: '/analyses', icon: <AssessmentIcon /> },
     { text: 'History', to: '/history', icon: <HistoryIcon /> },
     { text: 'Tenants', to: '/tenants', icon: <DomainIcon /> },
+    { text: 'Prompts', to: '/prompts', icon: <ListAltIcon />, badge: hasNewPrompts },
   ];
 
   const secondary = [
-    { text: 'Prompts', to: '/prompts', icon: <ListAltIcon />, badge: hasNewPrompts },
+    { text: 'Upload', to: '/upload', icon: <CloudUploadIcon /> },
+    { text: 'SharePoint Upload', to: '/ingest', icon: <UploadIcon /> },
     { text: 'Settings', to: '/settings', icon: <SettingsIcon /> },
     { text: 'Help', to: '/help', icon: <HelpOutlineIcon /> },
   ];
@@ -169,18 +162,6 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
           <Divider sx={{ my: 1 }} />
           {secondary.map(renderItem)}
         </List>
-        <Box sx={{ p: 1, display: 'flex', justifyContent: open ? 'space-between' : 'center', alignItems: 'center' }}>
-          <IconButton onClick={toggle} size="small">
-            <DarkModeIcon />
-          </IconButton>
-          <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} size="small" sx={{ ml: open ? 0 : 1 }}>
-            <Avatar sx={{ width: 32, height: 32 }}>U</Avatar>
-          </IconButton>
-          <Menu anchorEl={anchorEl} open={!!anchorEl} onClose={() => setAnchorEl(null)}>
-            <MenuItem onClick={() => setAnchorEl(null)}>Profil</MenuItem>
-            <MenuItem onClick={() => setAnchorEl(null)}>Logout</MenuItem>
-          </Menu>
-        </Box>
       </Box>
   );
 }

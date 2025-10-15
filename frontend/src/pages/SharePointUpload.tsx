@@ -35,6 +35,7 @@ import {
   fetchFolders,
   fetchJobs,
   triggerJobAction,
+  HttpError,
 } from '../utils/ingestApi';
 import type {
   FolderSummary,
@@ -42,7 +43,6 @@ import type {
   JobStatus,
   JobSummary,
 } from '../types/ingest';
-import axios from 'axios';
 
 const statusChipColor: Record<JobStatus, 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'> = {
   queued: 'info',
@@ -61,12 +61,12 @@ const jobActionMessages: Record<'pause' | 'resume' | 'cancel' | 'retry', string>
 };
 
 function getErrorMessage(error: unknown) {
-  if (axios.isAxiosError(error)) {
-    const status = error.response?.status;
+  if (error instanceof HttpError) {
+    const status = error.status;
     if (status === 401 || status === 403) {
       return 'Kein Zugriff';
     }
-    const data = error.response?.data as { message?: string } | string | undefined;
+    const data = error.data as { message?: string } | string | undefined;
     if (typeof data === 'string' && data.trim().length > 0) {
       return data;
     }
@@ -95,7 +95,7 @@ function TabPanel({ children, value, index }: TabPanelProps) {
   );
 }
 
-export default function SharePointIngest() {
+export default function SharePointUpload() {
   const [tab, setTab] = React.useState(0);
   const [folders, setFolders] = React.useState<FolderSummary[]>([]);
   const [folderMeta, setFolderMeta] = React.useState<{ base: string; total: number } | null>(null);
@@ -394,9 +394,9 @@ export default function SharePointIngest() {
   return (
     <Box>
       <PageHeader
-        title="SharePoint Ingest"
+        title="SharePoint Upload"
         icon={<UploadFileIcon />}
-        breadcrumb={[{ label: 'SharePoint Ingest' }]}
+        breadcrumb={[{ label: 'SharePoint Upload' }]}
         subtitle="Anlagen zusammenführen und Upload-Jobs steuern"
       />
 
@@ -414,7 +414,7 @@ export default function SharePointIngest() {
         <Tabs
           value={tab}
           onChange={(_, newValue) => setTab(newValue)}
-          aria-label="SharePoint Ingest Tabs"
+          aria-label="SharePoint Upload Tabs"
           variant="fullWidth"
         >
           <Tab label="Anlagen" />
