@@ -33,7 +33,23 @@ export default function App() {
 function AnimatedRoutes() {
   const location = useLocation();
   React.useEffect(() => {
-    console.log('Navigated to', location.pathname);
+    const titleMap: Array<{ pattern: RegExp; title: string }> = [
+      {pattern: /^\/$/, title: 'Dashboard'},
+      {pattern: /^\/run-view\//, title: 'Run Details'},
+      {pattern: /^\/upload$/, title: 'Upload'},
+      {pattern: /^\/prompts$/, title: 'Prompts'},
+      {pattern: /^\/pipeline$/, title: 'Pipelines'},
+      {pattern: /^\/pipeline\//, title: 'Pipeline'},
+      {pattern: /^\/analysis$/, title: 'Analysis'},
+      {pattern: /^\/analyses$/, title: 'Analyses'},
+      {pattern: /^\/result\//, title: 'Result'},
+      {pattern: /^\/history$/, title: 'History'},
+      {pattern: /^\/tenants$/, title: 'Tenants'},
+    ];
+
+    const baseTitle = 'Regress';
+    const matched = titleMap.find(({pattern}) => pattern.test(location.pathname));
+    document.title = matched ? `${baseTitle} - ${matched.title}` : baseTitle;
   }, [location.pathname]);
   return (
       <AnimatePresence mode="wait">
