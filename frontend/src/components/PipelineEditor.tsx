@@ -1,8 +1,10 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   Box, Table, TableHead, TableRow, TableCell, TableBody, IconButton,
-  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip
+  Button, Drawer, TextField, Select, MenuItem, Checkbox, Snackbar, Alert, Typography, Chip,
+  Paper, TableContainer, Stack, Tooltip
 } from '@mui/material';
+import { alpha } from '@mui/material/styles';
 import DeleteIcon from '@mui/icons-material/Delete';
 import AddIcon from '@mui/icons-material/Add';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
@@ -17,6 +19,34 @@ interface PromptOption { id: number; text: string; }
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const PROMPT_API = import.meta.env.VITE_PROMPT_URL || 'http://localhost:8082';
 const ROOT = 'Root';
+
+const typePalette: Record<string, { emoji: string; color: string; title: string; description: string }> = {
+  ExtractionPrompt: {
+    emoji: '🪄',
+    color: '#5A6CF0',
+    title: 'ExtractionPrompt',
+    description: 'Extrahiert gezielte Informationen aus Inhalten.',
+  },
+  ScoringPrompt: {
+    emoji: '🌟',
+    color: '#F2A052',
+    title: 'ScoringPrompt',
+    description: 'Bewertet Antworten und vergibt Scores.',
+  },
+  DecisionPrompt: {
+    emoji: '🔀',
+    color: '#4BA8A5',
+    title: 'DecisionPrompt',
+    description: 'Verzweigt basierend auf Entscheidungen.',
+  },
+};
+
+const fallbackTypeStyle = {
+  emoji: '🧩',
+  color: '#94A3B8',
+  title: 'Unbekannter Prompt',
+  description: 'Allgemeiner Pipelineschritt.',
+};
 
 /* ===== Helper: Store-Persist-Funktion (fallback-sicher) ===== */
 async function tryPersistPipeline() {
@@ -130,8 +160,9 @@ export default function PipelineEditor() {
   const routeColors = useRef<Record<string,string>>({});
   const getRouteColor = (routeKey: string) => {
     if (!routeColors.current[routeKey]) {
-      routeColors.current[routeKey] =
-          '#' + Math.floor(Math.random() * 0xFFFFFF).toString(16).padStart(6, '0');
+      const random = Math.floor(Math.random() * 0xffffff);
+      const pastel = (random & 0xfefefe) >> 1; // soften random color
+      routeColors.current[routeKey] = `#${pastel.toString(16).padStart(6, '0')}`;
     }
     return routeColors.current[routeKey];
   };
@@ -186,13 +217,24 @@ export default function PipelineEditor() {
     return () => window.removeEventListener('beforeunload', handler);
   }, [dirty]);
 
-  const fetchPrompts = (t: string) => {
-    if (promptOptions[t]) return;
+  const fetchPrompts = useCallback((t: string) => {
+    if (!t || promptOptions[t]) return;
     fetch(`${PROMPT_API}/prompts?type=${t}`)
-    .then(r => r.ok ? r.json() : [])
+    .then(r => (r.ok ? r.json() : []))
     .then((list: PromptOption[]) => setPromptOptions(o => ({ ...o, [t]: list })))
     .catch(() => setPromptOptions(o => ({ ...o, [t]: [] })));
-  };
+  }, [promptOptions]);
+
+  useEffect(() => {
+    const uniqueTypes = Array.from(
+        new Set(
+            steps
+            .map(s => s.type)
+            .filter((t): t is string => Boolean(t))
+        )
+    );
+    uniqueTypes.forEach(t => fetchPrompts(t));
+  }, [steps, fetchPrompts]);
 
   const saveNewStep = () => {
     if (!draft) return;
@@ -238,11 +280,11 @@ export default function PipelineEditor() {
 
   useEffect(() => {
     if (draft?.type) fetchPrompts(draft.type);
-  }, [draft?.type]);
+  }, [draft?.type, fetchPrompts]);
 
   useEffect(() => {
     if (edit?.type) fetchPrompts(edit.type);
-  }, [edit?.type]);
+  }, [edit?.type, fetchPrompts]);
 
   if (!currentPipelineId) {
     return <Typography>Select or create a pipeline</Typography>;
@@ -258,69 +300,212 @@ export default function PipelineEditor() {
     setDraft(null);
   };
 
+  const getTypeStyle = (type?: string) => (type ? typePalette[type] : undefined) || fallbackTypeStyle;
+
+  const resolvePromptText = (step: PipelineStep) => {
+    const list = promptOptions[step.type] || [];
+    return list.find(p => p.id === step.promptId)?.text;
+  };
+
   return (
-      <Box>
-        <Box sx={{ mb:2, display:'flex', gap:1, alignItems:'center' }}>
-          <Button onClick={() => { if (confirmIfDirty()) navigate('/pipeline'); }}>Zur Liste</Button>
-          <TextField
-              size="small"
-              label="Name"
-              value={name}
-              onChange={e=>debouncedUpdateName(e.target.value)}
-          />
-          <Button
-              startIcon={<AddIcon/>}
-              onClick={() => {
-                setInsertPos(steps.length);
-                setDraft({ id: uuid(), type:'ExtractionPrompt', promptId:0, active:true } as any);
+      <Box sx={{ display:'flex', flexDirection:'column', gap:3 }}>
+        <Box
+            sx={{
+              mb: 1,
+              p: 3,
+              borderRadius: 4,
+              backgroundColor: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              color: '#0f172a',
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 2,
+            }}
+        >
+          <Box>
+            <Typography variant="h4" sx={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1, color: '#0f172a' }}>
+              🧪 Pipeline Atelier
+            </Typography>
+            <Typography variant="subtitle1" sx={{ color: '#475569' }}>
+              {name
+                  ? `„${name}“ – Feinschliff für deine perfekte Analyse-Pipeline.`
+                  : 'Verleihe deiner neuen Pipeline einen klaren Namen.'}
+            </Typography>
+          </Box>
+          <Chip
+              label={dirty ? '⚠️ Ungespeicherte Änderungen' : '✅ Alles gespeichert'}
+              variant="outlined"
+              sx={{
+                fontWeight: 600,
+                fontSize: '0.9rem',
+                px: 1.5,
+                py: 1,
+                borderColor: dirty ? '#f59e0b' : '#22c55e',
+                color: dirty ? '#b45309' : '#15803d',
+                backgroundColor: dirty ? 'rgba(245, 158, 11, 0.08)' : 'rgba(34, 197, 94, 0.08)',
               }}
-          >
-            Step
-          </Button>
+          />
         </Box>
 
-        <Table className="table">
-          <TableHead>
-            <TableRow>
-              <TableCell>#</TableCell>
-              <TableCell></TableCell>
-              <TableCell>Type</TableCell>
-              <TableCell>Prompt</TableCell>
-              <TableCell>Yes-Key</TableCell>
-              <TableCell>No-Key</TableCell>
-              <TableCell>Route</TableCell>
-              <TableCell>Active</TableCell>
-              <TableCell></TableCell>
+        <Paper
+            sx={{
+              p: 2,
+              borderRadius: 4,
+              border: '1px solid #e2e8f0',
+              boxShadow: '0 10px 30px rgba(15, 23, 42, 0.04)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 2,
+              backgroundColor: '#ffffff',
+            }}
+        >
+          <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} alignItems={{ lg: 'center' }}>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ flexGrow: 1 }}>
+              <Button
+                  variant="outlined"
+                  color="secondary"
+                  onClick={() => { if (confirmIfDirty()) navigate('/pipeline'); }}
+                  sx={{ fontWeight: 600, borderRadius: 3 }}
+              >
+                ⬅️ Zur Pipeline-Übersicht
+              </Button>
+              <TextField
+                  size="small"
+                  label="Pipelinename"
+                  value={name}
+                  onChange={e => debouncedUpdateName(e.target.value)}
+                  fullWidth
+                  InputProps={{ sx: { fontWeight: 600 } }}
+              />
+            </Stack>
+            <Button
+                variant="contained"
+                color="primary"
+                startIcon={<AddIcon />}
+                onClick={() => {
+                  setInsertPos(steps.length);
+                  setDraft({ id: uuid(), type: 'ExtractionPrompt', promptId: 0, active: true } as any);
+                }}
+                sx={{ fontWeight: 700, borderRadius: 3, boxShadow: 'none', textTransform: 'none' }}
+            >
+              ✨ Schritt hinzufügen
+            </Button>
+          </Stack>
+        </Paper>
+
+        <TableContainer component={Paper} sx={{ borderRadius: 4, boxShadow: '0 12px 24px rgba(15, 23, 42, 0.05)', border: '1px solid #e2e8f0' }}>
+          <Table className="table" size="small">
+            <TableHead>
+            <TableRow sx={{ backgroundColor: alpha('#0f172a', 0.05) }}>
+              <TableCell sx={{ fontWeight: 700 }}>🔢 Nr.</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>⚙️ Aktionen</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>🎭 Prompt-Typ</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>📝 Vollständiger Prompt-Name</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>✅ Yes-Key</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>🚫 No-Key</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>🛣️ Route</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>💡 Aktiv</TableCell>
+              <TableCell sx={{ fontWeight: 700 }}>🔍 Details</TableCell>
             </TableRow>
-          </TableHead>
-          <TableBody>
+            </TableHead>
+            <TableBody>
             {layoutRows.map(r => {
               const idx = steps.findIndex(s => s.id === r.step.id);
+              const typeStyle = getTypeStyle(r.step.type);
+              const promptText = resolvePromptText(r.step);
+              const promptLabel = promptText ?? (typeof r.step.promptId === 'number' ? `Prompt #${r.step.promptId}` : 'Noch kein Prompt ausgewählt');
+              const routeKey = r.step.route || ROOT;
+              const routeTone = getRouteColor(routeKey);
               return (
                   <>
-                    <TableRow key={r.step.id}>
-                      <TableCell sx={{ pl: r.depth * 4 }}>{r.rowLabel}</TableCell>
-                      <TableCell>
-                        <IconButton size="small" onClick={() => moveStep(idx, idx - 1)}>
-                          <ArrowUpwardIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}>
-                          <ArrowDownwardIcon fontSize="small" />
-                        </IconButton>
-                        <IconButton size="small" onClick={() => {
-                          setInsertPos(idx + 1);
-                          setDraft({ ...(r.step as any), id: uuid() });
-                        }}>
-                          <AddIcon fontSize="small" />
-                        </IconButton>
+                    <TableRow
+                        key={r.step.id}
+                        sx={{
+                          backgroundColor: alpha(typeStyle.color, 0.04),
+                          '&:hover': { backgroundColor: alpha(typeStyle.color, 0.1) },
+                          transition: 'background-color 0.2s ease',
+                          borderLeft: `4px solid ${alpha(typeStyle.color, 0.45)}`,
+                        }}
+                    >
+                      <TableCell sx={{ width: 90 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', pl: r.depth * 2 }}>
+                          <Chip
+                              size="small"
+                              label={r.rowLabel}
+                              sx={{
+                                fontWeight: 600,
+                                bgcolor: alpha(typeStyle.color, 0.16),
+                                color: '#0f172a',
+                              }}
+                          />
+                        </Box>
                       </TableCell>
-                      <TableCell>{r.step.type}</TableCell>
-                      <TableCell>{r.step.promptId}</TableCell>
-                      <TableCell>{r.step.type==='DecisionPrompt' ? r.step.yesKey : '—'}</TableCell>
-                      <TableCell>{r.step.type==='DecisionPrompt' ? r.step.noKey : '—'}</TableCell>
-                      <TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        <Tooltip title="Nach oben verschieben">
+                          <IconButton size="small" onClick={() => moveStep(idx, idx - 1)}>
+                            <ArrowUpwardIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Nach unten verschieben">
+                          <IconButton size="small" onClick={() => moveStep(idx, idx + 1)}>
+                            <ArrowDownwardIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Neuen Schritt darunter einfügen">
+                          <IconButton size="small" onClick={() => {
+                            setInsertPos(idx + 1);
+                            setDraft({ ...(r.step as any), id: uuid() });
+                          }}>
+                            <AddIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell sx={{ minWidth: 220 }}>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                          <Typography sx={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 1, color: typeStyle.color }}>
+                            <span>{typeStyle.emoji}</span> {typeStyle.title}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {typeStyle.description}
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                      <TableCell sx={{ minWidth: 280 }}>
+                        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                          <Typography variant="subtitle2" sx={{ fontWeight: 700, whiteSpace: 'pre-line' }}>
+                            {promptLabel}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            {typeStyle.emoji} ID #{r.step.promptId ?? '—'} • Vollständiger Promptname im Überblick
+                          </Typography>
+                        </Box>
+                      </TableCell>
+                      <TableCell sx={{ minWidth: 120 }}>
+                        <Typography fontWeight={600} color={r.step.type === 'DecisionPrompt' ? 'success.main' : 'text.disabled'}>
+                          {r.step.type === 'DecisionPrompt' ? (r.step.yesKey || '—') : '—'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell sx={{ minWidth: 120 }}>
+                        <Typography fontWeight={600} color={r.step.type === 'DecisionPrompt' ? 'error.main' : 'text.disabled'}>
+                          {r.step.type === 'DecisionPrompt' ? (r.step.noKey || '—') : '—'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell sx={{ minWidth: 160 }}>
+                        <Chip
+                            label={routeKey === ROOT ? '🌳 Root' : `🛣️ ${routeKey}`}
+                            sx={{
+                              bgcolor: alpha(routeTone, 0.2),
+                              color: routeTone,
+                              fontWeight: 600,
+                              mb: 1,
+                            }}
+                        />
                         <Select
-                            value={r.step.route||ROOT}
+                            fullWidth
+                            size="small"
+                            value={routeKey}
                             onChange={e => handleRouteChange(r.step.id, e.target.value as string)}
                         >
                           {routeKeysUpTo(idx).map(k => (<MenuItem key={k} value={k}>{k}</MenuItem>))}
@@ -330,16 +515,29 @@ export default function PipelineEditor() {
                         <Checkbox
                             checked={r.step.active !== false}
                             onChange={e => usePipelineStore.getState().updateStep(r.step.id, { active: e.target.checked }).catch(err => setError(String(err)))}
+                            color="success"
                         />
                       </TableCell>
-                      <TableCell>
-                        {r.warnings.map((w, i) => (
-                            <Chip key={i} label={w} size="small" color="warning" sx={{ mr: 0.5 }} />
-                        ))}
-                        <IconButton onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}>
-                          <DeleteIcon />
-                        </IconButton>
-                        <Button size="small" onClick={() => setEdit(r.step)}>Edit</Button>
+                      <TableCell sx={{ minWidth: 180 }}>
+                        <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                          {r.warnings.map((w, i) => (
+                              <Chip
+                                  key={i}
+                                  label={w}
+                                  size="small"
+                                  variant="outlined"
+                                  sx={{ mr: 0.5, borderColor: '#f59e0b', color: '#b45309', backgroundColor: 'rgba(245, 158, 11, 0.08)' }}
+                              />
+                          ))}
+                          <Tooltip title="Schritt löschen">
+                            <IconButton color="error" onClick={() => removeStep(r.step.id).catch(err => setError(String(err)))}>
+                              <DeleteIcon />
+                            </IconButton>
+                          </Tooltip>
+                          <Button size="small" variant="outlined" onClick={() => setEdit(r.step)}>
+                            ✏️ Bearbeiten
+                          </Button>
+                        </Stack>
                       </TableCell>
                     </TableRow>
 
@@ -349,7 +547,7 @@ export default function PipelineEditor() {
                             <Box
                                 width="100%"
                                 height="4px"
-                                sx={{ backgroundColor: getRouteColor(r.step.route || r.step.yesKey || '') }}
+                                sx={{ backgroundColor: alpha(routeTone, 0.35) }}
                             />
                           </TableCell>
                         </TableRow>
@@ -359,6 +557,7 @@ export default function PipelineEditor() {
             })}
           </TableBody>
         </Table>
+        </TableContainer>
 
         {/* EDIT Drawer */}
         <Drawer open={!!edit} onClose={closeEdit} anchor="right">
