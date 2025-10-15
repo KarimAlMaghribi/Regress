@@ -493,15 +493,6 @@ export default function PipelineEditor() {
                         </Typography>
                       </TableCell>
                       <TableCell sx={{ minWidth: 160 }}>
-                        <Chip
-                            label={routeKey === ROOT ? '🌳 Root' : `🛣️ ${routeKey}`}
-                            sx={{
-                              bgcolor: alpha(routeTone, 0.2),
-                              color: routeTone,
-                              fontWeight: 600,
-                              mb: 1,
-                            }}
-                        />
                         <Select
                             fullWidth
                             size="small"
