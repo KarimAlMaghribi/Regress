@@ -365,11 +365,10 @@ export default function PipelineEditor() {
             <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} sx={{ flexGrow: 1 }}>
               <Button
                   variant="outlined"
-                  color="secondary"
                   onClick={() => { if (confirmIfDirty()) navigate('/pipeline'); }}
                   sx={{ fontWeight: 600, borderRadius: 3 }}
               >
-                ⬅️ BACK
+                ⬅️
               </Button>
               <TextField
                   size="small"
@@ -525,7 +524,7 @@ export default function PipelineEditor() {
                               <DeleteIcon />
                             </IconButton>
                           </Tooltip>
-                          <Button size="small" variant="outlined" onClick={() => setEdit(r.step)}>
+                          <Button size="small" onClick={() => setEdit(r.step)}>
                             ✏️
                           </Button>
                         </Stack>
