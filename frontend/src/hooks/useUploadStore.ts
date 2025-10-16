@@ -16,7 +16,7 @@ export const UPLOAD_API =
   runtimeEnv.INGEST_URL ||
   (import.meta.env.VITE_UPLOAD_API_URL as string | undefined) ||
   (import.meta.env.VITE_INGEST_URL as string | undefined) ||
-  'http://localhost:8081';
+    '/ingest';
 
 type AnyRun = Record<string, any>;
 
@@ -128,8 +128,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     const ingest = UPLOAD_API;
     const [uploadData, texts] = await Promise.all([
       fetch(`${ingest}/uploads`).then(r => r.json()),
-      // OCR-Status
-      fetch('http://localhost:8083/texts').then(r => r.json()).catch(() => [] as any[]),
+      // OCR-Status über Gateway/Frontend‑Nginx
+      fetch('/te/texts').then(r => r.json()).catch(() => [] as any[]),
     ]);
 
     const prev = get().entries;

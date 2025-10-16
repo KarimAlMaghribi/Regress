@@ -34,12 +34,21 @@ import PlayArrowIcon from "@mui/icons-material/PlayArrow";
 import ArticleIcon from "@mui/icons-material/Article"; // Extraktion
 import RuleIcon from "@mui/icons-material/Rule"; // Bewertung (Scoring)
 import AltRouteIcon from "@mui/icons-material/AltRoute"; // Entscheidung
-import AssessmentIcon from "@mui/icons-material/Assessment"; // Übersicht
 import CloseIcon from "@mui/icons-material/Close";
 
-import {type RunDetail, type RunStep, type TernaryLabel, useRunDetails} from "../hooks/useRunDetails";
-import {computeWeightedScore, scoreColor, ScoringWeightsCard} from "../components/ScoringWeightsCard";
+import {
+  type RunDetail,
+  type RunStep,
+  type TernaryLabel,
+  useRunDetails
+} from "../hooks/useRunDetails";
+import {
+  computeWeightedScore,
+  scoreColor,
+  ScoringWeightsCard
+} from "../components/ScoringWeightsCard";
 import PdfViewer from "../components/PdfViewer";
+import {UPLOAD_API} from "../hooks/useUploadStore";
 
 /* ===== Helfer ===== */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
@@ -66,7 +75,7 @@ function pagesSpanFromBatch(batch: any): { start: number; end: number } | undefi
   if (!raw.length) return undefined;
   raw.sort((a, b) => a - b);
   // Log nutzt 0-basierte Seiten → für UI auf 1-basiert mappen
-  return { start: raw[0] + 1, end: raw[raw.length - 1] + 1 };
+  return {start: raw[0] + 1, end: raw[raw.length - 1] + 1};
 }
 
 function findLogForStep(detail: RunDetail, step: RunStep): any | undefined {
@@ -97,7 +106,10 @@ function findLogForStep(detail: RunDetail, step: RunStep): any | undefined {
   return undefined;
 }
 
-function batchPageSpanForAttempt(detail: RunDetail, step: RunStep, attemptNo1: number): { start: number; end: number } | undefined {
+function batchPageSpanForAttempt(detail: RunDetail, step: RunStep, attemptNo1: number): {
+  start: number;
+  end: number
+} | undefined {
   const log = findLogForStep(detail, step);
   const batch = (log as any)?.result?.batches?.[attemptNo1 - 1];
   return pagesSpanFromBatch(batch);
@@ -136,14 +148,18 @@ function attemptEvidenceMeta(
   return {attemptNo, hasEvidence, label, pageToOpen};
 }
 
-/* ===== bestehende Helper ===== */
 function resolvePdfUrl(raw?: string | null, pdfId?: number | null): string | undefined {
-  const ipBase = "http://192.168.130.102:8081";
+  // immer über denselben Origin-Proxypfad gehen
+  const base = (UPLOAD_API || "/ingest").replace(/\/$/, "");
+  if (pdfId != null) return `${base}/pdf/${pdfId}`;
   if (raw && typeof raw === "string") {
-    // Host „pdf-ingest“ -> IP normalisieren
-    return raw.replace("http://pdf-ingest:8081", ipBase);
+    try {
+      const u = new URL(raw, window.location.origin);
+      // nur Pfad übernehmen, Host ignorieren
+      return `${base}${u.pathname}`;
+    } catch { /* ignore */
+    }
   }
-  if (pdfId != null) return `${ipBase}/pdf/${pdfId}`;
   return undefined;
 }
 
@@ -153,10 +169,10 @@ function normFromScore(score?: number | null): number | undefined {
 }
 
 function voteChip(v?: TernaryLabel) {
-  if (v === "yes")   return <Chip size="small" color="success" label="🟢 Ja" />;
-  if (v === "no")    return <Chip size="small" color="error"   label="🔴 Nein" />;
-  if (v === "unsure")return <Chip size="small"                 label="⚪ Unsicher" />;
-  return <Chip size="small" variant="outlined" label="—" />;
+  if (v === "yes") return <Chip size="small" color="success" label="🟢 Ja"/>;
+  if (v === "no") return <Chip size="small" color="error" label="🔴 Nein"/>;
+  if (v === "unsure") return <Chip size="small" label="⚪ Unsicher"/>;
+  return <Chip size="small" variant="outlined" label="—"/>;
 }
 
 /* Prompts hübsch anzeigen: Unterstriche entfernen, Texte vollständig anzeigen */
@@ -166,11 +182,11 @@ function prettyPromptName(name?: string | null) {
 }
 
 function PromptName({
-  name,
-  displayName,
-  maxWidth,
-  multiline = true,
-}: {
+                      name,
+                      displayName,
+                      maxWidth,
+                      multiline = true,
+                    }: {
   name?: string | null;
   displayName?: string | null;
   maxWidth?: number;
@@ -208,7 +224,7 @@ function formatRuntime(start?: string | null, end?: string | null) {
 
 /* ===== kleine UI-Bausteine ===== */
 
-function StatusChip({status}: {status?: string | null }) {
+function StatusChip({status}: { status?: string | null }) {
   const map: Record<string, {
     color: "default" | "success" | "error" | "warning" | "info";
     icon: React.ReactNode;
@@ -217,7 +233,11 @@ function StatusChip({status}: {status?: string | null }) {
     queued: {color: "info", icon: <HourglassEmptyIcon fontSize="small"/>, label: "Wartend"},
     running: {color: "warning", icon: <PlayArrowIcon fontSize="small"/>, label: "Laufend"},
     finalized: {color: "success", icon: <CheckCircleOutlineIcon fontSize="small"/>, label: "Final"},
-    completed: {color: "success", icon: <CheckCircleOutlineIcon fontSize="small"/>, label: "Abgeschlossen"},
+    completed: {
+      color: "success",
+      icon: <CheckCircleOutlineIcon fontSize="small"/>,
+      label: "Abgeschlossen"
+    },
     failed: {color: "error", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Fehler"},
     timeout: {color: "error", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Timeout"},
     canceled: {color: "default", icon: <ErrorOutlineIcon fontSize="small"/>, label: "Abgebrochen"},
@@ -277,13 +297,13 @@ function EvidenceModal({
   const current = page ?? 1;
 
   const byPage = React.useMemo(() => {
-    const items = { extraction: [] as any[], scoring: [] as any[], decision: [] as any[] };
+    const items = {extraction: [] as any[], scoring: [] as any[], decision: [] as any[]};
 
     (detail.steps ?? []).forEach(s => {
       (s.attempts ?? []).forEach(a => {
         const p = getAttemptPage(a);
         if (!page || p === page) {
-          const row = { step: s, attempt: a };
+          const row = {step: s, attempt: a};
           if (s.step_type === "Extraction") items.extraction.push(row);
           else if (s.step_type === "Score") items.scoring.push(row);
           else if (s.step_type === "Decision") items.decision.push(row);
@@ -300,7 +320,7 @@ function EvidenceModal({
 
   return (
       <Dialog open={open} onClose={onClose} maxWidth="xl" fullWidth>
-        <DialogTitle sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+        <DialogTitle sx={{display: "flex", alignItems: "center", gap: 1}}>
           📄 Seite
           <IconButton
               size="small"
@@ -313,17 +333,21 @@ function EvidenceModal({
               type="number"
               value={current}
               onChange={e => onChangePage?.(Math.max(1, Number(e.target.value) || 1))}
-              style={{ width: 64 }}
+              style={{width: 64}}
           />
           <IconButton size="small" onClick={() => onChangePage?.(current + 1)}>›</IconButton>
-          <Box sx={{ flex: 1 }} />
-          <IconButton size="small" onClick={onClose}><CloseIcon /></IconButton>
+          <Box sx={{flex: 1}}/>
+          <IconButton size="small" onClick={onClose}><CloseIcon/></IconButton>
         </DialogTitle>
 
-        <DialogContent dividers sx={{ p: 0 }}>
-          <Box sx={{ display: "flex", height: "80vh" }}>
+        <DialogContent dividers sx={{p: 0}}>
+          <Box sx={{display: "flex", height: "80vh"}}>
             {/* Links: PDF */}
-            <Box sx={{ flex: 1, minWidth: 0, borderRight: theme => `1px solid ${theme.palette.divider}` }}>
+            <Box sx={{
+              flex: 1,
+              minWidth: 0,
+              borderRight: theme => `1px solid ${theme.palette.divider}`
+            }}>
               {pdfUrl ? (
                   <PdfViewer
                       url={pdfUrl}
@@ -333,19 +357,20 @@ function EvidenceModal({
                       height="80vh"
                   />
               ) : (
-                  <Stack sx={{ height: "100%" }} alignItems="center" justifyContent="center">
-                    <Typography variant="body2" color="text.secondary">Kein PDF verfügbar</Typography>
+                  <Stack sx={{height: "100%"}} alignItems="center" justifyContent="center">
+                    <Typography variant="body2" color="text.secondary">Kein PDF
+                      verfügbar</Typography>
                   </Stack>
               )}
             </Box>
 
             {/* Rechts: Ergebnisse für diese Seite */}
-            <Box sx={{ width: 480, p: 2, overflowY: "auto" }}>
-              <Typography variant="subtitle1" sx={{ mb: 1 }}>Ergebnisse auf dieser Seite</Typography>
+            <Box sx={{width: 480, p: 2, overflowY: "auto"}}>
+              <Typography variant="subtitle1" sx={{mb: 1}}>Ergebnisse auf dieser Seite</Typography>
 
               {/* Extraktion */}
               <Section title="🧩 Extraktion">
-                {byPage.extraction.length === 0 ? <EmptyLine /> :
+                {byPage.extraction.length === 0 ? <EmptyLine/> :
                     <Table size="small">
                       <TableHead>
                         <TableRow>
@@ -373,7 +398,7 @@ function EvidenceModal({
 
               {/* Bewertung (Scoring) */}
               <Section title="🟢 Bewertung">
-                {byPage.scoring.length === 0 ? <EmptyLine /> :
+                {byPage.scoring.length === 0 ? <EmptyLine/> :
                     <Table size="small">
                       <TableHead>
                         <TableRow>
@@ -408,7 +433,7 @@ function EvidenceModal({
 
               {/* Entscheidung */}
               <Section title="⚖️ Entscheidung">
-                {byPage.decision.length === 0 ? <EmptyLine /> :
+                {byPage.decision.length === 0 ? <EmptyLine/> :
                     <Table size="small">
                       <TableHead>
                         <TableRow>
@@ -478,7 +503,8 @@ export default function RunDetailsPage() {
       const parsed = JSON.parse(raw);
       if (typeof parsed?.pdfId === "number") return parsed.pdfId;
       if (typeof parsed?.run?.pdf_id === "number") return parsed.run.pdf_id;
-    } catch {}
+    } catch {
+    }
     return undefined;
   })();
 
@@ -539,7 +565,7 @@ export default function RunDetailsPage() {
             page={modalPage}
             pdfUrl={resolvedPdfUrl}
             detail={data}
-            onChangePage={(p:number)=>setModalPage(p)}
+            onChangePage={(p: number) => setModalPage(p)}
         />
       </Container>
   );
@@ -554,13 +580,15 @@ function HeaderBar({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
         <Box>
           <Typography variant="h5">Analyse · Run</Typography>
           <Typography variant="body2" color="text.secondary">
-            Pipeline: {run.pipeline_id} • PDF-ID: {run.pdf_id} • Status: <StatusChip status={run.status}/>
+            Pipeline: {run.pipeline_id} • PDF-ID: {run.pdf_id} • Status: <StatusChip
+              status={run.status}/>
           </Typography>
         </Box>
         <Stack direction="row" gap={1}>
           {pdfUrl && (
               <Tooltip title="PDF in neuem Tab öffnen">
-                <IconButton size="small" onClick={() => window.open(pdfUrl!, "_blank", "noopener,noreferrer")}>
+                <IconButton size="small"
+                            onClick={() => window.open(pdfUrl!, "_blank", "noopener,noreferrer")}>
                   <OpenInNewIcon fontSize="small"/>
                 </IconButton>
               </Tooltip>
@@ -575,11 +603,11 @@ function HeaderBar({detail, pdfUrl}: { detail: RunDetail; pdfUrl?: string }) {
   );
 }
 
-function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number }) {
-  const { run } = detail;
+function SummaryCard({detail, scoreSum}: { detail: RunDetail; scoreSum: number }) {
+  const {run} = detail;
   const finalKeys = Object.keys(run.final_extraction ?? {});
-  const decKeys   = Object.keys(run.final_decisions ?? {});
-  const scKeys    = Object.keys(run.final_scores ?? {});
+  const decKeys = Object.keys(run.final_decisions ?? {});
+  const scKeys = Object.keys(run.final_scores ?? {});
 
   // 1) Versuche weiterhin computeWeightedScore zu nutzen (falls im Projekt bereits erweitert)
   const weighted = scKeys.length > 0 ? computeWeightedScore(detail) : null;
@@ -622,7 +650,7 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
             subheader={
               scorePercent != null ? (
                   <Stack spacing={0.25}>
-                    <Typography variant="subtitle2" sx={{ color: scoreTone, fontWeight: 600 }}>
+                    <Typography variant="subtitle2" sx={{color: scoreTone, fontWeight: 600}}>
                       Gesamtscore: {scorePercent!.toFixed(0)}%
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
@@ -635,7 +663,12 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
         <CardContent>
           <Stack spacing={1.5}>
             {/* Gesamtscore zentral */}
-            <Box sx={{display: "flex", alignItems: "center", justifyContent: "center", textAlign: "center"}}>
+            <Box sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              textAlign: "center"
+            }}>
               {scoreValue != null ? (
                   <Stack alignItems="center" spacing={1} sx={{width: "100%", maxWidth: 540}}>
                     <Typography variant="body2" color="text.secondary">Gesamtscore</Typography>
@@ -644,10 +677,10 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
                         value={scorePercent!}
                         sx={{
                           width: "100%",
-                          '& .MuiLinearProgress-bar': { bgcolor: scoreTone },
+                          '& .MuiLinearProgress-bar': {bgcolor: scoreTone},
                         }}
                     />
-                    <Typography variant="h5" sx={{ color: scoreTone, fontWeight: 600 }}>
+                    <Typography variant="h5" sx={{color: scoreTone, fontWeight: 600}}>
                       {scorePercent!.toFixed(0)}%
                     </Typography>
                   </Stack>
@@ -659,16 +692,19 @@ function SummaryCard({ detail, scoreSum }: { detail: RunDetail; scoreSum: number
             <Row label="Extrakte">🧩 {finalKeys.length} Felder</Row>
             <Row label="Entscheidungen">⚖️ {decKeys.length} Einträge</Row>
             <Row label="Score-Regeln">
-              🟢 {scKeys.length} Regeln • Summe: {fmtNum(scoreSum)} {hasTri && <Typography component="span" variant="caption" color="text.secondary"> (Tri‑State Σ)</Typography>}
+              🟢 {scKeys.length} Regeln • Summe: {fmtNum(scoreSum)} {hasTri &&
+                <Typography component="span" variant="caption" color="text.secondary"> (Tri‑State
+                  Σ)</Typography>}
             </Row>
 
-            <Divider sx={{ my: 1 }} />
+            <Divider sx={{my: 1}}/>
 
             <Row label="Laufzeit">⏱️ {runtime}</Row>
 
             {detail.run.error && (
                 <Row label="Fehler">
-                  <Chip size="small" color="error" icon={<ErrorOutlineIcon />} label={detail.run.error} />
+                  <Chip size="small" color="error" icon={<ErrorOutlineIcon/>}
+                        label={detail.run.error}/>
                 </Row>
             )}
           </Stack>
@@ -751,7 +787,7 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Bewertungs-Details" subheader="Alle Regeln, Stimmen & Evidenzen" />
+        <CardHeader title="Bewertungs-Details" subheader="Alle Regeln, Stimmen & Evidenzen"/>
         <CardContent>
           <Stack spacing={2}>
             {scoreSteps.map((s, idx) => {
@@ -762,18 +798,25 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
               return (
                   <Box key={s.id}>
                     <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                      <RuleIcon sx={{color: (lbl === "yes" ? "success.main" : lbl === "no" ? "error.main" : "text.secondary")}} fontSize="small"/>
-                      <Typography variant="subtitle2" sx={{display: "flex", alignItems: "center", gap: .5}}>
-                        <PromptName name={s.final_key ?? `Regel ${idx + 1}`} displayName={s.prompt_text} />
+                      <RuleIcon
+                          sx={{color: (lbl === "yes" ? "success.main" : lbl === "no" ? "error.main" : "text.secondary")}}
+                          fontSize="small"/>
+                      <Typography variant="subtitle2"
+                                  sx={{display: "flex", alignItems: "center", gap: .5}}>
+                        <PromptName name={s.final_key ?? `Regel ${idx + 1}`}
+                                    displayName={s.prompt_text}/>
                         · Ergebnis:&nbsp;
                         {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
                       </Typography>
                       <Box sx={{flex: 1}}/>
                       {/* Zeige Tri‑State‑Score als Balken (−1..+1 → 0..1), falls vorhanden */}
                       {typeof norm === "number" ? (
-                          <Stack direction="row" alignItems="center" gap={1} sx={{ minWidth: 200 }}>
+                          <Stack direction="row" alignItems="center" gap={1} sx={{minWidth: 200}}>
                             <LinearProgress variant="determinate" value={norm * 100}/>
-                            <Typography variant="caption" sx={{width: 40, textAlign: "right"}}>{fmtNum(norm)}</Typography>
+                            <Typography variant="caption" sx={{
+                              width: 40,
+                              textAlign: "right"
+                            }}>{fmtNum(norm)}</Typography>
                           </Stack>
                       ) : (
                           <ConfidenceBar value={s.final_confidence}/>
@@ -784,7 +827,7 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                       <TableHead>
                         <TableRow>
                           <TableCell width={56}>#</TableCell>
-                          <TableCell sx={{ width: "60%", minWidth: 420 }}>Erklärung</TableCell>
+                          <TableCell sx={{width: "60%", minWidth: 420}}>Erklärung</TableCell>
                           <TableCell width={120}>Stimme</TableCell>
                           <TableCell width={160}>Evidenz</TableCell>
                           <TableCell width={90}>Final</TableCell>
@@ -815,7 +858,7 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                           return (
                               <TableRow key={a.id ?? i} hover>
                                 <TableCell>{attemptNo}</TableCell>
-                                <TableCell sx={{ width: "60%", minWidth: 420 }}>
+                                <TableCell sx={{width: "60%", minWidth: 420}}>
                                   <PromptName name={a.candidate_key ?? "—"} multiline/>
                                 </TableCell>
                                 <TableCell>
@@ -824,7 +867,8 @@ function ScoreBreakdownCard({detail, onOpenEvidence}: {
                                 <TableCell>
                                   {hasEvidence
                                       ? <Chip size="small" variant="outlined" label={label}
-                                              onClick={() => pageToOpen != null && onOpenEvidence(pageToOpen)} clickable/>
+                                              onClick={() => pageToOpen != null && onOpenEvidence(pageToOpen)}
+                                              clickable/>
                                       : "—"}
                                 </TableCell>
                                 <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
@@ -866,7 +910,7 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                       variant="subtitle1"
                       sx={{display: "flex", alignItems: "center", gap: 1, mb: 1}}
                   >
-                    <ArticleIcon sx={{color: "primary.main"}} fontSize="small" />
+                    <ArticleIcon sx={{color: "primary.main"}} fontSize="small"/>
                     Extraktion
                   </Typography>
                   <Stack spacing={2}>
@@ -880,8 +924,8 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                             <Typography component="span" variant="body2">
                               · Ergebnis: {formatValue(s.final_value)}
                             </Typography>
-                            <Box sx={{flex: 1}} />
-                            <ConfidenceBar value={s.final_confidence} />
+                            <Box sx={{flex: 1}}/>
+                            <ConfidenceBar value={s.final_confidence}/>
                           </Stack>
                           <Table size="small">
                             <TableHead>
@@ -902,12 +946,14 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                                       <TableCell>{meta.attemptNo}</TableCell>
                                       <TableCell>{formatValue(a.candidate_value)}</TableCell>
                                       <TableCell>
-                                        <ConfidenceBar value={confidence} />
+                                        <ConfidenceBar value={confidence}/>
                                       </TableCell>
                                       <TableCell>
                                         {meta.hasEvidence
-                                            ? <Chip size="small" variant="outlined" label={meta.label}
-                                                    onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)} clickable/>
+                                            ?
+                                            <Chip size="small" variant="outlined" label={meta.label}
+                                                  onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)}
+                                                  clickable/>
                                             : "—"}
                                       </TableCell>
                                       <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
@@ -928,7 +974,7 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                       variant="subtitle1"
                       sx={{display: "flex", alignItems: "center", gap: 1, mb: 1}}
                   >
-                    <RuleIcon sx={{color: "success.main"}} fontSize="small" />
+                    <RuleIcon sx={{color: "success.main"}} fontSize="small"/>
                     Bewertung
                   </Typography>
                   <Stack spacing={2}>
@@ -937,18 +983,22 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                       return (
                           <Box key={s.id}>
                             <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                              <PromptName name={s.final_key ?? `Regel ${idx + 1}`} displayName={s.prompt_text} />
-                              <Typography component="span" variant="body2" sx={{display: "flex", alignItems: "center", gap: .5}}>
-                                · Ergebnis: {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
+                              <PromptName name={s.final_key ?? `Regel ${idx + 1}`}
+                                          displayName={s.prompt_text}/>
+                              <Typography component="span" variant="body2"
+                                          sx={{display: "flex", alignItems: "center", gap: .5}}>
+                                ·
+                                Ergebnis: {lbl ? voteChip(lbl) : (typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : "—")}
                               </Typography>
-                              <Box sx={{flex: 1}} />
-                              <ConfidenceBar value={s.final_confidence} />
+                              <Box sx={{flex: 1}}/>
+                              <ConfidenceBar value={s.final_confidence}/>
                             </Stack>
                             <Table size="small">
                               <TableHead>
                                 <TableRow>
                                   <TableCell width={56}>#</TableCell>
-                                  <TableCell sx={{ width: "60%", minWidth: 420 }}>Erklärung</TableCell>
+                                  <TableCell
+                                      sx={{width: "60%", minWidth: 420}}>Erklärung</TableCell>
                                   <TableCell width={120}>Stimme</TableCell>
                                   <TableCell width={160}>Evidenz</TableCell>
                                   <TableCell width={90}>Final</TableCell>
@@ -964,7 +1014,7 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                                   return (
                                       <TableRow key={a.id ?? i} hover>
                                         <TableCell>{meta.attemptNo}</TableCell>
-                                        <TableCell sx={{ width: "60%", minWidth: 420 }}>
+                                        <TableCell sx={{width: "60%", minWidth: 420}}>
                                           <PromptName name={a.candidate_key ?? "—"} multiline/>
                                         </TableCell>
                                         <TableCell>
@@ -972,8 +1022,10 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                                         </TableCell>
                                         <TableCell>
                                           {meta.hasEvidence
-                                              ? <Chip size="small" variant="outlined" label={meta.label}
-                                                      onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)} clickable/>
+                                              ? <Chip size="small" variant="outlined"
+                                                      label={meta.label}
+                                                      onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)}
+                                                      clickable/>
                                               : "—"}
                                         </TableCell>
                                         <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
@@ -995,7 +1047,7 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                       variant="subtitle1"
                       sx={{display: "flex", alignItems: "center", gap: 1, mb: 1}}
                   >
-                    <AltRouteIcon sx={{color: "warning.main"}} fontSize="small" />
+                    <AltRouteIcon sx={{color: "warning.main"}} fontSize="small"/>
                     Entscheidung
                   </Typography>
                   <Stack spacing={2}>
@@ -1007,10 +1059,11 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                                 displayName={s.prompt_text}
                             />
                             <Typography component="span" variant="body2">
-                              · Ergebnis: {typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : formatValue(s.final_value)}
+                              ·
+                              Ergebnis: {typeof s.final_value === "boolean" ? (s.final_value ? "✅ Ja" : "❌ Nein") : formatValue(s.final_value)}
                             </Typography>
-                            <Box sx={{flex: 1}} />
-                            <ConfidenceBar value={s.final_confidence} />
+                            <Box sx={{flex: 1}}/>
+                            <ConfidenceBar value={s.final_confidence}/>
                           </Stack>
                           <Table size="small">
                             <TableHead>
@@ -1031,8 +1084,10 @@ function DetailedResultFindingCard({detail, onOpenEvidence}: {
                                       <TableCell>{typeof v === "boolean" ? (v ? "✅ Ja" : "❌ Nein") : formatValue(a.candidate_value)}</TableCell>
                                       <TableCell>
                                         {meta.hasEvidence
-                                            ? <Chip size="small" variant="outlined" label={meta.label}
-                                                    onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)} clickable/>
+                                            ?
+                                            <Chip size="small" variant="outlined" label={meta.label}
+                                                  onClick={() => meta.pageToOpen != null && onOpenEvidence(meta.pageToOpen)}
+                                                  clickable/>
                                             : "—"}
                                       </TableCell>
                                       <TableCell>{a.is_final ? "⭐" : "—"}</TableCell>
@@ -1067,9 +1122,13 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
             {decisionSteps.map((s, idx) => (
                 <Box key={s.id}>
                   <Stack direction="row" alignItems="center" gap={1} sx={{mb: 0.5}}>
-                    <AltRouteIcon sx={{color: (s.final_value ? "success.main" : "error.main")}} fontSize="small"/>
-                    <Typography variant="subtitle2" sx={{display: "flex", alignItems: "center", gap: .5}}>
-                      <PromptName name={s.final_key ?? `Entscheidung ${idx + 1}`} displayName={s.prompt_text} /> · Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
+                    <AltRouteIcon sx={{color: (s.final_value ? "success.main" : "error.main")}}
+                                  fontSize="small"/>
+                    <Typography variant="subtitle2"
+                                sx={{display: "flex", alignItems: "center", gap: .5}}>
+                      <PromptName name={s.final_key ?? `Entscheidung ${idx + 1}`}
+                                  displayName={s.prompt_text}/> ·
+                      Ergebnis: {s.final_value ? "✅ Ja" : "❌ Nein"}
                     </Typography>
                     <Box sx={{flex: 1}}/>
                     <ConfidenceBar value={s.final_confidence}/>
@@ -1125,7 +1184,7 @@ function DecisionVotesCard({detail, onOpenEvidence}: {
 
 /* ===== Schritte (kompakte Übersicht) ===== */
 
-function StepsOverview({ detail }: { detail: RunDetail }) {
+function StepsOverview({detail}: { detail: RunDetail }) {
   const steps = (detail.steps ?? []).slice().sort((a, b) => {
     const ao = (a.order_index ?? 0) - (b.order_index ?? 0);
     return ao !== 0 ? ao : (a.id - b.id);
@@ -1148,7 +1207,8 @@ function StepsOverview({ detail }: { detail: RunDetail }) {
 
   return (
       <Card variant="outlined">
-        <CardHeader title="Schritte & Versuche" subheader="Kompakte Pipeline-Übersicht: Typ, Prompt, Value"/>
+        <CardHeader title="Schritte & Versuche"
+                    subheader="Kompakte Pipeline-Übersicht: Typ, Prompt, Value"/>
         <CardContent>
           <Table size="small">
             <TableHead>
@@ -1205,7 +1265,8 @@ function StepsOverview({ detail }: { detail: RunDetail }) {
 function Row({label, children}: { label: string; children: React.ReactNode }) {
   return (
       <Stack direction="row" spacing={1} alignItems="center">
-        <Typography variant="body2" sx={{minWidth: 150, color: "text.secondary"}}>{label}</Typography>
+        <Typography variant="body2"
+                    sx={{minWidth: 150, color: "text.secondary"}}>{label}</Typography>
         <Box sx={{flex: 1}}>{children}</Box>
       </Stack>
   );
