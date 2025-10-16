@@ -438,7 +438,15 @@ async fn mark_pending_db(
     }
 }
 
-async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
+async fn insert_result_db(
+    db: &Db,
+    entry: &HistoryEntry,
+    started_at: Option<DateTime<Utc>>,
+    finished_at: Option<DateTime<Utc>>,
+) -> i32 {
+    let finished_ts = finished_at.unwrap_or(entry.timestamp);
+    let started_override = started_at.clone();
+    let started_ts = started_at.unwrap_or(entry.timestamp);
     match db.query_opt(
         "SELECT id FROM analysis_history WHERE pdf_id=$1 AND status='running' \
          ORDER BY timestamp DESC LIMIT 1",
@@ -449,15 +457,18 @@ async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
             if let Err(e) = db.execute(
                 // finished_at beim Abschluss setzen
                 "UPDATE analysis_history \
-                 SET state=$2, pdf_url=$3, timestamp=$4, status='completed', score=$5, label=$6, finished_at=$4 \
+                 SET state=$2, pdf_url=$3, timestamp=$4, status='completed', score=$5, label=$6, finished_at=$7, \
+                     started_at = COALESCE($8, started_at) \
                  WHERE id=$1",
                 &[
                     &id,
                     &entry.result,
                     &entry.pdf_url,
-                    &entry.timestamp,
+                    &finished_ts,
                     &entry.score,
                     &entry.result_label,
+                    &finished_ts,
+                    &started_override,
                 ],
             ).await {
                 error!(%e, id, "failed to update running row to completed");
@@ -469,15 +480,17 @@ async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
                 // Fallback: direkt completed eintragen – Start/Ende = timestamp
                 "INSERT INTO analysis_history \
                  (pdf_id, pipeline_id, state, pdf_url, timestamp, status, score, label, started_at, finished_at) \
-                 VALUES ($1,$2,$3,$4,$5,'completed',$6,$7,$5,$5) RETURNING id",
+                 VALUES ($1,$2,$3,$4,$5,'completed',$6,$7,$8,$9) RETURNING id",
                 &[
                     &entry.pdf_id,
                     &entry.pipeline_id,
                     &entry.result,
                     &entry.pdf_url,
-                    &entry.timestamp,
+                    &finished_ts,
                     &entry.score,
                     &entry.result_label,
+                    &started_ts,
+                    &finished_ts,
                 ],
             ).await {
                 Ok(Some(row)) => row.get(0),
@@ -763,6 +776,17 @@ async fn start_kafka(
                                 Ok(data) => {
                                     let value = serde_json::to_value(&data).unwrap_or_default();
 
+                                    let started_at_ts = data
+                                        .started_at
+                                        .as_ref()
+                                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                                        .map(|dt| dt.with_timezone(&Utc));
+                                    let finished_at_ts = data
+                                        .finished_at
+                                        .as_ref()
+                                        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+                                        .map(|dt| dt.with_timezone(&Utc));
+
                                     let mut entry = HistoryEntry {
                                         id: 0,
                                         pdf_id: data.pdf_id,
@@ -770,14 +794,14 @@ async fn start_kafka(
                                         prompt: None,
                                         result: Some(value.clone()),
                                         pdf_url: format!("{}/pdf/{}", pdf_base, data.pdf_id),
-                                        timestamp: Utc::now(),
+                                        timestamp: finished_at_ts.unwrap_or_else(Utc::now),
                                         status: "completed".into(),
                                         score: data.overall_score.map(|f| f as f64),
                                         result_label: None,
                                         tenant_name: None,
                                     };
 
-                                    let id = insert_result_db(&db, &entry).await;
+                                    let id = insert_result_db(&db, &entry, started_at_ts, finished_at_ts).await;
                                     entry.id = id;
                                     if id > 0 {
                                         if let Some(updated) = fetch_entry_by_id(&db, id).await {
