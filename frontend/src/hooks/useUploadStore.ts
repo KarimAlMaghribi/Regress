@@ -1,7 +1,22 @@
 import create from 'zustand';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
-const INGEST = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+type RuntimeEnv = {
+  INGEST_URL?: string;
+  UPLOAD_API_URL?: string;
+};
+
+const runtimeEnv: RuntimeEnv =
+  (typeof window !== 'undefined'
+    ? ((window as unknown as { __ENV__?: RuntimeEnv }).__ENV__ ?? {})
+    : {});
+
+export const UPLOAD_API =
+  runtimeEnv.UPLOAD_API_URL ||
+  runtimeEnv.INGEST_URL ||
+  (import.meta.env.VITE_UPLOAD_API_URL as string | undefined) ||
+  (import.meta.env.VITE_INGEST_URL as string | undefined) ||
+  'http://localhost:8081';
 
 type AnyRun = Record<string, any>;
 
@@ -110,7 +125,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   autoRefreshId: undefined,
 
   async load() {
-    const ingest = INGEST;
+    const ingest = UPLOAD_API;
     const [uploadData, texts] = await Promise.all([
       fetch(`${ingest}/uploads`).then(r => r.json()),
       // OCR-Status
@@ -241,7 +256,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   },
 
   async downloadExtractedText(fileId) {
-    const res = await fetch(`${INGEST}/uploads/${fileId}/extract`);
+    const res = await fetch(`${UPLOAD_API}/uploads/${fileId}/extract`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const blob = new Blob([text], { type: 'text/plain' });

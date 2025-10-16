@@ -26,8 +26,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import PageHeader from '../components/PageHeader';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DownloadIcon from '@mui/icons-material/Download';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import { useUploadStore } from '../hooks/useUploadStore';
+import { UPLOAD_API, useUploadStore } from '../hooks/useUploadStore';
 import { usePipelineList } from '../hooks/usePipelineList';
 import { useTenants } from '../hooks/useTenants';
 import { alpha, useTheme } from '@mui/material/styles';
@@ -77,10 +76,7 @@ export default function Upload() {
     accept: { 'application/pdf': ['.pdf'], 'application/zip': ['.zip'] },
   });
 
-  const ingest = useMemo(() => {
-    // In der Praxis wird VITE_INGEST_URL auf "/ingest" oder "http://host:8081" gesetzt
-    return (import.meta.env.VITE_INGEST_URL || 'http://localhost:8081') as string;
-  }, []);
+  const ingest = useMemo(() => UPLOAD_API, []);
 
   const upload = () => {
     if (!files.length || !tenantId) return;

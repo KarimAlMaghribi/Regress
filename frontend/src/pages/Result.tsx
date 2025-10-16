@@ -4,12 +4,9 @@ import { useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import RunDetails from '../components/RunDetails';
 import { PipelineRunResult } from '../types/pipeline';
+import { UPLOAD_API } from '../hooks/useUploadStore';
 
 type ResultData = PipelineRunResult;
-
-
-
-
 export default function Result() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<ResultData | null>(null);
@@ -22,10 +19,7 @@ export default function Result() {
       .then(setData)
       .catch(e => console.error('load result', e));
   }, [id]);
-
-
-  const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-  const pdfUrl = `${ingest}/pdf/${id}`;
+  const pdfUrl = `${UPLOAD_API.replace(/\/$/, '')}/pdf/${id}`;
 
   return (
     <Box>
