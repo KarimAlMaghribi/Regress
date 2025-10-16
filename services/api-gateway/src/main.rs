@@ -174,8 +174,26 @@ async fn main() -> std::io::Result<()> {
             .route("/pipelines", web::to(pipelines_root))
             .service(web::resource("/pipelines/{tail:.*}").route(web::to(pipelines)))
             // ingest
-            .route("/ingest", web::to(ingest_root))
-            .service(web::resource("/ingest/{tail:.*}").route(web::to(ingest)))
+            .service(
+                web::resource("/ingest")
+                    .route(web::get().to(ingest_root))
+                    .route(web::post().to(ingest_root))
+                    .route(web::put().to(ingest_root))
+                    .route(web::delete().to(ingest_root))
+                    .route(web::patch().to(ingest_root))
+                    .route(web::head().to(ingest_root))
+                    .route(web::options().to(ingest_root)),
+            )
+            .service(
+                web::resource("/ingest/{tail:.*}")
+                    .route(web::get().to(ingest))
+                    .route(web::post().to(ingest))
+                    .route(web::put().to(ingest))
+                    .route(web::delete().to(ingest))
+                    .route(web::patch().to(ingest))
+                    .route(web::head().to(ingest))
+                    .route(web::options().to(ingest)),
+            )
     })
     .bind(("0.0.0.0", 8080))?
     .run()
