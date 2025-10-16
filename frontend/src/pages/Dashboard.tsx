@@ -166,64 +166,6 @@ export default function Dashboard() {
       />
 
       <Stack spacing={8}>
-        <Box
-          sx={{
-            position: 'relative',
-            overflow: 'hidden',
-            borderRadius: 'var(--radius-card)',
-            px: { xs: 4, md: 6 },
-            py: { xs: 5, md: 7 },
-            border: `1px solid ${alpha(theme.palette.primary.main, 0.25)}`,
-            background: `linear-gradient(130deg, ${alpha(theme.palette.primary.main, 0.1)}, ${alpha(
-              theme.palette.primary.dark,
-              0.45,
-            )})`,
-            color: theme.palette.mode === 'dark' ? 'common.white' : theme.palette.text.primary,
-          }}
-        >
-          <Box
-            sx={{
-              position: 'absolute',
-              inset: { xs: 'auto -25% -45% auto', md: '-40% -20% auto auto' },
-              width: { xs: '60%', md: '40%' },
-              aspectRatio: '1 / 1',
-              borderRadius: '50%',
-              background: alpha(theme.palette.common.white, 0.18),
-              filter: 'blur(0)',
-              pointerEvents: 'none',
-            }}
-          />
-          <Stack spacing={3} sx={{ position: 'relative' }}>
-            <Chip
-              icon={<CalendarTodayIcon fontSize="small" />}
-              label="Regress Insights"
-              color="info"
-              sx={{
-                alignSelf: 'flex-start',
-                backgroundColor: alpha(theme.palette.common.white, theme.palette.mode === 'dark' ? 0.16 : 0.2),
-                color: 'inherit',
-                fontWeight: 600,
-                letterSpacing: '0.04em',
-              }}
-            />
-            <Typography variant="h2" sx={{ maxWidth: { md: '55%' } }}>
-              Intelligente Qualitätssicherung für komplexe Unternehmenslandschaften
-            </Typography>
-            <Typography variant="body1" sx={{ maxWidth: { md: '50%' }, color: 'text.secondary' }}>
-              Nutzen Sie klar strukturierte Oberflächen, um Datenflüsse zu steuern, Governance sicherzustellen und
-              Ergebnisse im Team zu teilen – ohne Ihre etablierten Abläufe zu verändern.
-            </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <Button component={Link} to="/pipeline" variant="contained" color="primary" size="large">
-                Pipelines öffnen
-              </Button>
-              <Button component={Link} to="/analyses" variant="outlined" color="primary" size="large">
-                Analysen ansehen
-              </Button>
-            </Stack>
-          </Stack>
-        </Box>
-
         <Paper sx={{ p: { xs: 3, md: 4 } }}>
           <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 2 }}>
             Kennzahlen im Blick
