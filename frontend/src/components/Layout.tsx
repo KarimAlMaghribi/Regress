@@ -50,6 +50,8 @@ const quickNavigation: NavItem[] = [
   { label: 'Help', to: '/help' },
 ];
 
+const pagePadding = { xs: 2, sm: 3, lg: 5, xl: 8 } as const;
+
 export default function Layout({ children }: { children: React.ReactNode }) {
   const theme = useTheme();
   const { unread } = usePromptNotifications();
@@ -202,7 +204,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           borderBottom: `1px solid ${theme.palette.divider}`,
         }}
       >
-        <Container maxWidth="lg">
+        <Container maxWidth={false} sx={{ px: pagePadding }}>
           <Toolbar
             disableGutters
             sx={{
@@ -287,7 +289,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         </Container>
         {isMdUp && (
           <Box sx={{ borderTop: `1px solid ${theme.palette.divider}` }}>
-            <Container maxWidth="lg">
+            <Container maxWidth={false} sx={{ px: pagePadding }}>
               <Stack
                 direction="row"
                 spacing={1}
@@ -327,7 +329,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </Drawer>
 
       <Box component="main" sx={{ flexGrow: 1, py: { xs: 5, md: 8 } }}>
-        <Container maxWidth="lg">
+        <Container maxWidth={false} sx={{ px: pagePadding }}>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: { xs: 4, md: 6 } }}>{children}</Box>
         </Container>
       </Box>
@@ -343,7 +345,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             : 'var(--color-bg-alt)',
         }}
       >
-        <Container maxWidth="lg">
+        <Container maxWidth={false} sx={{ px: pagePadding }}>
           <Grid container spacing={4} sx={{ pb: { xs: 3, md: 4 } }}>
             <Grid item xs={12} md={4}>
               <Stack spacing={1.5}>
