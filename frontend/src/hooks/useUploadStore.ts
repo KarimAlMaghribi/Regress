@@ -3,6 +3,8 @@ import create from 'zustand';
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const INGEST = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
 
+export const UPLOAD_API = INGEST;
+
 type AnyRun = Record<string, any>;
 
 /* --------------------------- helpers: run merge --------------------------- */
