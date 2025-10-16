@@ -23,10 +23,6 @@ use tokio_stream::wrappers::{errors::BroadcastStreamRecvError, BroadcastStream};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-/* ============================================================================================
-   DB-Manager: NoTLS, Auto-Reconnect bei "connection closed" + Heartbeat (SELECT 1)
-   ============================================================================================ */
-
 /// Lightweight Postgres wrapper with automatic reconnection and retry logic.
 struct Db {
     dsn: String,
@@ -41,12 +37,10 @@ impl Db {
             client: RwLock::new(None),
         });
 
-        // Erste Verbindung versuchen
         if let Err(e) = db.reconnect().await {
             warn!(%e, "initial db connect failed; will retry on demand");
         }
 
-        // Heartbeat, damit Idle-Verbindung nicht stirbt (und Drops früh erkannt werden)
         let weak = Arc::downgrade(&db);
         tokio::spawn(async move {
             let secs: u64 = std::env::var("DB_PING_SECS")
@@ -113,8 +107,8 @@ impl Db {
         s.contains("closed") || s.contains("broken pipe") || s.contains("connection reset")
     }
 
-    /// query mit 1x Auto-Reconnect-Retry
-    /// Execute a query with a single retry when the connection is closed.
+    /// Execute a query with a single automatic reconnect attempt when the
+    /// connection has been closed.
     async fn query(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, tokio_postgres::Error> {
         let c1 = self.current().await?;
         match c1.query(sql, params).await {
@@ -129,7 +123,6 @@ impl Db {
         }
     }
 
-    /// execute mit 1x Auto-Reconnect-Retry
     /// Execute a statement with retry logic mirroring [`Self::query`].
     async fn execute(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64, tokio_postgres::Error> {
         let c1 = self.current().await?;
@@ -145,17 +138,13 @@ impl Db {
         }
     }
 
-    /// query_opt mit 1x Auto-Reconnect-Retry
-    /// Run a query and return only the first row if present.
+    /// Run a query and return only the first row if present, retrying once if
+    /// the connection drops.
     async fn query_opt(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>, tokio_postgres::Error> {
         let mut rows = self.query(sql, params).await?;
-        Ok(rows.pop()) // erste Zeile (oder None)
+        Ok(rows.pop())
     }
 }
-
-/* ============================================================================================
-   Types & AppState
-   ============================================================================================ */
 
 /// Record of an individual pipeline result stored for querying and streaming.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -170,7 +159,7 @@ struct HistoryEntry {
     status: String,
     score: Option<f64>,
     result_label: Option<String>,
-    // NEU: optionaler Tenant-Name (nur gesetzt, wenn aus View selektiert)
+    /// Optional tenant name when the backing view exposes multi-tenant metadata.
     tenant_name: Option<String>,
 }
 
@@ -181,10 +170,6 @@ struct AppState {
     tx: tokio::sync::broadcast::Sender<HistoryEntry>,
     pdf_base: String,
 }
-
-/* ============================================================================================
-   DB-Helfer (ohne gecachte Prepared Statements → reconnection-safe)
-   ============================================================================================ */
 
 /// Ensure the database tables exist and create views used by the UI.
 async fn ensure_schema_db(db: &Db) {
@@ -209,7 +194,6 @@ async fn ensure_schema_db(db: &Db) {
         &[],
     ).await;
 
-    // NEU: Start/Ende-Spalten hinzufügen
     let _ = db.execute(
         "ALTER TABLE analysis_history \
          ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
@@ -221,7 +205,6 @@ async fn ensure_schema_db(db: &Db) {
         &[],
     ).await;
 
-    // Backfill: started_at := timestamp; finished_at := timestamp wenn completed
     let _ = db.execute(
         "UPDATE analysis_history SET started_at = COALESCE(started_at, timestamp)",
         &[],
@@ -235,7 +218,7 @@ async fn ensure_schema_db(db: &Db) {
     info!("database schema ensured");
 }
 
-// Mapping für Selektierungen aus der View (enthält zusätzlich tenant_name)
+/// Convert a row from the tenant-aware view into the public history entry format.
 fn row_to_entry_with_tenant(r: Row) -> HistoryEntry {
     HistoryEntry {
         id: r.get(0),
@@ -248,7 +231,7 @@ fn row_to_entry_with_tenant(r: Row) -> HistoryEntry {
         status: r.get(6),
         score: r.get(7),
         result_label: r.get(8),
-        tenant_name: r.get(9), // tenant_name
+        tenant_name: r.get(9),
     }
 }
 
@@ -319,7 +302,6 @@ async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntr
     }
 }
 
-// NEU: gleiche Logik wie oben, aber über die View v_analysis_history_with_tenant + Tenant-Filter
 /// Fetch recent entries and group them by tenant when provided.
 async fn latest_by_status_with_tenant_db(
     db: &Db,
@@ -442,7 +424,6 @@ async fn mark_pending_db(
     timestamp: DateTime<Utc>,
 ) -> i32 {
     match db.query_opt(
-        // started_at direkt auf timestamp setzen
         "INSERT INTO analysis_history (pdf_id, pipeline_id, pdf_url, timestamp, status, started_at) \
          VALUES ($1,$2,$3,$4,'running',$4) RETURNING id",
         &[&pdf_id, &pipeline_id, &pdf_url, &timestamp],
@@ -469,7 +450,6 @@ async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
         Ok(Some(row)) => {
             let id: i32 = row.get(0);
             if let Err(e) = db.execute(
-                // finished_at beim Abschluss setzen
                 "UPDATE analysis_history \
                  SET state=$2, pdf_url=$3, timestamp=$4, status='completed', score=$5, label=$6, finished_at=$4 \
                  WHERE id=$1",
@@ -488,7 +468,6 @@ async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
         }
         Ok(None) => {
             match db.query_opt(
-                // Fallback: direkt completed eintragen – Start/Ende = timestamp
                 "INSERT INTO analysis_history \
                  (pdf_id, pipeline_id, state, pdf_url, timestamp, status, score, label, started_at, finished_at) \
                  VALUES ($1,$2,$3,$4,$5,'completed',$6,$7,$5,$5) RETURNING id",
@@ -520,10 +499,6 @@ async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
     }
 }
 
-/* ============================================================================================
-   HTTP-Handler
-   ============================================================================================ */
-
 /// Stream classification history entries via Server-Sent Events.
 async fn classifications(
     state: web::Data<AppState>,
@@ -539,7 +514,6 @@ async fn analyses(
     state: web::Data<AppState>,
     query: web::Query<HashMap<String, String>>,
 ) -> impl Responder {
-    // NEU: run_id-Suche (liefert Liste mit max. 1 Eintrag, kompatibel zum Frontend)
     if let Some(rid) = query.get("run_id") {
         match state.db.query_opt(
             "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label, tenant_name \
@@ -557,7 +531,6 @@ async fn analyses(
 
     let status = query.get("status").cloned();
     let tenant_like = query.get("tenant").cloned();
-    // View-basierte Ergebnisse (inkl. optionalem Tenant-Filter)
     let items = latest_by_status_with_tenant_db(&state.db, status, tenant_like).await;
     HttpResponse::Ok().json(items)
 }
@@ -566,7 +539,6 @@ async fn analyses(
 async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Responder {
     let pdf_id = path.into_inner();
     match state.db.query_opt(
-        // Meta-Felder mit selektieren
         "SELECT state, started_at, finished_at, status, pipeline_id, pdf_id \
          FROM analysis_history \
          WHERE pdf_id=$1 AND status='completed' \
@@ -581,7 +553,6 @@ async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Respon
             let pipeline_id: Uuid = r.get(4);
             let pdf_id_val: i32 = r.get(5);
 
-            // sicherstellen, dass wir ein Object haben
             if !value.is_object() {
                 value = json!({ "payload": value });
             }
@@ -615,7 +586,6 @@ async fn health(state: web::Data<AppState>) -> impl Responder {
     }
 }
 
-// NEU: Tenants auflisten
 /// List tenants that have produced history entries.
 async fn tenants_list(state: web::Data<AppState>) -> impl Responder {
     match state.db.query("SELECT id, name FROM tenants ORDER BY name ASC", &[]).await {
@@ -632,7 +602,6 @@ async fn tenants_list(state: web::Data<AppState>) -> impl Responder {
     }
 }
 
-// NEU: Tenant anlegen (idempotent per UNIQUE name)
 #[derive(Deserialize)]
 /// Request payload for registering a new tenant name.
 struct CreateTenantBody { name: String }
@@ -849,17 +818,14 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    // NoTLS + Auto-Reconnect
     let db = Db::new(settings.database_url.clone()).await;
 
-    // Schema sicherstellen (inkl. started_at/finished_at Backfill)
     ensure_schema_db(&db).await;
 
     let (tx, _) = tokio::sync::broadcast::channel(100);
     let pdf_base = std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
     let state = web::Data::new(AppState { db: db.clone(), tx: tx.clone(), pdf_base: pdf_base.clone() });
 
-    // Kafka-Consumer
     {
         let db_for_kafka = db.clone();
         let tx_for_kafka = tx.clone();
@@ -876,10 +842,8 @@ async fn main() -> std::io::Result<()> {
             .route("/classifications", web::get().to(classifications))
             .route("/analyses", web::get().to(analyses))
             .route("/results/{id}", web::get().to(result))
-            // WebSocket (Root)
             .route("/", web::get().to(ws_index))
             .route("/health", web::get().to(health))
-            // NEU: Tenants-API
             .route("/tenants", web::get().to(tenants_list))
             .route("/tenants", web::post().to(tenants_create))
     })

@@ -573,7 +573,6 @@ async fn main() -> std::io::Result<()> {
                 &[],
             )
             .await;
-        // NEU: tenant_id-Spalte sicherstellen (falls Migration in frischer DB noch nicht lief)
         let _ = client
             .execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS tenant_id UUID", &[])
             .await;

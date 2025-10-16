@@ -51,7 +51,7 @@ pub struct CanonicalField {
     pub confidence: f32,
     pub page: Option<u32>,
     pub quote: Option<String>,
-    /// NEU: für präzises Highlighting in der UI (falls vorhanden)
+    /// Optional bounding box for precise highlighting in the UI when available.
     pub bbox: Option<[f32; 4]>,
 }
 
