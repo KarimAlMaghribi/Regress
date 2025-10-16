@@ -24,7 +24,14 @@ export default function Result() {
   }, [id]);
 
 
-  const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+  const runtimeIngest =
+    typeof window !== 'undefined'
+      ? ((window as unknown as { __ENV__?: { INGEST_URL?: string } }).__ENV__?.INGEST_URL ?? undefined)
+      : undefined;
+  const ingest =
+    (runtimeIngest as string | undefined) ||
+    (import.meta.env.VITE_INGEST_URL as string | undefined) ||
+    'http://localhost:8081';
   const pdfUrl = `${ingest}/pdf/${id}`;
 
   return (

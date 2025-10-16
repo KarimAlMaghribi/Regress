@@ -64,8 +64,15 @@ export default function Upload() {
   });
 
   const ingest = useMemo(() => {
-    // In der Praxis wird VITE_INGEST_URL auf "/ingest" oder "http://host:8081" gesetzt
-    return (import.meta.env.VITE_INGEST_URL || 'http://localhost:8081') as string;
+    const runtimeIngest =
+      typeof window !== 'undefined'
+        ? ((window as unknown as { __ENV__?: { INGEST_URL?: string } }).__ENV__?.INGEST_URL ?? undefined)
+        : undefined;
+    return (
+      (runtimeIngest as string | undefined) ||
+      (import.meta.env.VITE_INGEST_URL as string | undefined) ||
+      'http://localhost:8081'
+    );
   }, []);
 
   const upload = () => {
