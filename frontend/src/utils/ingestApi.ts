@@ -9,23 +9,18 @@ import {
 
 type RuntimeEnv = {
   INGEST_API_URL?: string;
-  INGEST_ADMIN_TOKEN?: string;
   INGEST_POLL_MS?: string;
 };
 
 const runtimeEnv: RuntimeEnv =
-  (typeof window !== 'undefined' &&
-    ((window as unknown as { __ENV__?: RuntimeEnv }).__ENV__ ?? {})) ||
-  {};
+    (typeof window !== 'undefined' &&
+        ((window as unknown as { __ENV__?: RuntimeEnv }).__ENV__ ?? {})) ||
+    {};
 
 const BASE_URL =
-  (import.meta.env.VITE_INGEST_API_BASE as string | undefined) ||
-  runtimeEnv.INGEST_API_URL ||
-  '/ingest';
-
-const ADMIN_TOKEN =
-  (import.meta.env.VITE_INGEST_ADMIN_TOKEN as string | undefined) ||
-  runtimeEnv.INGEST_ADMIN_TOKEN;
+    (import.meta.env.VITE_INGEST_API_BASE as string | undefined) ||
+    runtimeEnv.INGEST_API_URL ||
+    '/ingest';
 
 const client = axios.create({
   baseURL: BASE_URL,
@@ -34,18 +29,8 @@ const client = axios.create({
   },
 });
 
-client.interceptors.request.use((config) => {
-  if (ADMIN_TOKEN) {
-    config.headers = config.headers ?? {};
-    if (!config.headers.Authorization) {
-      config.headers.Authorization = `Bearer ${ADMIN_TOKEN}`;
-    }
-  }
-  return config;
-});
-
 const pollRaw = Number(
-  runtimeEnv.INGEST_POLL_MS ??
+    runtimeEnv.INGEST_POLL_MS ??
     (import.meta.env.VITE_INGEST_POLL_MS as string | undefined) ??
     '3000',
 );
