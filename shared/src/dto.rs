@@ -221,16 +221,3 @@ pub struct UploadDto {
     pub tenant_id: Uuid,
 }
 
-#[derive(Deserialize)]
-/// Query parameters used when listing uploads.
-struct ListQuery {
-    tenant: Option<String>,
-    status: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-
-/// Helper used by Serde to default boolean flags to `true`.
-fn default_true() -> bool {
-    true
-}
