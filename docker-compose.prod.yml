@@ -92,7 +92,7 @@ services:
       MESSAGE_BROKER_URL: "kafka:9092"
       SERVER_PORT: "8090"
       # Für klickbare PDF-Links in der UI (vom Browser erreichbar)
-      PDF_INGEST_URL: "http://${PUBLIC_HOST:-192.168.130.102}:8081"
+      PDF_INGEST_URL: "http://${PUBLIC_HOST:-helium.adesso.claims}:8081"
       RUST_LOG: "info,history_service=debug"
       RUST_BACKTRACE: "1"
     ports: ["8090:8090"]
@@ -103,7 +103,7 @@ services:
     image: docker.adesso.claims/regress:frontend-release
     networks: [backendnet]
     environment:
-      PUBLIC_HOST: "${PUBLIC_HOST:-192.168.130.102}"
+      PUBLIC_HOST: "${PUBLIC_HOST:-helium.adesso.claims}"
       VITE_INGEST_URL:  "http://${PUBLIC_HOST}:8080"
       VITE_HISTORY_WS:  "ws://${PUBLIC_HOST}:8090"
       VITE_API_URL:     "http://${PUBLIC_HOST}:8084"

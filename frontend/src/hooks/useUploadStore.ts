@@ -1,16 +1,6 @@
 import create from 'zustand';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
-type RuntimeEnv = {
-  INGEST_URL?: string;
-  UPLOAD_API_URL?: string;
-};
-
-const runtimeEnv: RuntimeEnv =
-  (typeof window !== 'undefined'
-    ? ((window as unknown as { __ENV__?: RuntimeEnv }).__ENV__ ?? {})
-    : {});
-
 const INGEST = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
 
 type AnyRun = Record<string, any>;
@@ -123,15 +113,15 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     const ingest = INGEST;
     const [uploadData, texts] = await Promise.all([
       fetch(`${ingest}/uploads`).then(r => r.json()),
-      // OCR-Status über Gateway/Frontend‑Nginx
-      fetch('/te/texts').then(r => r.json()).catch(() => [] as any[]),
+      fetch('http://localhost:8083/texts').then(r => r.json()),
+      fetch('http://localhost:8083/texts').then(r => r.json()).catch(() => [] as any[]),
     ]);
 
     const prev = get().entries;
     const ocrIds = (texts as { id: number }[]).map(t => t.id);
 
-    // map neue Einträge
-    const nextRaw: UploadEntry[] = (uploadData as any[]).map((d: any) => ({
+      // map neue Einträge
+      const nextRaw: UploadEntry[] = (uploadData as any[]).map((d: any) => ({
       id: d.id,
       pdfId: d.pdf_id ?? null,
       status: d.status,
@@ -143,6 +133,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       result: undefined,
       runId: undefined,
     }));
+    set({ entries: mapped });
 
     // merge mit Bestand (behalte richer run / UI state)
     const byId = new Map<number, UploadEntry>(prev.map(e => [e.id, e]));
@@ -163,38 +154,38 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     set({ entries: merged, error: undefined });
   },
 
-  startAutoRefresh(intervalMs) {
-    if (get().autoRefreshId) return;
-    const id = window.setInterval(async () => {
-      try {
-        await get().load();
-        set({ error: undefined });
-        const allReady = get().entries.every(e => e.status === 'ready');
-        if (allReady) {
-          clearInterval(id);
-          set({ autoRefreshId: undefined });
+    startAutoRefresh(intervalMs) {
+      if (get().autoRefreshId) return;
+      const id = window.setInterval(async () => {
+        try {
+          await get().load();
+          set({ error: undefined });
+          const allReady = get().entries.every(e => e.status === 'ready');
+          if (allReady) {
+            clearInterval(id);
+            set({ autoRefreshId: undefined });
+          }
+        } catch (err) {
+          console.error('auto refresh', err);
+          set({ error: (err as Error).message });
         }
-      } catch (err) {
-        console.error('auto refresh', err);
-        set({ error: (err as Error).message });
+      }, intervalMs);
+      set({ autoRefreshId: id });
+    },
+
+    stopAutoRefresh() {
+      const id = get().autoRefreshId;
+      if (id) {
+        clearInterval(id);
+        set({ autoRefreshId: undefined });
       }
-    }, intervalMs);
-    set({ autoRefreshId: id });
-  },
+    },
 
-  stopAutoRefresh() {
-    const id = get().autoRefreshId;
-    if (id) {
-      clearInterval(id);
-      set({ autoRefreshId: undefined });
-    }
-  },
-
-  updateFile(id, changes) {
-    set(state => ({
-      entries: state.entries.map(e => (e.id === id ? { ...e, ...changes } : e)),
-    }));
-  },
+    updateFile(id, changes) {
+      set(state => ({
+        entries: state.entries.map(e => (e.id === id ? { ...e, ...changes } : e)),
+      }));
+    },
 
   async runPipeline(fileId, pipelineId) {
     // UI: markiere loading
@@ -202,37 +193,38 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       entries: state.entries.map(e => e.id === fileId ? { ...e, loading: true } : e),
     }));
 
-    const res = await fetch(`${API}/pipelines/${pipelineId}/run`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ file_id: fileId }),
-    });
+      const res = await fetch(`${API}/pipelines/${pipelineId}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ file_id: fileId }),
+      });
 
-    // Debug: Status + Header + Raw Body
-    console.log('⛽️ Pipeline run response:', {
-      status: res.status,
-      statusText: res.statusText,
-      headers: Object.fromEntries(res.headers.entries()),
-    });
+      // Log status and headers of the response
+      // Debug: Status + Header + Raw Body
+      console.log('⛽️ Pipeline run response:', {
+        status: res.status,
+        statusText: res.statusText,
+        headers: Object.fromEntries(res.headers.entries()),
+      });
 
     const raw = await res.text();
     console.log('📦 Raw response body:', raw);
 
-    // Try parse JSON if announced as JSON
-    const contentType = res.headers.get('content-type') || '';
-    let data: AnyRun | undefined = undefined;
-    if (raw && contentType.includes('application/json')) {
-      try {
-        data = JSON.parse(raw);
-        console.log('🔍 Parsed JSON:', data);
-      } catch (e) {
-        console.warn('⚠️ JSON.parse fehlgeschlagen:', e);
+      // Try parse JSON if announced as JSON
+      const contentType = res.headers.get('content-type') || '';
+      let data: AnyRun | undefined = undefined;
+      if (raw && contentType.includes('application/json')) {
+        try {
+          data = JSON.parse(raw);
+          console.log('🔍 Parsed JSON:', data);
+        } catch (e) {
+          console.warn('⚠️ JSON.parse fehlgeschlagen:', e);
+        }
+      } else if (!raw) {
+        console.log('ℹ️ Empty response body, skipping JSON parse');
+      } else {
+        console.log('ℹ️ Non-JSON response body, skipping JSON parse');
       }
-    } else if (!raw) {
-      console.log('ℹ️ Empty response body, skipping JSON parse');
-    } else {
-      console.log('ℹ️ Non-JSON response body, skipping JSON parse');
-    }
 
     // Update UI row: remove loading & merge possible result
     set(state => ({
@@ -244,24 +236,24 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       }),
     }));
 
-    if (!res.ok) {
-      // Oberfläche informiert, Fehler fliegt hoch
-      throw new Error(((data as any)?.error as string) || `HTTP ${res.status}`);
-    }
-  },
+      if (!res.ok) {
+        // Oberfläche informiert, Fehler fliegt hoch
+        throw new Error(((data as any)?.error as string) || `HTTP ${res.status}`);
+      }
+    },
 
-  async downloadExtractedText(fileId) {
-    const res = await fetch(`${UPLOAD_API}/uploads/${fileId}/extract`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const text = await res.text();
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `extracted_${fileId}.txt`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  },
-}));
+    async downloadExtractedText(fileId) {
+      const res = await fetch(`${INGEST}/uploads/${fileId}/extract`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      const blob = new Blob([text], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `extracted_${fileId}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    },
+  }));
