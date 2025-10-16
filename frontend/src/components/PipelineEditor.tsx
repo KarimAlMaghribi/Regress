@@ -23,19 +23,19 @@ const ROOT = 'Root';
 const typePalette: Record<string, { emoji: string; color: string; title: string; description: string }> = {
   ExtractionPrompt: {
     emoji: '🪄',
-    color: '#5A6CF0',
+    color: '#006ec7',
     title: 'ExtractionPrompt',
     description: 'Extrahiert gezielte Informationen aus Inhalten.',
   },
   ScoringPrompt: {
     emoji: '🌟',
-    color: '#F2A052',
+    color: '#006ec7',
     title: 'ScoringPrompt',
     description: 'Bewertet Antworten und vergibt Scores.',
   },
   DecisionPrompt: {
     emoji: '🔀',
-    color: '#4BA8A5',
+    color: '#006ec7',
     title: 'DecisionPrompt',
     description: 'Verzweigt basierend auf Entscheidungen.',
   },
@@ -43,7 +43,7 @@ const typePalette: Record<string, { emoji: string; color: string; title: string;
 
 const fallbackTypeStyle = {
   emoji: '🧩',
-  color: '#94A3B8',
+  color: '#006ec7',
   title: 'Unbekannter Prompt',
   description: 'Allgemeiner Pipelineschritt.',
 };

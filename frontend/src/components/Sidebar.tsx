@@ -13,9 +13,9 @@ import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import AssessmentIcon from '@mui/icons-material/Assessment'; // neu: für "Analyses"
 import DomainIcon from '@mui/icons-material/Domain'; // neu: für "Tenants"
 import { motion } from 'framer-motion';
-import { useTheme } from '@mui/material/styles';
-import logoWhite from '../imgs/logo_white.png';
-import logoBlack from '../imgs/logo_black.png';
+import { alpha, useTheme } from '@mui/material/styles';
+import logoWhite from '../imgs/logo_white.svg';
+import logoBlack from '../imgs/logo_black.svg';
 
 export interface SidebarProps {
   open: boolean;
@@ -26,6 +26,13 @@ export interface SidebarProps {
 
 const collapsedWidth = 80;
 const expandedWidth = 240;
+
+interface SidebarItem {
+  text: string;
+  to: string;
+  icon: React.ReactNode;
+  badge?: boolean;
+}
 
 export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: SidebarProps) {
   const theme = useTheme();
@@ -43,7 +50,7 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
     return () => document.removeEventListener('mousedown', handleClick);
   }, [open, onClose]);
 
-  const primary = [
+  const primary: SidebarItem[] = [
     { text: 'Dashboard', to: '/', icon: <DashboardIcon /> },
     { text: 'Pipeline', to: '/pipeline', icon: <BuildIcon /> },
     { text: 'Analyses', to: '/analyses', icon: <AssessmentIcon /> },
@@ -52,15 +59,18 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
     { text: 'Prompts', to: '/prompts', icon: <ListAltIcon />, badge: hasNewPrompts },
   ];
 
-  const secondary = [
+  const secondary: SidebarItem[] = [
     { text: 'Upload', to: '/upload', icon: <CloudUploadIcon /> },
     { text: 'SharePoint Upload', to: '/ingest', icon: <UploadIcon /> },
     { text: 'Settings', to: '/settings', icon: <SettingsIcon /> },
     { text: 'Help', to: '/help', icon: <HelpOutlineIcon /> },
   ];
 
-  const renderItem = (item: any) => {
+  const renderItem = (item: SidebarItem) => {
     const active = location.pathname === item.to;
+    const itemColor = theme.palette.primary.main;
+    const hoverBackground = alpha(itemColor, theme.palette.mode === 'dark' ? 0.25 : 0.12);
+    const activeBackground = alpha(itemColor, theme.palette.mode === 'dark' ? 0.3 : 0.16);
     return (
         <ListItemButton
             key={item.text}
@@ -74,27 +84,52 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
               borderRadius: 1,
               position: 'relative',
               mb: 0.5,
+              color: active ? itemColor : 'text.primary',
+              transition: 'background-color 0.3s ease, color 0.3s ease',
               ...(active && {
                 borderLeft: '4px solid',
-                borderColor: 'primary.main',
-                color: 'primary.main',
+                borderColor: itemColor,
+                backgroundColor: activeBackground,
+                '& .MuiListItemIcon-root': {
+                  color: itemColor,
+                },
+                '& .MuiTypography-root': {
+                  color: itemColor,
+                },
               }),
               '&:hover': {
-                backgroundColor: 'rgba(0,0,0,0.05)',
+                backgroundColor: hoverBackground,
+                color: itemColor,
+                '& .MuiListItemIcon-root': {
+                  color: itemColor,
+                },
+                '& .MuiTypography-root': {
+                  color: itemColor,
+                },
               },
             }}
         >
           <ListItemIcon
               sx={{
                 minWidth: 32,
-                color: active ? 'primary.main' : 'inherit',
+                color: itemColor,
                 mr: open ? 2 : 0,
                 justifyContent: 'center',
+                transition: 'color 0.3s ease',
               }}
           >
             {item.icon}
           </ListItemIcon>
-          {open && <ListItemText primary={item.text} />}
+          {open && (
+              <ListItemText
+                  primary={item.text}
+                  primaryTypographyProps={{
+                    sx: {
+                      transition: 'color 0.3s ease',
+                    },
+                  }}
+              />
+          )}
           {item.badge && (
               <Box
                   sx={{
@@ -134,9 +169,11 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
         <Box
             sx={{
               display: 'flex',
-              justifyContent: open ? 'space-between' : 'center',
+              flexDirection: 'column',
               alignItems: 'center',
+              width: '100%',
               p: 1,
+              gap: 1,
             }}
         >
           <Box
@@ -145,7 +182,11 @@ export default function Sidebar({ open, onToggle, onClose, hasNewPrompts }: Side
               alt="Regress logo"
               sx={{ width: open ? 120 : 40, transition: 'width 0.2s' }}
           />
-          <IconButton onClick={onToggle} size="small">
+          <IconButton
+              onClick={onToggle}
+              size="small"
+              sx={{ alignSelf: open ? 'flex-end' : 'center' }}
+          >
             <MenuIcon />
           </IconButton>
         </Box>
