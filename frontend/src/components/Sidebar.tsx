@@ -14,7 +14,7 @@ import AssessmentIcon from '@mui/icons-material/Assessment'; // neu: für "Analy
 import DomainIcon from '@mui/icons-material/Domain'; // neu: für "Tenants"
 import { motion } from 'framer-motion';
 import { useTheme } from '@mui/material/styles';
-import logoWhite from '../imgs/logo_white.svg';
+import logoWhite from '../imgs/logo_white.png';
 import logoBlack from '../imgs/logo_black.svg';
 
 export interface SidebarProps {
