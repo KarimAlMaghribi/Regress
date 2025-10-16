@@ -54,8 +54,18 @@ export DATABASE_URL="postgres://regress:<YOUR_PASSWORD>@localhost:5432/regress"
 ```
 Failure to connect to the database results in `500 Internal Server Error`
 responses when accessing `/prompts`.
-Pipeline execution requires `OPENAI_API_KEY` for calling the OpenAI API.
-Defaults are provided in `docker-compose.yml`. The metrics service reads from the same database.
+Pipeline execution requires `OPENAI_API_KEY` for calling the Azure OpenAI API.
+The system supports the following deployments out of the box and selects the active one via the
+settings UI:
+
+* `https://claims-manager.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview`
+* `https://claims-manager.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview`
+* `https://claims-manager.openai.azure.com/openai/deployments/gpt-5-mini/chat/completions?api-version=2025-01-01-preview`
+* `https://claims-manager.openai.azure.com/openai/deployments/gpt-5-chat/chat/completions?api-version=2025-01-01-preview`
+* `https://claims-manager.openai.azure.com/openai/responses?api-version=2025-04-01-preview`
+
+All of them reuse the same `OPENAI_API_KEY` environment variable. Defaults are provided in
+`docker-compose.yml`. The metrics service reads from the same database.
 
 ## Usage
 

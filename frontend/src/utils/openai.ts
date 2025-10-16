@@ -21,6 +21,8 @@ export interface RunMetricsResult {
   cost: number;
 }
 
+const CHAT_MODEL = process.env.OPENAI_CHAT_MODEL ?? 'gpt-4o-mini';
+
 const evaluateFunc = {
   name: 'evaluate_answer',
   parameters: {
@@ -40,7 +42,7 @@ export async function runPromptWithMetrics(prompt: string, input: string): Promi
   ];
 
   const completion = await openai.chat.completions.create({
-    model: 'gpt-4-turbo',
+    model: CHAT_MODEL,
     messages: baseMessages,
     logprobs: 1,
     n: 3,
@@ -49,7 +51,7 @@ export async function runPromptWithMetrics(prompt: string, input: string): Promi
 
   const rankingPrompt = `Here are three answers (A, B, C). Which is best and why? Reply with {\"choice\": \"A\"|\"B\"|\"C\", \"reason\": \"...\"}.\nA: ${answers[0]}\nB: ${answers[1]}\nC: ${answers[2]}`;
   const ranking = await openai.chat.completions.create({
-    model: 'gpt-4-turbo',
+    model: CHAT_MODEL,
     messages: [{ role: 'user', content: rankingPrompt }],
     response_format: { type: 'json_object' },
   });
@@ -59,7 +61,7 @@ export async function runPromptWithMetrics(prompt: string, input: string): Promi
 
   const evalPrompt = `Evaluate the following answer for correctness, relevance and completeness (0-1 scale). Return JSON {correctness:number,relevance:number,completeness:number}`;
   const evaluation = await openai.chat.completions.create({
-    model: 'gpt-4-turbo',
+    model: CHAT_MODEL,
     messages: [
       { role: 'system', content: evalPrompt },
       { role: 'user', content: bestAnswer },
