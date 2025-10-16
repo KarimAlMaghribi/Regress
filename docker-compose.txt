@@ -104,7 +104,7 @@ services:
     networks: [ backendnet ]
     environment:
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
-      OPENAI_API_KEY: "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"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       PROMPT_MANAGER_URL: http://prompt-manager:8082
       MESSAGE_BROKER_URL: kafka:9092
       RUST_LOG: info,pipeline_runner=debug,openai_client=debug
@@ -127,7 +127,7 @@ services:
     networks: [ backendnet ]
     environment:
       DATABASE_URL: postgres://regress:nITj%22%2B0%28f89F@regressdb:5432/regress
-      OPENAI_API_KEY: "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"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
     ports: [ "8084:8084" ]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
