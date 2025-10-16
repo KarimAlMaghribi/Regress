@@ -1,12 +1,20 @@
 import create from 'zustand';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
-const runtimeIngest =
-  typeof window !== 'undefined'
-    ? ((window as unknown as { __ENV__?: { INGEST_URL?: string } }).__ENV__?.INGEST_URL ?? undefined)
-    : undefined;
-const UPLOAD_API =
-  (runtimeIngest as string | undefined) ||
+type RuntimeEnv = {
+  INGEST_URL?: string;
+  UPLOAD_API_URL?: string;
+};
+
+const runtimeEnv: RuntimeEnv =
+  (typeof window !== 'undefined'
+    ? ((window as unknown as { __ENV__?: RuntimeEnv }).__ENV__ ?? {})
+    : {});
+
+export const UPLOAD_API =
+  runtimeEnv.UPLOAD_API_URL ||
+  runtimeEnv.INGEST_URL ||
+  (import.meta.env.VITE_UPLOAD_API_URL as string | undefined) ||
   (import.meta.env.VITE_INGEST_URL as string | undefined) ||
   'http://localhost:8081';
 
