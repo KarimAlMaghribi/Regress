@@ -51,18 +51,8 @@ const ALL_METRICS: (keyof MetricRecord)[] = [
   'avgLogprob',
 ];
 
-const COLORS = [
-  '#3A86FF',
-  '#6C5DD3',
-  '#FF6B6B',
-  '#0CA678',
-  '#F9C74F',
-  '#F9844A',
-  '#8338EC',
-  '#0081A7',
-  '#D00000',
-  '#4361EE',
-];
+const PRIMARY_COLOR = '#006ec7';
+const COLORS = Array(ALL_METRICS.length).fill(PRIMARY_COLOR);
 
 export default function PromptAnalysis() {
   const isMobile = useMediaQuery('(max-width:900px)');
@@ -257,7 +247,7 @@ export default function PromptAnalysis() {
               {metrics.map((m, idx) => (
                 <Line key={m} type="monotone" dataKey={m} stroke={COLORS[idx % COLORS.length]} dot={false} />
               ))}
-              <Brush dataKey="timestamp" height={20} stroke="#8884d8" />
+              <Brush dataKey="timestamp" height={20} stroke={PRIMARY_COLOR} />
             </LineChart>
           </ResponsiveContainer>
         )}

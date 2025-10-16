@@ -1,4 +1,6 @@
-import { createTheme, responsiveFontSizes } from '@mui/material';
+import { alpha, createTheme, darken, responsiveFontSizes } from '@mui/material/styles';
+
+const PRIMARY_COLOR = '#006ec7';
 
 export const getDesignTokens = (mode: 'light' | 'dark') => ({
   palette: {
@@ -6,13 +8,13 @@ export const getDesignTokens = (mode: 'light' | 'dark') => ({
     ...(mode === 'light'
       ? {
           background: { default: '#F5F7FA', paper: '#FFFFFF' },
-          primary: { main: '#3A86FF' },
+          primary: { main: PRIMARY_COLOR },
         }
       : {
-          background: { default: '#14161A', paper: 'rgba(255,255,255,0.05)' },
-          primary: { main: '#6C5DD3' },
+          background: { default: '#14161A', paper: alpha('#FFFFFF', 0.04) },
+          primary: { main: PRIMARY_COLOR },
         }),
-    secondary: { main: '#FF6B6B' },
+    secondary: { main: PRIMARY_COLOR },
   },
   components: {
     MuiPaper: {
@@ -21,7 +23,7 @@ export const getDesignTokens = (mode: 'light' | 'dark') => ({
           backdropFilter: 'blur(12px)',
           backgroundImage:
             mode === 'dark'
-              ? 'linear-gradient(135deg, rgba(108,93,211,0.08), rgba(58,134,255,0.06))'
+              ? `linear-gradient(135deg, ${alpha(PRIMARY_COLOR, 0.14)}, ${alpha(PRIMARY_COLOR, 0.08)})`
               : undefined,
           padding: 24,
           borderRadius: 8,
@@ -32,7 +34,10 @@ export const getDesignTokens = (mode: 'light' | 'dark') => ({
     MuiButton: {
       styleOverrides: {
         containedPrimary: {
-          background: 'linear-gradient(135deg, #6C5DD3 0%, #3A86FF 100%)',
+          backgroundColor: PRIMARY_COLOR,
+          '&:hover': {
+            backgroundColor: darken(PRIMARY_COLOR, 0.1),
+          },
         },
       },
     },

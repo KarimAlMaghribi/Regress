@@ -35,7 +35,7 @@ export default function Analysis() {
             <XAxis dataKey="timestamp" />
             <YAxis />
             <Tooltip />
-            <Line type="monotone" dataKey="accuracy" stroke="#6C5DD3" />
+            <Line type="monotone" dataKey="accuracy" stroke="#006ec7" />
           </LineChart>
         </ResponsiveContainer>
       </Paper>
