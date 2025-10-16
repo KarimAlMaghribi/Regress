@@ -17,6 +17,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import { useUploadStore } from '../hooks/useUploadStore';
 import { usePipelineList } from '../hooks/usePipelineList';
 import { useTenants } from '../hooks/useTenants';
+import { getUploadApiBase } from '../utils/runtimeEnv';
 
 declare global { interface Window { __ENV__?: any } }
 
@@ -63,10 +64,7 @@ export default function Upload() {
     accept: { 'application/pdf': ['.pdf'], 'application/zip': ['.zip'] },
   });
 
-  const ingest = useMemo(() => {
-    // In der Praxis wird VITE_INGEST_URL auf "/ingest" oder "http://host:8081" gesetzt
-    return (import.meta.env.VITE_INGEST_URL || 'http://localhost:8081') as string;
-  }, []);
+  const ingest = useMemo(() => getUploadApiBase(), []);
 
   const upload = () => {
     if (!files.length || !tenantId) return;

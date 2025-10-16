@@ -1,7 +1,9 @@
 import create from 'zustand';
 
+import { getUploadApiBase } from '../utils/runtimeEnv';
+
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
-const INGEST = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+const UPLOAD_API = getUploadApiBase();
 
 type AnyRun = Record<string, any>;
 
@@ -110,7 +112,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   autoRefreshId: undefined,
 
   async load() {
-    const ingest = INGEST;
+    const ingest = UPLOAD_API;
     const [uploadData, texts] = await Promise.all([
       fetch(`${ingest}/uploads`).then(r => r.json()),
       // OCR-Status
@@ -241,7 +243,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   },
 
   async downloadExtractedText(fileId) {
-    const res = await fetch(`${INGEST}/uploads/${fileId}/extract`);
+    const res = await fetch(`${UPLOAD_API}/uploads/${fileId}/extract`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const blob = new Blob([text], { type: 'text/plain' });

@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import RunDetails from '../components/RunDetails';
 import { PipelineRunResult } from '../types/pipeline';
+import { getUploadApiBase } from '../utils/runtimeEnv';
 
 type ResultData = PipelineRunResult;
 
@@ -24,7 +25,7 @@ export default function Result() {
   }, [id]);
 
 
-  const ingest = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+  const ingest = getUploadApiBase();
   const pdfUrl = `${ingest}/pdf/${id}`;
 
   return (
