@@ -11,12 +11,8 @@ use shared::dto::{
 };
 use shared::openai_client;
 use shared::openai_settings;
-use sqlx::{
-    postgres::PgPoolOptions,
-    types::time::{format_description::well_known::Rfc3339, OffsetDateTime},
-    PgPool,
-    Row,
-};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 use std::collections::HashMap;
 use std::time::Duration;
