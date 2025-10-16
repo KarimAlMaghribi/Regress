@@ -5,7 +5,7 @@ WORKDIR /app
 
 ENV RUSTFLAGS="-C target-cpu=native"
 
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY shared ./shared
 COPY services ./services
 
