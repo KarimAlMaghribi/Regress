@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use shared::dto::{PdfUploaded, PipelineConfig, PipelineStep, PromptType, RunStep};
 use shared::kafka;
+use shared::openai_settings;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -158,37 +159,6 @@ async fn store_config(pool: &PgPool, id: Uuid, cfg: &PipelineConfig) -> Result<(
     }
 }
 
-const OPENAI_VERSION_KEY: &str = "openai.version";
-
-const OPENAI_VERSION_OPTIONS: &[(&str, &str)] = &[
-    (
-        "gpt-4o",
-        "https://claims-manager.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01-preview",
-    ),
-    (
-        "gpt-4o-mini",
-        "https://claims-manager.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions?api-version=2025-01-01-preview",
-    ),
-    (
-        "responses",
-        "https://claims-manager.openai.azure.com/openai/responses?api-version=2025-04-01-preview",
-    ),
-];
-
-const DEFAULT_OPENAI_VERSION: &str = OPENAI_VERSION_OPTIONS[0].0;
-
-fn is_valid_openai_version(key: &str) -> bool {
-    OPENAI_VERSION_OPTIONS.iter().any(|(k, _)| *k == key)
-}
-
-fn openai_endpoint_for(key: &str) -> &'static str {
-    OPENAI_VERSION_OPTIONS
-        .iter()
-        .find(|(k, _)| *k == key)
-        .map(|(_, url)| *url)
-        .unwrap_or(OPENAI_VERSION_OPTIONS[0].1)
-}
-
 async fn fetch_setting(pool: &PgPool, key: &str) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = $1")
         .bind(key)
@@ -222,23 +192,23 @@ struct UpdateOpenAiVersion {
 }
 
 async fn get_openai_version(data: web::Data<AppState>) -> impl Responder {
-    match fetch_setting(&data.pool, OPENAI_VERSION_KEY).await {
-        Ok(Some(key)) if is_valid_openai_version(&key) => {
+    match fetch_setting(&data.pool, openai_settings::OPENAI_VERSION_KEY).await {
+        Ok(Some(key)) if openai_settings::is_valid_openai_version(&key) => {
             HttpResponse::Ok().json(OpenAiVersionResponse {
                 key: key.clone(),
-                endpoint: openai_endpoint_for(&key),
+                endpoint: openai_settings::endpoint_for(&key),
             })
         }
         Ok(Some(invalid)) => {
             warn!(key = %invalid, "invalid openai version found in settings, falling back to default");
             HttpResponse::Ok().json(OpenAiVersionResponse {
-                key: DEFAULT_OPENAI_VERSION.to_string(),
-                endpoint: openai_endpoint_for(DEFAULT_OPENAI_VERSION),
+                key: openai_settings::DEFAULT_OPENAI_VERSION.to_string(),
+                endpoint: openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION),
             })
         }
         Ok(None) => HttpResponse::Ok().json(OpenAiVersionResponse {
-            key: DEFAULT_OPENAI_VERSION.to_string(),
-            endpoint: openai_endpoint_for(DEFAULT_OPENAI_VERSION),
+            key: openai_settings::DEFAULT_OPENAI_VERSION.to_string(),
+            endpoint: openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION),
         }),
         Err(e) => {
             error!(%e, "failed to read openai version setting");
@@ -251,16 +221,16 @@ async fn put_openai_version(
     data: web::Data<AppState>,
     payload: Json<UpdateOpenAiVersion>,
 ) -> impl Responder {
-    if !is_valid_openai_version(&payload.version) {
+    if !openai_settings::is_valid_openai_version(&payload.version) {
         return HttpResponse::BadRequest().json(json!({
             "error": "invalid openai version",
         }));
     }
 
-    match store_setting(&data.pool, OPENAI_VERSION_KEY, &payload.version).await {
+    match store_setting(&data.pool, openai_settings::OPENAI_VERSION_KEY, &payload.version).await {
         Ok(()) => HttpResponse::Ok().json(OpenAiVersionResponse {
             key: payload.version.clone(),
-            endpoint: openai_endpoint_for(&payload.version),
+            endpoint: openai_settings::endpoint_for(&payload.version),
         }),
         Err(e) => {
             error!(%e, "failed to store openai version setting");

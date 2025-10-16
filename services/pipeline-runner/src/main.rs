@@ -7,6 +7,8 @@ use serde_json::{json, Value};
 use shared::dto::{
     PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TextPosition, TernaryLabel,
 };
+use shared::openai_client;
+use shared::openai_settings;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use std::collections::HashMap;
 use std::time::Duration;
@@ -159,6 +161,20 @@ async fn app_main() -> anyhow::Result<()> {
 
     let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_prs_run_final_type ON pipeline_run_steps (run_id, is_final, prompt_type)").execute(&pool).await;
     let _ = sqlx::query("CREATE INDEX IF NOT EXISTS idx_prs_run_final_key  ON pipeline_run_steps (run_id, final_key) WHERE is_final = TRUE").execute(&pool).await;
+
+    let _ = sqlx::query(
+        "CREATE TABLE IF NOT EXISTS app_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT now()
+        )",
+    )
+    .execute(&pool)
+    .await;
+
+    if let Err(e) = configure_openai_from_settings(&pool).await {
+        warn!(%e, "failed to load OpenAI configuration from settings, using defaults");
+    }
 
     // ---------- Kafka-Clients mit robusten Settings für lange Läufe ----------
     let consumer: StreamConsumer = ClientConfig::new()
@@ -948,4 +964,33 @@ async fn app_main() -> anyhow::Result<()> {
             }
         }
     }
+}
+
+async fn configure_openai_from_settings(pool: &PgPool) -> anyhow::Result<()> {
+    let stored = sqlx::query_scalar::<_, String>(
+        "SELECT value FROM app_settings WHERE key = $1",
+    )
+    .bind(openai_settings::OPENAI_VERSION_KEY)
+    .fetch_optional(pool)
+    .await?;
+
+    let mut selected = openai_settings::DEFAULT_OPENAI_VERSION.to_string();
+    if let Some(value) = stored {
+        if openai_settings::is_valid_openai_version(&value) {
+            selected = value;
+        } else {
+            warn!(key = %value, "invalid OpenAI version found in app_settings, using default");
+        }
+    }
+
+    let option = openai_settings::option_for(&selected);
+    openai_client::configure_openai_defaults(option.model, option.endpoint);
+    info!(
+        version = %selected,
+        model = option.model,
+        endpoint = option.endpoint,
+        "configured OpenAI defaults"
+    );
+
+    Ok(())
 }

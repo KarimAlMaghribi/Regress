@@ -4042,6 +4042,7 @@ dependencies = [
  "anyhow",
  "awc",
  "config",
+ "once_cell",
  "openai",
  "rdkafka",
  "reqwest",
