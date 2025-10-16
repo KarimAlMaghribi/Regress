@@ -14,7 +14,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import PageHeader from '../components/PageHeader';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DownloadIcon from '@mui/icons-material/Download';
-import { useUploadStore } from '../hooks/useUploadStore';
+import { UPLOAD_API, useUploadStore } from '../hooks/useUploadStore';
 import { usePipelineList } from '../hooks/usePipelineList';
 import { useTenants } from '../hooks/useTenants';
 
@@ -63,17 +63,7 @@ export default function Upload() {
     accept: { 'application/pdf': ['.pdf'], 'application/zip': ['.zip'] },
   });
 
-  const ingest = useMemo(() => {
-    const runtimeIngest =
-      typeof window !== 'undefined'
-        ? ((window as unknown as { __ENV__?: { INGEST_URL?: string } }).__ENV__?.INGEST_URL ?? undefined)
-        : undefined;
-    return (
-      (runtimeIngest as string | undefined) ||
-      (import.meta.env.VITE_INGEST_URL as string | undefined) ||
-      'http://localhost:8081'
-    );
-  }, []);
+  const ingest = useMemo(() => UPLOAD_API, []);
 
   const upload = () => {
     if (!files.length || !tenantId) return;
