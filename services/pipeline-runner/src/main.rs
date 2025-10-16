@@ -11,7 +11,7 @@ use shared::dto::{
 };
 use shared::openai_client;
 use shared::openai_settings;
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use sqlx::{postgres::PgPoolOptions, types::time::{format_description::well_known::Rfc3339, OffsetDateTime}, PgPool};
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -921,16 +921,19 @@ async fn app_main() -> anyhow::Result<()> {
                         }
 
                         // 4) Event für UI/Monitoring – mit run_id
-                        let (started_at, finished_at) = match sqlx::query!(
+                        let (started_at, finished_at) = match sqlx::query_as::<
+                            _,
+                            (Option<OffsetDateTime>, Option<OffsetDateTime>),
+                        >(
                             "SELECT started_at, finished_at FROM pipeline_runs WHERE id = $1",
-                            run_id
                         )
+                        .bind(run_id)
                         .fetch_optional(&pool)
                         .await
                         {
-                            Ok(Some(row)) => (
-                                row.started_at.map(|dt| dt.to_rfc3339()),
-                                row.finished_at.map(|dt| dt.to_rfc3339()),
+                            Ok(Some((started, finished))) => (
+                                started.and_then(|dt| dt.format(&Rfc3339).ok()),
+                                finished.and_then(|dt| dt.format(&Rfc3339).ok()),
                             ),
                             Ok(None) => (None, None),
                             Err(e) => {
