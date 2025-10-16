@@ -11,7 +11,12 @@ use shared::dto::{
 };
 use shared::openai_client;
 use shared::openai_settings;
-use sqlx::{postgres::PgPoolOptions, types::time::{format_description::well_known::Rfc3339, OffsetDateTime}, PgPool};
+use sqlx::{
+    postgres::PgPoolOptions,
+    types::time::{format_description::well_known::Rfc3339, OffsetDateTime},
+    PgPool,
+    Row,
+};
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -327,7 +332,10 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
-                let total_chars: usize = pages.iter().map(|(_, t)| t.len()).sum();
+                let total_chars: usize = pages
+                    .iter()
+                    .map(|(_, t): &(i32, String)| t.len())
+                    .sum();
                 info!(
                     id = evt.pdf_id,
                     pages = pages.len(),
