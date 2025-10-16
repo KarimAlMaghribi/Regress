@@ -1,7 +1,7 @@
 import React from 'react';
-import { Breadcrumbs, Typography, Box, Chip } from '@mui/material';
+import { Breadcrumbs, Typography, Box, Chip, Stack, Paper } from '@mui/material';
 import { Link as RouterLink } from 'react-router-dom';
-import { alpha } from '@mui/material/styles';
+import { alpha, useTheme } from '@mui/material/styles';
 
 interface PageHeaderProps {
   title: string;
@@ -22,113 +22,115 @@ export default function PageHeader({
                                      tone = 'default',
                                      tag,
                                    }: PageHeaderProps) {
+  const theme = useTheme();
+  const toneColor =
+    tone === 'default'
+      ? theme.palette.primary.main
+      : (theme.palette[tone]?.main ?? theme.palette.primary.main);
   return (
-      <Box
-          sx={(theme) => ({
-            position: 'sticky',
-            top: 0,
-            zIndex: 1,
-            mb: 4,
-            bgcolor:
-                tone === 'default'
-                    ? 'background.paper'
-                    : alpha(
-                        (theme.palette[tone]?.main ?? theme.palette.primary.main) as string,
-                        0.08
-                    ),
-            px: 2,
-            py: 1.5,
-            borderBottom: 1,
-            borderColor: 'divider',
-            backdropFilter: 'saturate(120%) blur(4px)',
-          })}
+    <Box sx={{ mb: { xs: 4, md: 6 } }}>
+      <Paper
+        variant="outlined"
+        sx={{
+          position: 'relative',
+          overflow: 'hidden',
+          px: { xs: 3, md: 4 },
+          py: { xs: 3, md: 4 },
+          borderRadius: 'var(--radius-card)',
+          backgroundColor:
+            tone === 'default'
+              ? alpha(theme.palette.primary.main, theme.palette.mode === 'dark' ? 0.18 : 0.08)
+              : alpha(toneColor, theme.palette.mode === 'dark' ? 0.22 : 0.12),
+          borderColor: alpha(toneColor, 0.25),
+          boxShadow: 'none',
+        }}
       >
-        {breadcrumb && (
-            <Breadcrumbs sx={{ mb: 0.75 }}>
+        <Box
+          sx={{
+            position: 'absolute',
+            inset: { xs: 'auto -18% -40% auto', md: '-40% -18% auto auto' },
+            width: { xs: 180, md: 320 },
+            height: { xs: 180, md: 320 },
+            borderRadius: '50%',
+            background: alpha(toneColor, 0.08),
+            pointerEvents: 'none',
+          }}
+        />
+        <Box sx={{ position: 'relative' }}>
+          {breadcrumb && (
+            <Breadcrumbs sx={{ mb: 1.5 }} separator="›" aria-label="Breadcrumb">
               {breadcrumb.map((b, idx) =>
-                  b.to ? (
-                      <Typography
-                          key={idx}
-                          component={RouterLink}
-                          to={b.to}
-                          color="primary"
-                          fontSize="0.875rem"
-                          sx={{ textDecoration: 'none' }}
-                      >
-                        {b.label}
-                      </Typography>
-                  ) : (
-                      <Typography key={idx} fontSize="0.875rem">
-                        {b.label}
-                      </Typography>
-                  )
+                b.to ? (
+                  <Typography
+                    key={idx}
+                    component={RouterLink}
+                    to={b.to}
+                    color="primary"
+                    sx={{ textDecoration: 'none', fontSize: '0.875rem', fontWeight: 500 }}
+                  >
+                    {b.label}
+                  </Typography>
+                ) : (
+                  <Typography key={idx} fontSize="0.875rem" color="text.secondary">
+                    {b.label}
+                  </Typography>
+                ),
               )}
             </Breadcrumbs>
-        )}
+          )}
 
-        <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 2,
-            }}
-        >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
-            {icon && (
+          <Stack
+            direction={{ xs: 'column', md: 'row' }}
+            spacing={{ xs: 3, md: 4 }}
+            alignItems={{ xs: 'flex-start', md: 'center' }}
+            justifyContent="space-between"
+          >
+            <Stack direction="row" spacing={2.5} alignItems={{ xs: 'flex-start', md: 'center' }}>
+              {icon && (
                 <Box
-                    aria-hidden
-                    sx={(theme) => ({
-                      width: 40,
-                      height: 40,
-                      borderRadius: '12px',
-                      display: 'grid',
-                      placeItems: 'center',
-                      bgcolor:
-                          tone === 'default'
-                              ? alpha(theme.palette.primary.main, 0.08)
-                              : alpha(
-                                  (theme.palette[tone]?.main ?? theme.palette.primary.main) as string,
-                                  0.18
-                              ),
-                      color: tone === 'default' ? 'primary.main' : `${tone}.main`,
-                      boxShadow:
-                          tone === 'default'
-                              ? 'none'
-                              : `inset 0 0 0 1px ${alpha(
-                                  (theme.palette[tone]?.main ?? theme.palette.primary.main) as string,
-                                  0.25
-                              )}`,
-                    })}
+                  aria-hidden
+                  sx={{
+                    width: 56,
+                    height: 56,
+                    borderRadius: 'var(--radius-button)',
+                    display: 'grid',
+                    placeItems: 'center',
+                    background: alpha(toneColor, 0.16),
+                    color: tone === 'default' ? 'primary.main' : `${tone}.main`,
+                    boxShadow: `0 10px 24px ${alpha(toneColor, 0.18)}`,
+                  }}
                 >
                   {icon}
                 </Box>
-            )}
+              )}
 
-            <Box>
-              <Typography variant="h5" sx={{ lineHeight: 1.2 }}>
-                {title}
-              </Typography>
-              {subtitle && (
-                  <Typography variant="body2" color="text.secondary">
+              <Box>
+                {subtitle && (
+                  <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
                     {subtitle}
                   </Typography>
-              )}
-            </Box>
-          </Box>
+                )}
+                <Typography variant="h2" sx={{ fontSize: { xs: '1.75rem', md: '2rem' }, lineHeight: 1.2 }}>
+                  {title}
+                </Typography>
+              </Box>
+            </Stack>
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            {tag && (
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              {tag && (
                 <Chip
-                    size="small"
-                    label={tag}
-                    color={tone === 'default' ? 'default' : tone}
-                    variant={tone === 'default' ? 'outlined' : 'filled'}
+                  size="medium"
+                  label={tag}
+                  color={tone === 'default' ? 'default' : tone}
+                  variant={tone === 'default' ? 'outlined' : 'filled'}
+                  sx={{ fontWeight: 600 }}
                 />
-            )}
-            <Box>{actions}</Box>
-          </Box>
+              )}
+              <Box>{actions}</Box>
+            </Stack>
+          </Stack>
         </Box>
-      </Box>
+      </Paper>
+    </Box>
   );
 }

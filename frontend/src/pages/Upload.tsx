@@ -1,8 +1,20 @@
 import React, { useCallback, useState, useEffect, useMemo } from 'react';
 import { useDropzone } from 'react-dropzone';
 import {
-  Box, Typography, Paper, Button, IconButton, Select, MenuItem,
-  FormControl, InputLabel, Snackbar, Alert, Stack
+  Box,
+  Typography,
+  Paper,
+  Button,
+  IconButton,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
+  Snackbar,
+  Alert,
+  Stack,
+  Grid,
+  Chip,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -14,16 +26,18 @@ import CircularProgress from '@mui/material/CircularProgress';
 import PageHeader from '../components/PageHeader';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DownloadIcon from '@mui/icons-material/Download';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import { useUploadStore } from '../hooks/useUploadStore';
 import { usePipelineList } from '../hooks/usePipelineList';
 import { useTenants } from '../hooks/useTenants';
+import { alpha, useTheme } from '@mui/material/styles';
 
 declare global { interface Window { __ENV__?: any } }
 
 export default function Upload() {
+  const theme = useTheme();
   const [files, setFiles] = useState<File[]>([]);
   const [message, setMessage] = useState<string>('');
-  const [pipelineId, setPipelineId] = useState('');
   const [snackOpen, setSnackOpen] = useState(false);
 
   const { pipelines } = usePipelineList();
@@ -73,7 +87,6 @@ export default function Upload() {
 
     const form = new FormData();
     files.forEach(f => form.append('file', f));
-    if (pipelineId) form.append('pipeline_id', pipelineId);
     form.append('tenant_id', tenantId); // im Body
 
     // Zusätzlich: Header + Query-Param -> Backend kann tenant_id sofort verwenden
@@ -108,16 +121,22 @@ export default function Upload() {
   };
 
   const dropStyles = {
-    p: 6,
-    border: '2px dashed',
-    borderColor: 'primary.main',
-    borderRadius: 3,
-    textAlign: 'center',
+    p: { xs: 5, md: 6 },
+    border: `1px dashed ${alpha(theme.palette.primary.main, 0.35)}`,
+    borderRadius: 'var(--radius-card)',
+    textAlign: 'center' as const,
     cursor: 'pointer',
     background:
-        'linear-gradient(135deg, rgba(108,93,211,0.1), rgba(58,134,255,0.05))',
-    transition: 'border 0.2s ease',
-  } as const;
+        theme.palette.mode === 'dark'
+            ? alpha(theme.palette.primary.main, 0.08)
+            : 'linear-gradient(135deg, rgba(0,110,199,0.08), rgba(0,110,199,0.03))',
+    transition: 'border-color 0.2s ease, background 0.2s ease',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: theme.spacing(1.5),
+    alignItems: 'center',
+    justifyContent: 'center',
+  };
 
   const columns: GridColDef[] = [
     { field: 'pdfId', headerName: 'PDF', width: 90 },
@@ -200,97 +219,179 @@ export default function Upload() {
   ];
 
   const uploadDisabled = !files.length || !tenantId;
+  const isErrorMessage = message.toLowerCase().startsWith('error');
 
   return (
-      <Box>
+      <Stack spacing={4}>
         <PageHeader
             title="Upload"
+            subtitle="Dokumente mandantenbezogen bereitstellen und zur Pipeline weiterleiten"
             breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Upload' }]}
-            actions={<Button variant="outlined" size="small" onClick={()=>load().catch(()=>{})}>Reload</Button>}
+            tone="primary"
+            icon={<CloudUploadIcon />}
+            tag={`Aktive Einträge: ${entries.length}`}
+            actions={
+              <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<RefreshIcon />}
+                  onClick={() => load().catch(() => setSnackOpen(true))}
+              >
+                Aktualisieren
+              </Button>
+            }
         />
 
-        {/* Tenant-Auswahl */}
-        <Paper sx={{ p: 2, mb: 2 }}>
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems="center">
-            <FormControl fullWidth>
-              <InputLabel id="tenant-label">Mandant</InputLabel>
-              <Select
-                  labelId="tenant-label"
-                  label="Mandant"
-                  value={tenantId}
-                  onChange={(e) => setTenantId(String(e.target.value))}
-                  disabled={tenantsLoading}
-              >
-                {tenants.map(t => (
-                    <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Typography variant="body2" color="text.secondary">
-              Bitte vor dem Upload Mandant auswählen.
-            </Typography>
-          </Stack>
-          {tenantsError && (
-              <Alert severity="error" sx={{ mt: 2 }}>
-                {tenantsError}
-              </Alert>
-          )}
-        </Paper>
+        <Grid container spacing={3}>
+          <Grid item xs={12} md={5}>
+            <Paper
+                variant="outlined"
+                sx={{
+                  p: { xs: 3, md: 4 },
+                  borderRadius: 'var(--radius-card)',
+                  boxShadow: 'var(--shadow-z1)',
+                  background:
+                      theme.palette.mode === 'dark'
+                          ? alpha(theme.palette.primary.main, 0.08)
+                          : 'linear-gradient(135deg, rgba(0,110,199,0.08), rgba(247,250,252,0.9))',
+                }}
+            >
+              <Stack spacing={2.5}>
+                <Box>
+                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                    Upload-Übersicht
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Wähle zuerst den passenden Mandanten aus und lade anschließend PDF- oder ZIP-Dateien hoch.
+                    Die Dateien werden automatisch der gewählten Pipeline zugeordnet.
+                  </Typography>
+                </Box>
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Chip label={`Dateien ausgewählt: ${files.length}`} color={files.length ? 'primary' : 'default'} />
+                  <Chip label={`Pipelines: ${pipelines.length}`} variant="outlined" />
+                </Stack>
+              </Stack>
+            </Paper>
+          </Grid>
+          <Grid item xs={12} md={7}>
+            <Paper
+                variant="outlined"
+                sx={{
+                  p: { xs: 3, md: 4 },
+                  borderRadius: 'var(--radius-card)',
+                  boxShadow: 'var(--shadow-z1)',
+                }}
+            >
+              <Stack spacing={3}>
+                <Stack spacing={1}>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                    Mandant und Upload vorbereiten
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Mandant festlegen und Dateien im nächsten Schritt hinzufügen.
+                  </Typography>
+                </Stack>
 
-        {/* Dropzone */}
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2.5} alignItems={{ sm: 'center' }}>
+                  <FormControl fullWidth>
+                    <InputLabel id="tenant-label">Mandant</InputLabel>
+                    <Select
+                        labelId="tenant-label"
+                        label="Mandant"
+                        value={tenantId}
+                        onChange={(e) => setTenantId(String(e.target.value))}
+                        disabled={tenantsLoading}
+                    >
+                      {tenants.map(t => (
+                          <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>
+                      ))}
+                    </Select>
+                  </FormControl>
+                  <Typography variant="body2" color="text.secondary" sx={{ minWidth: { sm: 180 } }}>
+                    Pflichtschritt vor dem Upload.
+                  </Typography>
+                </Stack>
+
+                {tenantsError && (
+                    <Alert severity="error">{tenantsError}</Alert>
+                )}
+
+                <Box
+                    component={motion.div}
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.995 }}
+                    {...getRootProps()}
+                    sx={dropStyles}
+                >
+                  <input {...getInputProps()} />
+                  <CloudUploadIcon sx={{ fontSize: 48, color: theme.palette.primary.main }} />
+                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                    {isDragActive
+                        ? 'Ablegen zum Hochladen'
+                        : files.length
+                            ? files.map(f => f.name).join(', ')
+                            : 'Datei hierher ziehen oder klicken'}
+                  </Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    Unterstützt werden PDF und ZIP. Mehrere Dateien sind möglich.
+                  </Typography>
+                </Box>
+
+                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+                  <Button
+                      variant="contained"
+                      onClick={upload}
+                      disabled={uploadDisabled}
+                      component={motion.button}
+                      whileHover={{ y: -2 }}
+                      sx={{ alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
+                  >
+                    Upload starten
+                  </Button>
+                  {message && (
+                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                        <Alert severity={isErrorMessage ? 'error' : 'success'}>{message}</Alert>
+                      </motion.div>
+                  )}
+                </Stack>
+              </Stack>
+            </Paper>
+          </Grid>
+        </Grid>
+
         <Paper
-            component={motion.div}
-            whileHover={{ scale: 1.03 }}
-            whileTap={{ scale: 0.99 }}
-            {...getRootProps()}
-            sx={dropStyles}
+            variant="outlined"
+            sx={{
+              p: { xs: 2, md: 3 },
+              borderRadius: 'var(--radius-card)',
+              boxShadow: 'var(--shadow-z1)',
+            }}
         >
-          <input {...getInputProps()} />
-          <CloudUploadIcon sx={{ fontSize: 56, mb: 2 }} />
-          <Typography variant="h6">
-            {isDragActive
-                ? 'Ablegen zum Hochladen'
-                : files.length
-                    ? files.map(f => f.name).join(', ')
-                    : 'Datei hierher ziehen oder klicken ...'}
-          </Typography>
-        </Paper>
-
-        {/* Upload-Button */}
-        <Button
-            variant="contained"
-            onClick={upload}
-            disabled={uploadDisabled}
-            component={motion.button}
-            whileHover={{ y: -2 }}
-            sx={{ mt: 2 }}
-        >
-          Upload
-        </Button>
-
-        {message && (
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-              <Typography sx={{ mt: 2 }}>{message}</Typography>
-            </motion.div>
-        )}
-
-        {/* Tabelle */}
-        <Paper sx={{ mt: 3 }}>
-          <DataGrid
-              autoHeight
-              disableRowSelectionOnClick
-              rows={entries}
-              columns={columns}
-              pageSizeOptions={[5, 10, 25]}
-              initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
-          />
+          <Stack spacing={2.5}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1.5}>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                Eingehende Dokumente
+              </Typography>
+              <Typography variant="body2" color="text.secondary">
+                Pipeline je Datei festlegen und Verarbeitung starten.
+              </Typography>
+            </Stack>
+            <DataGrid
+                autoHeight
+                disableRowSelectionOnClick
+                rows={entries}
+                columns={columns}
+                pageSizeOptions={[5, 10, 25]}
+                initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
+            />
+          </Stack>
         </Paper>
 
         <Snackbar open={snackOpen} autoHideDuration={6000} onClose={() => setSnackOpen(false)}>
           <Alert onClose={() => setSnackOpen(false)} severity="error" sx={{ width: '100%' }}>
-            Statusaktualisierung fehlgeschlagen, versuche erneut
+            Statusaktualisierung fehlgeschlagen, versuche es erneut.
           </Alert>
         </Snackbar>
-      </Box>
+      </Stack>
   );
 }
