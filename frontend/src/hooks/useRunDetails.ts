@@ -7,20 +7,31 @@ export type StepType = "Extraction" | "Decision" | "Score";
 // Tri-State Labels
 export type TernaryLabel = "yes" | "no" | "unsure";
 
+/**
+ * Representation of a single model attempt with optional evidence metadata
+ * and scoring details. Many fields are nullable to support historical runs
+ * that predate the latest schema.
+ */
 export interface Attempt {
   id?: number | string;
   attempt_no?: number;
   candidate_key?: string;
 
-  // Für die UI: Seite sowohl flach (.page) als auch unter .source.page anbieten
+  /**
+   * Candidate payload enriched with page metadata. Some backends expose both a
+   * flat `page` attribute and a nested `source.page`, so the hook keeps the
+   * structure flexible to accommodate both forms.
+   */
   candidate_value?:
       | { value: any; page?: number; source?: { page?: number; quote?: string } }
       | any;
 
-  // Für Tri-State: die KI liefert je Chunk/Page strukturierte Felder
-  vote?: TernaryLabel;                 // "yes" | "no" | "unsure"
-  strength?: number | null;            // 0..1 (Evidenzstärke)
-  candidate_confidence?: number | null; // 0..1 (Antwortsicherheit)
+  /** Tri-state vote expressed as "yes", "no" or "unsure". */
+  vote?: TernaryLabel;
+  /** Normalised evidence strength in the range 0..1. */
+  strength?: number | null;
+  /** Confidence reported by the LLM in the range 0..1. */
+  candidate_confidence?: number | null;
 
   source?: string | null;
   is_final?: boolean;
@@ -40,6 +51,10 @@ function toPromptId(value: any): number | null {
   return null;
 }
 
+/**
+ * Minimal pipeline step description returned by the backend. Individual runs
+ * may omit fields depending on their age and configuration.
+ */
 export interface RunStep {
   id: number;
   step_type: StepType;
@@ -55,23 +70,26 @@ export interface RunStep {
   definition?: { json_key?: string } | null;
   prompt_text?: string | null;
 
-  // Zuordnung zum Prompt (für Weights etc.) – optional, da historische Runs es evtl. nicht enthalten
+  /** Optional reference back to the originating prompt for weight lookups. */
   prompt_id?: number | null;
   prompt_weight?: number | null;
 
   final_key?: string | null;
-  final_value?: any;                 // Backwards-compat (bool bei Score/Decision)
-  final_confidence?: number | null;  // 0..1
+  /** Backward compatible payload for legacy boolean scoring output. */
+  final_value?: any;
+  /** Confidence normalised to 0..1, when provided by the backend. */
+  final_confidence?: number | null;
 
-  // Neu: Tri-State konsolidiert (falls vorhanden)
+  /** Consolidated tri-state label reported by the scoring pipeline, if any. */
   final_score_label?: TernaryLabel | null; // yes/no/unsure
-  // Hinweis: der numerische Score (−1..+1) liegt in run.final_scores[final_key!]
+  /** Numeric score (−1..+1) is exposed via `run.final_scores[final_key!]`. */
 
   started_at?: string | null;
   finished_at?: string | null;
   attempts?: Attempt[];
 }
 
+/** Core run payload shared across the run details view and summary cards. */
 export interface RunCore {
   id: string;
   pipeline_id?: string | null;
@@ -79,7 +97,8 @@ export interface RunCore {
   status?: string | null;
   started_at?: string | null;
   finished_at?: string | null;
-  overall_score?: number | null; // 0..1 (Anzeige)
+  /** Normalised overall score used for display (0..1). */
+  overall_score?: number | null;
 
   error?: string | null;
 
@@ -92,21 +111,27 @@ export interface RunCore {
    */
   final_scores?: Record<string, number>;
 
-  // optional: Label-Map falls Backend sie irgendwann mitsendet (keine Pflicht)
+  /** Optional label map when the backend emits consolidated decision labels. */
   final_score_labels?: Record<string, TernaryLabel>;
 
-  // Optional: Prompt-Weights (Index per prompt_id)
+  /** Prompt weights keyed by `prompt_id` for recalculating aggregate scores. */
   prompt_weights?: Record<number, number>;
 }
 
+/** Response shape returned by the history endpoint consumed by the hook. */
 export interface RunDetail {
   run: RunCore;
   steps: RunStep[];
-  raw?: any; // Rohdaten für Debug
+  /** Raw payload returned by the backend for debugging purposes. */
+  raw?: any;
 }
 
 /* ============================== Hook ============================== */
 
+/**
+ * Fetches detailed pipeline data for a given run, resolving history fallbacks
+ * and cached local storage snapshots when APIs return HTML placeholders.
+ */
 export function useRunDetails(
     runId?: string | null,
     opts?: { pdfId?: number; storageKey?: string }

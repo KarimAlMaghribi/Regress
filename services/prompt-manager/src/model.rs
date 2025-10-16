@@ -1,6 +1,9 @@
+//! SeaORM entity definitions for prompts, prompt groups, and pipeline
+//! configuration stored by the prompt manager service.
+
 use sea_orm::entity::prelude::*;
 
-/* ---------- PROMPTS ---------- */
+// ---------- PROMPTS ----------
 
 pub mod prompt {
     use super::*;
@@ -12,7 +15,7 @@ pub mod prompt {
         pub id: i32,
         pub text: String,
         pub prompt_type: String,
-        // DB: NUMERIC(6,3) -> SeaORM: Decimal; optional (nur Scoring/Decision haben Gewicht)
+        /// Optional scoring weight stored as a NUMERIC(6,3) in Postgres.
         pub weight: Option<Decimal>,
         pub json_key: Option<String>,
         pub favorite: bool,
@@ -24,7 +27,7 @@ pub mod prompt {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/* ---------- PROMPT GROUPS ---------- */
+// ---------- PROMPT GROUPS ----------
 
 pub mod group {
     use super::*;
@@ -62,7 +65,7 @@ pub mod group_prompt {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/* ---------- PIPELINES ---------- */
+// ---------- PIPELINES ----------
 
 pub mod pipeline {
     use super::*;
@@ -71,9 +74,9 @@ pub mod pipeline {
     #[sea_orm(table_name = "pipelines")]
     pub struct Model {
         #[sea_orm(primary_key)]
-        pub id: Uuid,          // UUID – passt zu pipeline-api und DB
+        pub id: Uuid,
         pub name: String,
-        pub config_json: Json, // statt "data"
+        pub config_json: Json,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
@@ -82,7 +85,7 @@ pub mod pipeline {
     impl ActiveModelBehavior for ActiveModel {}
 }
 
-/* ---------- Re-exports ---------- */
+// ---------- Re-exports ----------
 
 pub use prompt::{ActiveModel, Entity, Model};
 pub use group::{ActiveModel as GroupActiveModel, Entity as GroupEntity, Model as GroupModel};

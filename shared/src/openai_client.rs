@@ -1,4 +1,5 @@
-// shared/src/openai_client.rs
+//! Implements the shared OpenAI client helpers used across services to build
+//! guarded prompts, parse responses, and surface structured scoring results.
 
 use crate::dto::{ScoringResult, TernaryLabel, TextPosition};
 use actix_web::http::header;
@@ -14,7 +15,8 @@ use tracing::{debug, error, warn};
 #[path = "evidence_resolver.rs"]
 mod evidence_resolver;
 
-/* ======================= Deutsch-Guard (globale Vorgabe) ======================= */
+// Guardrails that keep the assistant responses in German and constrained to
+// strict JSON structures expected by downstream services.
 
 const SYSTEM_GUARD_DE_ONLY: &str = r#"
 Antworte ausschließlich auf Deutsch.
@@ -22,7 +24,7 @@ Wenn die Aufgabe strikt JSON verlangt, gib nur das JSON ohne zusätzlichen Text 
 Keine englischen Sätze oder Erklärungen. Halte dich präzise an das geforderte Schema.
 "#;
 
-/* ======================= STRICT-JSON Guards (keine Füllwerte) ======================= */
+// Strict JSON guard definitions for the different prompt types we support.
 
 const EXTRACTION_GUARD_SUFFIX: &str = r#"
 IMPORTANT EXTRACTION CONTRACT (STRICT):
@@ -44,7 +46,7 @@ Rules:
 - Output JSON only. No prose, no markdown.
 "#;
 
-/// Tri-State Scoring Guard (YES/NO/UNSURE) – striktes JSON
+/// Guard instructions used for tri-state scoring prompts.
 const SCORING_GUARD_PREFIX: &str = r#"
 You are a tri-state classifier that decides a Yes/No/Unsure question based ONLY on DOCUMENT.
 Do NOT invent content. Always return STRICT JSON that matches this single-object schema:
@@ -68,6 +70,7 @@ Hard rules:
 - JSON only. No markdown, no extra keys.
 "#;
 
+/// Guard instructions that control how decision prompts respond.
 const DECISION_GUARD_PREFIX: &str = r#"
 You route a decision based ONLY on the provided document. Do NOT invent content.
 
@@ -89,8 +92,8 @@ Rules:
 - JSON only. No markdown, no comments, no extra keys.
 "#;
 
-/* ======================= Chat request payload ======================= */
-
+/// Structures used to build chat completion requests with optional function
+/// metadata or JSON schema guidance for the response payload.
 #[derive(Serialize)]
 struct ChatRequest<'a> {
     model: &'a str,
@@ -103,6 +106,7 @@ struct ChatRequest<'a> {
     response_format: Option<serde_json::Value>,
 }
 
+/// Convenience constructor for chat messages to keep request assembly concise.
 fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
     ChatCompletionMessage {
         role,
@@ -111,14 +115,15 @@ fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
     }
 }
 
-/* --- JSON-Parser --- */
-
+/// Attempt to interpret `s` as JSON by trying the raw string, stripping code
+/// fences and, if necessary, scanning for the first balanced JSON block. This
+/// mirrors the variety of formats produced by LLM responses.
 fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
-    // 1) direkt
+    // Direct parse without any preprocessing.
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
         return Ok(v);
     }
-    // 2) ```json ... ``` oder ``` ... ```
+    // Strip Markdown code fences in case the model wrapped the payload.
     let mut t = s.trim();
     if t.starts_with("```json") {
         t = &t[7..];
@@ -133,13 +138,15 @@ fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
         return Ok(v);
     }
-    // 3) ersten balancierten JSON-Block extrahieren (Ignorieren von Klammern in Strings)
+    // As a fallback scan for the first balanced JSON object or array.
     if let Some(json_str) = extract_first_balanced_json(t) {
         return Ok(serde_json::from_str::<serde_json::Value>(&json_str)?);
     }
     Err(anyhow::anyhow!("invalid JSON"))
 }
 
+/// Find the first syntactically valid JSON object or array in `s` while
+/// respecting quoted strings, returning it as an owned string when present.
 fn extract_first_balanced_json(s: &str) -> Option<String> {
     let mut in_str = false;
     let mut esc = false;
@@ -188,8 +195,8 @@ fn extract_first_balanced_json(s: &str) -> Option<String> {
     None
 }
 
-/* ======================= Scoring-Prompt (Tri-State) ======================= */
-
+/// Create the ordered chat messages required for scoring prompts so that the
+/// assistant receives the guard rails before the user payload.
 fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMessage> {
     let user = format!(
         "QUESTION:\n{}\n\nDOCUMENT:\n{}\n\n(STRICT JSON, follow the contract.)",
@@ -202,10 +209,11 @@ fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMes
     ]
 }
 
-/* ======================= OpenAI Call ======================= */
+// OpenAI call handling
 
-/// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
-/// Erzwingt response_format=json_object und berücksichtigt function/tool arguments.
+/// Send chat messages to OpenAI and return the assistant's answer as a raw JSON
+/// string, enforcing `response_format=json_object` and handling function/tool
+/// arguments when present.
 pub async fn call_openai_chat(
     client: &Client,
     model: &str,
@@ -287,7 +295,7 @@ pub async fn call_openai_chat(
     ))))
 }
 
-/* ======================= Fehler & DTOs ======================= */
+// Error helpers and DTO conversions
 
 #[derive(thiserror::Error, Debug)]
 pub enum PromptError {
@@ -314,9 +322,10 @@ pub struct OpenAiAnswer {
     pub raw: String,
 }
 
-/* ======================= Evidence-Fix (kanonische PDF-Seiten) ======================= */
+// Evidence fixing utilities to canonicalize PDF page metadata
 
-/// Überschreibt `source.page` in `OpenAiAnswer` anhand Quote/Value mit korrekter 1-basierter PDF-Seite.
+/// Update `source.page` in an `OpenAiAnswer` by using the quote/value to look up
+/// the canonical 1-based PDF page number.
 pub fn enrich_with_pdf_evidence_answer(answer: &mut OpenAiAnswer, page_map: &HashMap<u32, String>) {
     let quote = answer
         .source
@@ -338,7 +347,7 @@ pub fn enrich_with_pdf_evidence_answer(answer: &mut OpenAiAnswer, page_map: &Has
     }
 }
 
-/// Überschreibt `source.page` in einer Liste von JSON-Extraction-Objekten.
+/// Update `source.page` within a list of JSON extraction objects.
 pub fn enrich_with_pdf_evidence_list(items: &mut [JsonValue], page_map: &HashMap<u32, String>) {
     for it in items.iter_mut() {
         let quote = it
@@ -356,7 +365,7 @@ pub fn enrich_with_pdf_evidence_list(items: &mut [JsonValue], page_map: &HashMap
     }
 }
 
-/// Öffentliche Hilfsfunktion für andere Crates: Quote/Value → (Seite, Score)
+/// Public helper exposed for other crates to map quotes/values to `(page, score)`.
 pub fn resolve_page_for_quote_value(
     quote: &str,
     value: &str,
@@ -365,7 +374,7 @@ pub fn resolve_page_for_quote_value(
     evidence_resolver::resolve_page(quote, value, page_map)
 }
 
-/* ======================= Extraction (STRICT, mit Guard) ======================= */
+// Strict extraction prompt handling
 
 pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
@@ -417,7 +426,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
-/* ======================= Scoring (Tri-State mit Function-Call) ======================= */
+// Tri-state scoring with function-call support
 
 pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
@@ -526,7 +535,7 @@ pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, Prom
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
-/* ======================= Decision (STRICT, mit Guard) ======================= */
+// Strict decision prompt orchestration
 
 pub async fn decide(
     prompt_id: i32,
@@ -594,7 +603,7 @@ pub async fn decide(
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
-/* ======================= Sonstiges ======================= */
+// Miscellaneous helper functions
 
 pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> {
     Ok(serde_json::json!(null))
@@ -636,7 +645,7 @@ pub async fn fetch_prompt_text(id: i32) -> Result<String, PromptError> {
     fetch_prompt(id).await
 }
 
-/* ======================= Fallback-Hilfsfunktion (tool_calls, content-Arrays) ======================= */
+// Fallback helper for parsing tool calls and content arrays
 
 fn extract_choice_content_from_raw_json(raw: &JsonValue) -> Option<String> {
     // 1) content als String

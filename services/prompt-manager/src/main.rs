@@ -1,3 +1,6 @@
+//! Axum-based microservice that stores and serves prompts, prompt groups, and
+//! pipeline configurations with SeaORM-backed persistence.
+
 use axum::{
     extract::{Path, State, Query},
     http::StatusCode,
@@ -41,7 +44,7 @@ fn ensure_sslmode_disable(url: &str) -> String {
 
 async fn health() -> &'static str { "OK" }
 
-/* ---------------- DTOs ---------------- */
+// ---------------- DTOs ----------------
 
 #[derive(Serialize)]
 struct PromptData {
@@ -49,7 +52,7 @@ struct PromptData {
     text: String,
     #[serde(rename = "type")]
     prompt_type: PromptType,
-    // Nur Scoring/Decision → Some(...), sonst None
+    /// Only scoring/decision prompts carry a weight; extraction leaves it empty.
     weight: Option<f64>,
     json_key: Option<String>,
     favorite: bool,
@@ -58,7 +61,7 @@ struct PromptData {
 #[derive(Deserialize)]
 struct PromptInput {
     text: String,
-    // optional: bei Scoring/Decision -> default 1.0, sonst ignoriert
+    /// Optional weight defaults to 1.0 for scoring/decision prompts.
     weight: Option<f64>,
     #[serde(default = "default_prompt_type", rename = "type")]
     prompt_type: PromptType,
@@ -89,7 +92,7 @@ struct GroupInput {
 struct PipelineData {
     id: Uuid,
     name: String,
-    data: serde_json::Value, // API bleibt "data"
+    data: serde_json::Value,
 }
 
 #[derive(Deserialize)]
@@ -113,7 +116,7 @@ fn is_weighted(t: &PromptType) -> bool {
     matches!(t, PromptType::ScoringPrompt | PromptType::DecisionPrompt)
 }
 
-// Hilfsfunktionen: f64 <-> Decimal (NUMERIC)
+// Helper conversions between f64 and Decimal (NUMERIC)
 fn f64_to_decimal_opt(w: Option<f64>) -> Option<Decimal> {
     w.and_then(|x| Decimal::from_str(&format!("{:.3}", x)).ok())
 }
@@ -121,7 +124,7 @@ fn decimal_to_f64_opt(d: Option<Decimal>) -> Option<f64> {
     d.and_then(|v| v.to_string().parse::<f64>().ok())
 }
 
-/* ---------------- Prompts ---------------- */
+// ---------------- Prompts ----------------
 
 async fn list_prompts(
     State(db): State<Arc<DatabaseConnection>>,
@@ -160,7 +163,7 @@ async fn create_prompt(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
 ) -> Result<Json<PromptData>, (StatusCode, Json<ErrorResponse>)> {
-    // Validierung
+    // Validate that the prompt configuration is consistent before persisting.
     if input.prompt_type == PromptType::ExtractionPrompt && input.json_key.is_none() {
         return Err(bad_request("json_key required"));
     }
@@ -188,7 +191,7 @@ async fn create_prompt(
 
     let res = model.insert(&*db).await.map_err(int_err)?;
 
-    // Gruppen-Beziehungen anlegen
+    // Create group relations when requested.
     for gid in input.group_ids {
         let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(gid);
@@ -242,7 +245,7 @@ async fn update_prompt(
 
     let res = active.update(&*db).await.map_err(int_err)?;
 
-    // Gruppenbeziehungen ersetzen
+    // Replace the group relationships to reflect the latest selection.
     GroupPromptEntity::delete_many()
         .filter(model::group_prompt::Column::PromptId.eq(id))
         .exec(&*db).await.map_err(int_err)?;
@@ -299,7 +302,7 @@ async fn set_favorite(
     }))
 }
 
-/* ---------------- Groups ---------------- */
+// ---------------- Groups ----------------
 
 async fn list_groups(
     State(db): State<Arc<DatabaseConnection>>,
@@ -397,7 +400,7 @@ async fn set_group_favorite(
     }))
 }
 
-/* ---------------- Pipelines ---------------- */
+// ---------------- Pipelines ----------------
 
 async fn list_pipelines(
     State(db): State<Arc<DatabaseConnection>>,
@@ -406,7 +409,7 @@ async fn list_pipelines(
     Ok(Json(items.into_iter().map(|p| PipelineData {
         id: p.id,
         name: p.name,
-        data: p.config_json, // wichtig: DB-Feld heißt config_json
+        data: p.config_json,
     }).collect()))
 }
 
@@ -448,7 +451,7 @@ async fn delete_pipeline(
     Ok(())
 }
 
-/* ---------------- Fehler-Helfer ---------------- */
+// ---------------- Error helpers ----------------
 
 fn int_err<E: std::fmt::Display>(e: E) -> (StatusCode, Json<ErrorResponse>) {
     error!("db error: {}", e);
@@ -461,12 +464,12 @@ fn not_found() -> (StatusCode, Json<ErrorResponse>) {
     (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() }))
 }
 
-/* ---------------- Bootstrap: Prompts-Schema sicherstellen ---------------- */
+// ---------------- Bootstrap: ensure prompt schema ----------------
 
 async fn ensure_prompt_schema(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
     let be = db.get_database_backend();
 
-    // prompts (NUMERIC weight; Constraint greift nur bei Neuanlage)
+    // prompts (NUMERIC weight; constraint only applies on new rows)
     db.execute(Statement::from_string(be, r#"
         CREATE TABLE IF NOT EXISTS prompts (
           id           SERIAL PRIMARY KEY,
@@ -506,14 +509,14 @@ async fn ensure_prompt_schema(db: &DatabaseConnection) -> Result<(), sea_orm::Db
     Ok(())
 }
 
-/* ---------------- main ---------------- */
+// ---------------- main ----------------
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Logging via RUST_LOG
+    // Initialize logging from the RUST_LOG environment variable.
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
-    // DB-URL ohne TLS
+    // Ensure we connect without TLS when running locally.
     let mut settings = Settings::new().unwrap_or_else(|_| Settings {
         database_url: "postgres://regress:password@localhost:5432/regress".into(),
         message_broker_url: String::new(),
@@ -524,7 +527,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let db: Arc<DatabaseConnection> = Arc::new(Database::connect(&settings.database_url).await?);
 
-    // idempotent: Kernobjekte für Prompt-Manager sicherstellen
+    // Ensure schema and seed data exist before serving traffic.
     ensure_prompt_schema(&db).await?;
 
     let app = Router::new()

@@ -1,3 +1,8 @@
+/**
+ * Comprehensive run inspection page that stitches together extraction,
+ * scoring, and decision results while offering evidence previews and
+ * diagnostic utilities.
+ */
 import * as React from "react";
 import {useMemo} from "react";
 import {useParams, useSearchParams} from "react-router-dom";
@@ -31,17 +36,17 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
 import PlayArrowIcon from "@mui/icons-material/PlayArrow";
-import ArticleIcon from "@mui/icons-material/Article"; // Extraktion
-import RuleIcon from "@mui/icons-material/Rule"; // Bewertung (Scoring)
-import AltRouteIcon from "@mui/icons-material/AltRoute"; // Entscheidung
-import AssessmentIcon from "@mui/icons-material/Assessment"; // Übersicht
+import ArticleIcon from "@mui/icons-material/Article"; // Extraction summary
+import RuleIcon from "@mui/icons-material/Rule"; // Scoring overview
+import AltRouteIcon from "@mui/icons-material/AltRoute"; // Decision overview
+import AssessmentIcon from "@mui/icons-material/Assessment"; // Run summary
 import CloseIcon from "@mui/icons-material/Close";
 
 import {type RunDetail, type RunStep, type TernaryLabel, useRunDetails} from "../hooks/useRunDetails";
 import {computeWeightedScore, scoreColor, ScoringWeightsCard} from "../components/ScoringWeightsCard";
 import PdfViewer from "../components/PdfViewer";
 
-/* ===== Helfer ===== */
+/* ===== Helper utilities for the Run Details view ===== */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
 const clamp = (n: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, n));
 const fmtNum = (n: number) => Intl.NumberFormat(undefined, {maximumFractionDigits: 2}).format(n);
@@ -60,21 +65,26 @@ function getAttemptPage(a: any): number | undefined {
   return a?.candidate_value?.page ?? a?.candidate_value?.source?.page ?? a?.candidate_value?.page_no;
 }
 
-/** ===== Neu: Hilfen für Seiten-Spannen (Batches) ===== **/
+/**
+ * Converts a batch payload into a one-based page span so the UI can show
+ * human-friendly ranges instead of the zero-based indices stored in the log.
+ */
 function pagesSpanFromBatch(batch: any): { start: number; end: number } | undefined {
   const raw: number[] = Array.isArray(batch?.pages) ? batch.pages.slice() : [];
   if (!raw.length) return undefined;
   raw.sort((a, b) => a - b);
-  // Log nutzt 0-basierte Seiten → für UI auf 1-basiert mappen
+  // Logs store zero-based pages; convert to one-based for display.
   return { start: raw[0] + 1, end: raw[raw.length - 1] + 1 };
 }
 
-// Versuche das passende Log-Item zum Step zu finden (primär über final_key → prompt_id)
+/**
+ * Resolves the log entry for a pipeline step by matching the stored prompt
+ * metadata against the recorded history.
+ */
 function findLogForStep(detail: RunDetail, step: RunStep): any | undefined {
   const logs: any[] = (detail as any)?.run?.log ?? (detail as any)?.log ?? [];
   if (!Array.isArray(logs) || logs.length === 0) return undefined;
 
-  // Versuch 1: final_key wie "score_7" / "decision_3" → prompt_id
   const key = (step as any)?.final_key ?? (step as any)?.definition?.json_key ?? "";
   let pid: number | undefined;
   const m = typeof key === "string" ? key.match(/_(\d+)$/) : null;
@@ -92,19 +102,23 @@ function findLogForStep(detail: RunDetail, step: RunStep): any | undefined {
     if (byPid) return byPid;
   }
 
-  // Versuch 2: Wenn es nur ein Log dieses Typs gibt
   const candidates = logs.filter(l => l?.prompt_type === wantType);
   if (candidates.length === 1) return candidates[0];
 
   return undefined;
 }
 
+/**
+ * Derives the page span for a given attempt by looking up the corresponding
+ * batch metadata in the stored log.
+ */
 function batchPageSpanForAttempt(detail: RunDetail, step: RunStep, attemptNo1: number): { start: number; end: number } | undefined {
   const log = findLogForStep(detail, step);
   const batch = (log as any)?.result?.batches?.[attemptNo1 - 1];
   return pagesSpanFromBatch(batch);
 }
 
+/** Extracts the most relevant confidence value that may be attached to an attempt. */
 function extractAttemptConfidence(attempt: any): number | undefined {
   if (typeof attempt?.confidence === "number") return attempt.confidence;
   if (typeof attempt?.candidate_confidence === "number") return attempt.candidate_confidence;
@@ -112,6 +126,10 @@ function extractAttemptConfidence(attempt: any): number | undefined {
   return undefined;
 }
 
+/**
+ * Summarises a single extraction attempt with metadata required for the
+ * evidence view, including the page reference and a human readable label.
+ */
 function attemptEvidenceMeta(
     detail: RunDetail,
     step: RunStep,
@@ -138,7 +156,8 @@ function attemptEvidenceMeta(
   return {attemptNo, hasEvidence, label, pageToOpen};
 }
 
-/* ===== bestehende Helper ===== */
+/* ===== Existing helper functions ===== */
+/** Normalises the origin of PDF URLs to ensure that embedded viewers can load pages. */
 function resolvePdfUrl(raw?: string | null, pdfId?: number | null): string | undefined {
   const ipBase = "http://192.168.130.102:8081";
   if (raw && typeof raw === "string") {
@@ -149,11 +168,13 @@ function resolvePdfUrl(raw?: string | null, pdfId?: number | null): string | und
   return undefined;
 }
 
+/** Converts a score in the range [-1, 1] into a normalised value. */
 function normFromScore(score?: number | null): number | undefined {
   if (typeof score !== "number") return undefined;
   return clamp01((clamp(score, -1, 1) + 1) / 2);
 }
 
+/** Renders a chip showing the ternary vote outcome for a decision prompt. */
 function voteChip(v?: TernaryLabel) {
   if (v === "yes")   return <Chip size="small" color="success" label="🟢 Ja" />;
   if (v === "no")    return <Chip size="small" color="error"   label="🔴 Nein" />;

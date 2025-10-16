@@ -1,3 +1,6 @@
+//! Defines the shared data transfer objects exchanged between services and the
+//! frontend so serialization stays consistent across the stack.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use strum_macros::{Display, EnumString};
@@ -11,7 +14,8 @@ pub enum PromptType {
     DecisionPrompt,
 }
 
-/// Tri-State Label für Scoring (neu)
+/// Tri-state label used by scoring prompts to differentiate between positive,
+/// negative, and inconclusive answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TernaryLabel {
@@ -50,34 +54,35 @@ pub struct TextPosition {
     pub quote: Option<String>,
 }
 
-/// Einzelnes Scoring-Resultat (per Batch/Attempt ODER konsolidiert).
-/// Abwärtskompatibel: `result` (bool) bleibt erhalten.
-/// Neu: `vote` (Tri-State), `strength`, `confidence`, `score` (-1..+1), `label` (Tri-State, z. B. fürs konsolidierte Ergebnis).
+/// Representation of a single scoring result, either from a single attempt or
+/// after consolidation, while remaining backward compatible with the legacy
+/// boolean result flag.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ScoringResult {
     pub prompt_id: i32,
 
-    /// Abwärtskompatibles Boolean (true == yes). Bei `unsure` i. d. R. false.
+    /// Backwards-compatible boolean (true equals "yes"); defaults to `false`
+    /// when the model could not decide.
     pub result: bool,
 
     pub source: TextPosition,
     pub explanation: String,
 
-    /// Neu / optional:
+    /// Optional modern scoring attributes reported by the LLM.
     #[serde(default)]
-    pub vote: Option<TernaryLabel>,       // yes | no | unsure (bei Attempts)
+    pub vote: Option<TernaryLabel>,
 
     #[serde(default)]
-    pub strength: Option<f32>,            // 0..1 (Evidenzstärke der Stimme)
+    pub strength: Option<f32>,
 
     #[serde(default)]
-    pub confidence: Option<f32>,          // 0..1 (Antwortsicherheit der Stimme)
+    pub confidence: Option<f32>,
 
     #[serde(default)]
-    pub score: Option<f32>,               // -1..+1 (z. B. konsolidierter Wert)
+    pub score: Option<f32>,
 
     #[serde(default)]
-    pub label: Option<TernaryLabel>,      // yes|no|unsure (z. B. konsolidiert)
+    pub label: Option<TernaryLabel>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -116,21 +121,21 @@ pub struct PipelineRunResult {
 
     pub extracted: std::collections::HashMap<String, serde_json::Value>,
 
-    /// Konsolidierte Scoring-Ergebnisse (ein Eintrag je Regel)
+    /// Consolidated scoring results, one entry per rule for convenience.
     pub scoring: Vec<ScoringResult>,
 
     pub extraction: Vec<PromptResult>,
     pub decision: Vec<PromptResult>,
     pub log: Vec<RunStep>,
 
-    /// Neu / optional: finale Scores je Regel (−1..+1) und zugehörige Tri-State Labels
+    /// Optional final numeric scores per rule (−1..+1) with matching labels.
     #[serde(default)]
     pub final_scores: Option<std::collections::HashMap<String, f32>>,
 
     #[serde(default)]
     pub final_score_labels: Option<std::collections::HashMap<String, TernaryLabel>>,
 
-    /// Optional: Metadaten (werden oft vom history-service ergänzt)
+    /// Optional metadata that the history service may append when available.
     #[serde(default)]
     pub status: Option<String>,
     #[serde(default)]
@@ -147,7 +152,7 @@ pub struct PipelineStep {
     #[serde(rename = "promptId")]
     pub prompt_id: i32,
 
-    // optional routing / decisions
+    /// Optional routing information for decision prompts.
     #[serde(default)]
     pub route: Option<String>,
     #[serde(default, rename = "yesKey")]
@@ -173,20 +178,20 @@ pub struct Tenant {
     pub name: String,
 }
 
-/// Request: Mandant anlegen
+/// Request payload for creating a tenant record.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateTenantRequest {
     pub name: String,
 }
 
-/// (Optional) Upload-Request
+/// Optional upload request payload used when triggering uploads programmatically.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateUploadRequest {
     pub pipeline_id: Option<Uuid>,
     pub tenant_id: Uuid,
 }
 
-/// (Optional) Upload-DTO (Response)
+/// Response structure returned after creating or updating an upload record.
 #[derive(Debug, Clone, Serialize)]
 pub struct UploadDto {
     pub id: i64,

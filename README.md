@@ -81,6 +81,17 @@ to list and create pipelines or `/pipelines/{id}` to update and delete them.
 The `pipeline-api` also checks for the `pipelines` table on startup and creates
 it if necessary, so migrations do not need to be run manually.
 
+## Code Documentation
+
+The Rust services and the React frontend now contain enriched inline
+documentation. Module-level summaries explain the role of each service file,
+while critical helpers have detailed doc comments that describe parsing logic,
+database interactions, and evidence handling. Frontend components now include
+JSDoc headers that clarify their responsibilities in the UI so that future
+changes can reuse the established patterns without relying on implicit
+knowledge. Legacy hint-style comments were removed in favour of neutral
+descriptions so the documentation reads as guidance instead of suggestions.
+
 ## Running with Docker
 
 Build and start all services, including the frontend, via Docker Compose:

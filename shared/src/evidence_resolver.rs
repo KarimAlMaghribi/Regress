@@ -1,13 +1,14 @@
-// shared/src/evidence_resolver.rs
-// Seitenauflösung ohne externe Crates (kompatibel mit --locked)
+//! Normalizes text fragments and performs lightweight similarity matching so
+//! extracted evidence can be mapped back to PDF pages without requiring extra
+//! dependencies.
 
 use std::collections::HashMap;
 
-/// Einfache Normalisierung:
-/// - Kleinbuchstaben
-/// - weiche Trennzeichen entfernen
-/// - Silbentrennung am Zeilenumbruch entfernen: "-\n" / "-\r\n" / "- " + Zeilenumbruch
-/// - Whitespace zu Einzel-Leerzeichen kollabieren
+/// Apply a few normalization steps:
+/// - lowercase the string
+/// - remove soft hyphen characters
+/// - collapse hyphenation artifacts across line breaks
+/// - reduce repeated whitespace to single spaces
 pub fn normalize(s: &str) -> String {
     let lower = s.to_lowercase();
     let chars: Vec<char> = lower.chars().collect();
@@ -17,15 +18,15 @@ pub fn normalize(s: &str) -> String {
     while i < chars.len() {
         let c = chars[i];
 
-        // weicher Trennstrich U+00AD überspringen
+        // skip soft hyphen (U+00AD) characters
         if c == '\u{00AD}' {
             i += 1;
             continue;
         }
 
-        // Silbentrennung: '-' + whitespace + alnum  => '-' und whitespace verwerfen
+        // remove hyphenation: "-" + whitespace + alphanumeric → drop the hyphen and whitespace
         if c == '-' && i + 2 < chars.len() && chars[i + 1].is_whitespace() && chars[i + 2].is_alphanumeric() {
-            // überspringe '-' und alle folgenden Whitespaces
+            // skip the hyphen and subsequent whitespace characters
             i += 1;
             while i < chars.len() && chars[i].is_whitespace() {
                 i += 1;
@@ -48,9 +49,9 @@ pub fn normalize(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// Sehr einfache Ähnlichkeitsmetrik:
-/// 1) exakter Teilstring-Treffer => Score 1.0
-/// 2) sonst Token-Overlap: Anteil der Tokens (len>=3), die im Seiteninhalt vorkommen
+/// Very small similarity metric:
+/// 1. exact substring match yields a score of 1.0
+/// 2. otherwise compute token overlap for tokens with length ≥ 3
 fn similarity(needle_norm: &str, hay_norm: &str) -> f32 {
     if needle_norm.is_empty() || hay_norm.is_empty() {
         return 0.0;
@@ -74,7 +75,7 @@ fn similarity(needle_norm: &str, hay_norm: &str) -> f32 {
     (hit as f32) / (tokens.len() as f32)
 }
 
-/// Liefert (Seite, Score), wenn eine Seite den Schwellwert erreicht.
+/// Return the page index and score when any page crosses the similarity threshold.
 pub fn resolve_page(
     quote: &str,
     value: &str,

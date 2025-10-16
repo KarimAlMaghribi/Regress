@@ -1,3 +1,7 @@
+//! Loads process level configuration such as database connectivity and message
+//! broker endpoints, providing sensible defaults for local development so that
+//! services can start without additional environment setup.
+
 use serde::Deserialize;
 
 fn default_database_url() -> String {
@@ -8,6 +12,7 @@ fn default_message_broker_url() -> String {
     "kafka:9092".into()
 }
 
+/// Application level settings populated from the environment.
 #[derive(Debug, Deserialize)]
 pub struct Settings {
     #[serde(default = "default_database_url")]
@@ -21,6 +26,8 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// Build a [`Settings`] instance by reading environment variables using the
+    /// [`config`] crate, falling back to the defaults defined above.
     pub fn new() -> Result<Self, config::ConfigError> {
         config::Config::builder()
             .add_source(config::Environment::default())

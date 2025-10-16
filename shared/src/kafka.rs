@@ -1,3 +1,6 @@
+//! Kafka administration helpers shared across services that need to ensure
+//! topics are available before producing messages.
+
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::ClientConfig;

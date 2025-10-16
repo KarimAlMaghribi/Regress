@@ -1,5 +1,9 @@
+//! Wraps frequently used Rhai evaluation helpers so services can safely execute
+//! custom formulas defined in pipeline configurations.
+
 use rhai::{Engine, Scope};
 
+/// Evaluate `expr` as a boolean expression using the provided variables.
 pub fn rhai_eval_bool(expr: &str, vars: &std::collections::HashMap<String, rhai::Dynamic>) -> anyhow::Result<bool> {
     let engine = Engine::new();
     let mut scope = Scope::new();
@@ -12,6 +16,8 @@ pub fn rhai_eval_bool(expr: &str, vars: &std::collections::HashMap<String, rhai:
     Ok(result)
 }
 
+/// Evaluate `expr` as an arbitrary Rhai expression returning the raw dynamic
+/// value so that callers can interpret numbers, strings, or structs as needed.
 pub fn eval_formula(expr: &str, vars: &std::collections::HashMap<String, rhai::Dynamic>) -> anyhow::Result<rhai::Dynamic> {
     let engine = Engine::new();
     let mut scope = Scope::new();

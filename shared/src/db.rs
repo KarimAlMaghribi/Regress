@@ -1,3 +1,6 @@
+//! Database helpers that encapsulate raw SQL queries shared between services
+//! for fetching PDFs, listing tenants, and providing JSON aggregates.
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio_postgres::{types::ToSql, Client};

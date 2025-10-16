@@ -21,6 +21,11 @@ const defaultOrder = [
   'error',
 ];
 
+/**
+ * Renders a generic, column-driven table for extraction and scoring results.
+ * The component inspects the data set to derive a stable column order and
+ * exposes hooks for highlighting evidence inside the PDF viewer.
+ */
 export default function GenericResultTable({ data, onSelect, preferredOrder = defaultOrder }: Props) {
   const excluded = new Set(['openai_raw', 'openaiRaw', 'json_key', 'jsonKey', 'prompt_id', 'promptId', 'source', 'depth', 'color']);
 

@@ -1,3 +1,6 @@
+//! Actix Web service responsible for receiving uploads, persisting metadata,
+//! and broadcasting status updates while ensuring the database schema exists.
+
 use actix_multipart::Multipart;
 use actix_web::{web, App, Error, HttpResponse, HttpServer};
 use chrono::{DateTime, Utc};
@@ -44,7 +47,8 @@ struct AppState {
     tx: broadcast::Sender<StatusEvent>,
 }
 
-/// Hängt `sslmode=disable` an, falls die URL noch keinen Wert setzt.
+/// Append `sslmode=disable` when the connection string does not provide one so
+/// local environments avoid TLS requirements.
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
         return url.to_string();
@@ -57,9 +61,9 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
-/// Datenbankschema (Enum + Tabelle) sicherstellen.
+/// Ensure the database schema and enum definitions exist before handling data.
 async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
-    // ENUM-Typ robust anlegen
+    // Create the enum type when missing.
     sqlx::query(
         r#"
         DO $$
@@ -73,7 +77,7 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         .execute(pool)
         .await?;
 
-    // Tabelle mit Defaults (idempotent)
+    // Create the table with sensible defaults in an idempotent fashion.
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS uploads (
@@ -93,7 +97,7 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
 }
 
 async fn upload(mut payload: Multipart, data: web::Data<AppState>) -> Result<HttpResponse, Error> {
-    // Verzeichnis sicherstellen
+    // Ensure the upload directory exists.
     if let Err(e) = tokio::fs::create_dir_all("/data/uploads").await {
         return Err(actix_web::error::ErrorInternalServerError(e));
     }
@@ -122,7 +126,7 @@ async fn upload(mut payload: Multipart, data: web::Data<AppState>) -> Result<Htt
                     .map_err(actix_web::error::ErrorInternalServerError)?;
             }
 
-            // Datensatz anlegen (Status default 'pending')
+            // Insert the upload metadata while leaving statuses at `pending`.
             sqlx::query("INSERT INTO uploads (id, filename, stored_path) VALUES ($1,$2,$3)")
                 .bind(id)
                 .bind(&filename)
@@ -131,7 +135,7 @@ async fn upload(mut payload: Multipart, data: web::Data<AppState>) -> Result<Htt
                 .await
                 .map_err(actix_web::error::ErrorInternalServerError)?;
 
-            // Frisch gespeicherten Upload laden und zurückgeben
+            // Fetch the freshly stored upload and return it to the client.
             let upload: Upload = sqlx::query_as::<_, Upload>("SELECT * FROM uploads WHERE id=$1")
                 .bind(id)
                 .fetch_one(&data.pool)
@@ -140,7 +144,7 @@ async fn upload(mut payload: Multipart, data: web::Data<AppState>) -> Result<Htt
 
             info!(%id, file=%filename, "stored upload");
 
-            // Simulation asynchron starten
+            // Kick off the background status simulation.
             let state = data.clone();
             tokio::spawn(async move { simulate(id, state).await });
 
@@ -183,7 +187,7 @@ async fn sse_stream(data: web::Data<AppState>) -> Result<HttpResponse, Error> {
         .streaming(event_stream))
 }
 
-/// Simuliert Status-Änderungen (OCR -> SUCCESS, Layout -> SUCCESS)
+/// Simulate status changes so the UI receives OCR/layout progress events.
 async fn simulate(id: Uuid, data: web::Data<AppState>) {
     let _ = data.tx.send(StatusEvent {
         id,
@@ -234,18 +238,18 @@ async fn simulate(id: Uuid, data: web::Data<AppState>) {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // JSON-Logger
+    // Enable JSON logging when desired.
     tracing_subscriber::fmt().json().init();
 
-    // DB-URL laden und TLS explizit deaktivieren
+    // Load the database URL and explicitly disable TLS for local runs.
     let raw_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-        // Fallback (nur für lokale Tests)
+        // Fallback for local testing environments.
         "postgresql://regress_app:nITj%22%2B0%28f89F@haproxy:5432/regress?sslmode=disable"
             .to_string()
     });
     let database_url = ensure_sslmode_disable(&raw_url);
 
-    // Verbindungspool
+    // Create the connection pool.
     let pool = match PgPoolOptions::new()
         .max_connections(8)
         .connect(&database_url)
@@ -258,7 +262,7 @@ async fn main() -> std::io::Result<()> {
         }
     };
 
-    // Schema sicherstellen
+    // Ensure the schema is present before accepting uploads.
     if let Err(e) = ensure_schema(&pool).await {
         error!(%e, "failed to ensure schema");
         std::process::exit(1);
