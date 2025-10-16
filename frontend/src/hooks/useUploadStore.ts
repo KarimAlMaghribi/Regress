@@ -14,7 +14,7 @@ const runtimeEnv: RuntimeEnv =
 export const UPLOAD_API =
   runtimeEnv.UPLOAD_API_URL ||
   runtimeEnv.INGEST_URL ||
-  (import.meta.env.VITE_UPLOAD_API_URL as string | undefined) ||
+  (import.meta.env.VITE_API_URL as string | undefined) ||
   (import.meta.env.VITE_INGEST_URL as string | undefined) ||
     '/ingest';
 
