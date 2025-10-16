@@ -1,38 +1,42 @@
-import React, { useCallback, useState, useEffect, useMemo } from 'react';
-import { useDropzone } from 'react-dropzone';
+import React, {useCallback, useEffect, useMemo, useState} from 'react';
+import {useDropzone} from 'react-dropzone';
 import {
-  Box,
-  Typography,
-  Paper,
-  Button,
-  IconButton,
-  Select,
-  MenuItem,
-  FormControl,
-  InputLabel,
-  Snackbar,
   Alert,
-  Stack,
-  Grid,
+  Box,
+  Button,
   Chip,
+  FormControl,
+  Grid,
+  IconButton,
+  InputLabel,
+  MenuItem,
+  Paper,
+  Select,
+  Snackbar,
+  Stack,
+  Typography,
 } from '@mui/material';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
-import { DataGrid, GridColDef } from '@mui/x-data-grid';
-import { motion } from 'framer-motion';
+import {DataGrid, GridColDef} from '@mui/x-data-grid';
+import {motion} from 'framer-motion';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloseIcon from '@mui/icons-material/Close';
 import CircularProgress from '@mui/material/CircularProgress';
 import PageHeader from '../components/PageHeader';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DownloadIcon from '@mui/icons-material/Download';
-import RefreshIcon from '@mui/icons-material/Refresh';
-import { UPLOAD_API, useUploadStore } from '../hooks/useUploadStore';
-import { usePipelineList } from '../hooks/usePipelineList';
-import { useTenants } from '../hooks/useTenants';
-import { alpha, useTheme } from '@mui/material/styles';
+import OpenInNewIcon from '@mui/icons-material/OpenInNew';
+import {UPLOAD_API, useUploadStore} from '../hooks/useUploadStore';
+import {usePipelineList} from '../hooks/usePipelineList';
+import {useTenants} from '../hooks/useTenants';
+import {alpha, useTheme} from '@mui/material/styles';
 
-declare global { interface Window { __ENV__?: any } }
+declare global {
+  interface Window {
+    __ENV__?: any
+  }
+}
 
 export default function Upload() {
   const theme = useTheme();
@@ -40,7 +44,7 @@ export default function Upload() {
   const [message, setMessage] = useState<string>('');
   const [snackOpen, setSnackOpen] = useState(false);
 
-  const { pipelines } = usePipelineList();
+  const {pipelines} = usePipelineList();
   const {
     entries,
     load,
@@ -53,7 +57,7 @@ export default function Upload() {
   } = useUploadStore();
 
   // TENANTS
-  const { items: tenants, loading: tenantsLoading, error: tenantsError } = useTenants();
+  const {items: tenants, loading: tenantsLoading, error: tenantsError} = useTenants();
   const [tenantId, setTenantId] = useState<string>('');
 
   const onDrop = useCallback((sel: File[]) => {
@@ -71,10 +75,10 @@ export default function Upload() {
     if (error) setSnackOpen(true);
   }, [error]);
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  const {getRootProps, getInputProps, isDragActive} = useDropzone({
     onDrop,
     multiple: true,
-    accept: { 'application/pdf': ['.pdf'], 'application/zip': ['.zip'] },
+    accept: {'application/pdf': ['.pdf'], 'application/zip': ['.zip']},
   });
 
   const ingest = useMemo(() => UPLOAD_API, []);
@@ -91,7 +95,7 @@ export default function Upload() {
 
     fetch(url, {
       method: 'POST',
-      headers: { 'X-Tenant-ID': tenantId },
+      headers: {'X-Tenant-ID': tenantId},
       body: form,
     })
     .then(async r => {
@@ -112,13 +116,14 @@ export default function Upload() {
   };
 
   const deletePdf = (id: number) => {
-    fetch(`${ingest.replace(/\/$/, '')}/pdf/${id}`, { method: 'DELETE' })
-    .then(() => load().catch(()=>{}))
+    fetch(`${ingest.replace(/\/$/, '')}/pdf/${id}`, {method: 'DELETE'})
+    .then(() => load().catch(() => {
+    }))
     .catch(e => console.error('delete pdf', e));
   };
 
   const dropStyles = {
-    p: { xs: 5, md: 6 },
+    p: {xs: 5, md: 6},
     border: `1px dashed ${alpha(theme.palette.primary.main, 0.35)}`,
     borderRadius: 'var(--radius-card)',
     textAlign: 'center' as const,
@@ -136,24 +141,23 @@ export default function Upload() {
   };
 
   const columns: GridColDef[] = [
-    { field: 'pdfId', headerName: 'PDF', width: 90 },
-    { field: 'status', headerName: 'Status', flex: 1 },
     {
-      field: 'pipeline',
-      headerName: 'Pipeline',
-      width: 180,
-      renderCell: params => (
-          <Select
+      field: 'open',
+      headerName: 'Öffnen',
+      width: 90,
+      sortable: false,
+      filterable: false,
+      renderCell: (params) => params.row.pdfId ? (
+          <IconButton
               size="small"
-              fullWidth
-              value={params.row.selectedPipelineId || ''}
-              onChange={e => updateFile(params.row.id, { selectedPipelineId: e.target.value })}
+              component="a"
+              href={`${UPLOAD_API.replace(/\/$/, '')}/pdf/${params.row.pdfId}`}
+              target="_blank"
+              rel="noopener noreferrer"
           >
-            {pipelines.map(p => (
-                <MenuItem key={p.id} value={p.id}>{p.name}</MenuItem>
-            ))}
-          </Select>
-      ),
+            <OpenInNewIcon fontSize="small"/>
+          </IconButton>
+      ) : null,
     },
     {
       field: 'run',
@@ -163,10 +167,10 @@ export default function Upload() {
       renderCell: params => (
           <IconButton
               size="small"
-              onClick={() => runPipeline(params.row.id, params.row.selectedPipelineId).catch(()=>setSnackOpen(true))}
+              onClick={() => runPipeline(params.row.id, params.row.selectedPipelineId).catch(() => setSnackOpen(true))}
               disabled={!params.row.selectedPipelineId || params.row.loading}
           >
-            {params.row.loading ? <CircularProgress size={16} /> : <PlayArrowIcon fontSize="small" />}
+            {params.row.loading ? <CircularProgress size={16}/> : <PlayArrowIcon fontSize="small"/>}
           </IconButton>
       ),
     },
@@ -176,8 +180,9 @@ export default function Upload() {
       width: 60,
       sortable: false,
       renderCell: params => (
-          <IconButton size="small" onClick={() => downloadExtractedText(params.row.id)} disabled={!params.row.ocr}>
-            <DownloadIcon fontSize="small" />
+          <IconButton size="small" onClick={() => downloadExtractedText(params.row.id)}
+                      disabled={!params.row.ocr}>
+            <DownloadIcon fontSize="small"/>
           </IconButton>
       ),
     },
@@ -187,9 +192,10 @@ export default function Upload() {
       width: 80,
       renderCell: params => {
         const st = params.row.status as string;
-        if (st === 'ocr' || st === 'merging') return <CircularProgress size={16} />;
-        if (st === 'ready' && params.row.ocr) return <CheckCircleIcon color="success" fontSize="small" />;
-        return <CloseIcon color="error" fontSize="small" />;
+        if (st === 'ocr' || st === 'merging') return <CircularProgress size={16}/>;
+        if (st === 'ready' && params.row.ocr) return <CheckCircleIcon color="success"
+                                                                      fontSize="small"/>;
+        return <CloseIcon color="error" fontSize="small"/>;
       },
     },
     {
@@ -198,8 +204,8 @@ export default function Upload() {
       width: 80,
       renderCell: params => {
         const st = params.row.status as string;
-        if (st !== 'ready') return <CircularProgress size={16} />;
-        return <CheckCircleIcon color="success" fontSize="small" />;
+        if (st !== 'ready') return <CircularProgress size={16}/>;
+        return <CheckCircleIcon color="success" fontSize="small"/>;
       },
     },
     {
@@ -208,8 +214,9 @@ export default function Upload() {
       sortable: false,
       width: 80,
       renderCell: params => (
-          <IconButton size="small" onClick={() => deletePdf(params.row.pdfId)} disabled={!params.row.pdfId}>
-            <DeleteIcon fontSize="small" />
+          <IconButton size="small" onClick={() => deletePdf(params.row.pdfId)}
+                      disabled={!params.row.pdfId}>
+            <DeleteIcon fontSize="small"/>
           </IconButton>
       ),
     },
@@ -223,15 +230,15 @@ export default function Upload() {
         <PageHeader
             title="Upload"
             subtitle="Dokumente mandantenbezogen bereitstellen und zur Pipeline weiterleiten"
-            breadcrumb={[{ label: 'Dashboard', to: '/' }, { label: 'Upload' }]}
+            breadcrumb={[{label: 'Dashboard', to: '/'}, {label: 'Upload'}]}
             tone="primary"
-            icon={<CloudUploadIcon />}
+            icon={<CloudUploadIcon/>}
             tag={`Aktive Einträge: ${entries.length}`}
             actions={
               <Button
                   variant="outlined"
                   size="small"
-                  startIcon={<RefreshIcon />}
+                  startIcon={<RefreshIcon/>}
                   onClick={() => load().catch(() => setSnackOpen(true))}
               >
                 Aktualisieren
@@ -244,7 +251,7 @@ export default function Upload() {
             <Paper
                 variant="outlined"
                 sx={{
-                  p: { xs: 3, md: 4 },
+                  p: {xs: 3, md: 4},
                   borderRadius: 'var(--radius-card)',
                   boxShadow: 'var(--shadow-z1)',
                   background:
@@ -255,17 +262,19 @@ export default function Upload() {
             >
               <Stack spacing={2.5}>
                 <Box>
-                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                  <Typography variant="h6" sx={{fontWeight: 600}}>
                     Upload-Übersicht
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Wähle zuerst den passenden Mandanten aus und lade anschließend PDF- oder ZIP-Dateien hoch.
+                    Wähle zuerst den passenden Mandanten aus und lade anschließend PDF- oder
+                    ZIP-Dateien hoch.
                     Die Dateien werden automatisch der gewählten Pipeline zugeordnet.
                   </Typography>
                 </Box>
                 <Stack direction="row" spacing={1} flexWrap="wrap">
-                  <Chip label={`Dateien ausgewählt: ${files.length}`} color={files.length ? 'primary' : 'default'} />
-                  <Chip label={`Pipelines: ${pipelines.length}`} variant="outlined" />
+                  <Chip label={`Dateien ausgewählt: ${files.length}`}
+                        color={files.length ? 'primary' : 'default'}/>
+                  <Chip label={`Pipelines: ${pipelines.length}`} variant="outlined"/>
                 </Stack>
               </Stack>
             </Paper>
@@ -274,14 +283,14 @@ export default function Upload() {
             <Paper
                 variant="outlined"
                 sx={{
-                  p: { xs: 3, md: 4 },
+                  p: {xs: 3, md: 4},
                   borderRadius: 'var(--radius-card)',
                   boxShadow: 'var(--shadow-z1)',
                 }}
             >
               <Stack spacing={3}>
                 <Stack spacing={1}>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                  <Typography variant="subtitle1" sx={{fontWeight: 600}}>
                     Mandant und Upload vorbereiten
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
@@ -289,7 +298,8 @@ export default function Upload() {
                   </Typography>
                 </Stack>
 
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2.5} alignItems={{ sm: 'center' }}>
+                <Stack direction={{xs: 'column', sm: 'row'}} spacing={2.5}
+                       alignItems={{sm: 'center'}}>
                   <FormControl fullWidth>
                     <InputLabel id="tenant-label">Mandant</InputLabel>
                     <Select
@@ -304,7 +314,7 @@ export default function Upload() {
                       ))}
                     </Select>
                   </FormControl>
-                  <Typography variant="body2" color="text.secondary" sx={{ minWidth: { sm: 180 } }}>
+                  <Typography variant="body2" color="text.secondary" sx={{minWidth: {sm: 180}}}>
                     Pflichtschritt vor dem Upload.
                   </Typography>
                 </Stack>
@@ -315,14 +325,14 @@ export default function Upload() {
 
                 <Box
                     component={motion.div}
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.995 }}
+                    whileHover={{scale: 1.01}}
+                    whileTap={{scale: 0.995}}
                     {...getRootProps()}
                     sx={dropStyles}
                 >
                   <input {...getInputProps()} />
-                  <CloudUploadIcon sx={{ fontSize: 48, color: theme.palette.primary.main }} />
-                  <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                  <CloudUploadIcon sx={{fontSize: 48, color: theme.palette.primary.main}}/>
+                  <Typography variant="h6" sx={{fontWeight: 600}}>
                     {isDragActive
                         ? 'Ablegen zum Hochladen'
                         : files.length
@@ -334,19 +344,20 @@ export default function Upload() {
                   </Typography>
                 </Box>
 
-                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ sm: 'center' }}>
+                <Stack direction={{xs: 'column', sm: 'row'}} spacing={2}
+                       alignItems={{sm: 'center'}}>
                   <Button
                       variant="contained"
                       onClick={upload}
                       disabled={uploadDisabled}
                       component={motion.button}
-                      whileHover={{ y: -2 }}
-                      sx={{ alignSelf: { xs: 'stretch', sm: 'flex-start' } }}
+                      whileHover={{y: -2}}
+                      sx={{alignSelf: {xs: 'stretch', sm: 'flex-start'}}}
                   >
                     Upload starten
                   </Button>
                   {message && (
-                      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+                      <motion.div initial={{opacity: 0}} animate={{opacity: 1}}>
                         <Alert severity={isErrorMessage ? 'error' : 'success'}>{message}</Alert>
                       </motion.div>
                   )}
@@ -359,14 +370,15 @@ export default function Upload() {
         <Paper
             variant="outlined"
             sx={{
-              p: { xs: 2, md: 3 },
+              p: {xs: 2, md: 3},
               borderRadius: 'var(--radius-card)',
               boxShadow: 'var(--shadow-z1)',
             }}
         >
           <Stack spacing={2.5}>
-            <Stack direction="row" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={1.5}>
-              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+            <Stack direction="row" alignItems="center" justifyContent="space-between"
+                   flexWrap="wrap" gap={1.5}>
+              <Typography variant="h6" sx={{fontWeight: 600}}>
                 Eingehende Dokumente
               </Typography>
               <Typography variant="body2" color="text.secondary">
@@ -379,13 +391,13 @@ export default function Upload() {
                 rows={entries}
                 columns={columns}
                 pageSizeOptions={[5, 10, 25]}
-                initialState={{ pagination: { paginationModel: { pageSize: 5, page: 0 } } }}
+                initialState={{pagination: {paginationModel: {pageSize: 5, page: 0}}}}
             />
           </Stack>
         </Paper>
 
         <Snackbar open={snackOpen} autoHideDuration={6000} onClose={() => setSnackOpen(false)}>
-          <Alert onClose={() => setSnackOpen(false)} severity="error" sx={{ width: '100%' }}>
+          <Alert onClose={() => setSnackOpen(false)} severity="error" sx={{width: '100%'}}>
             Statusaktualisierung fehlgeschlagen, versuche es erneut.
           </Alert>
         </Snackbar>
