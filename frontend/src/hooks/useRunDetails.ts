@@ -65,7 +65,6 @@ export interface RunStep {
 
   // Neu: Tri-State konsolidiert (falls vorhanden)
   final_score_label?: TernaryLabel | null; // yes/no/unsure
-  // Hinweis: der numerische Score (−1..+1) liegt in run.final_scores[final_key!]
 
   started_at?: string | null;
   finished_at?: string | null;

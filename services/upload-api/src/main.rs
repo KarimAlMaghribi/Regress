@@ -1,3 +1,5 @@
+//! HTTP service that accepts PDF uploads and broadcasts progress to subscribers.
+
 use actix_multipart::Multipart;
 use actix_web::{web, App, Error, HttpResponse, HttpServer};
 use chrono::{DateTime, Utc};

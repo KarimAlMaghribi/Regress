@@ -1,3 +1,5 @@
+//! Database helper utilities used by multiple services.
+
 use anyhow::{Context, Result};
 use serde_json::Value;
 use tokio_postgres::{types::ToSql, Client};
@@ -40,6 +42,7 @@ pub async fn list_tenants(db: &Client) -> Result<Vec<(Uuid, String)>> {
     Ok(rows.into_iter().map(|r| (r.get(0), r.get(1))).collect())
 }
 
+/// Executes the provided query and converts the first column to JSON values.
 async fn query_json_vec(db: &Client, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Value>> {
     let rows = db.query(sql, params).await.context("db query_json_vec")?;
     let mut out = Vec::with_capacity(rows.len());

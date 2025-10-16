@@ -1,3 +1,8 @@
+//! Shared data transfer objects used across services and the frontend.
+//!
+//! These types codify the JSON payloads exchanged between components so that
+//! each service and consumer can rely on a consistent schema.
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use strum_macros::{Display, EnumString};
@@ -5,15 +10,16 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, PartialEq, Eq, EnumString, Display, Serialize, Deserialize)]
 #[strum(serialize_all = "PascalCase")]
+/// Describes the purpose of a prompt executed within a pipeline.
 pub enum PromptType {
     ExtractionPrompt,
     ScoringPrompt,
     DecisionPrompt,
 }
 
-/// Tri-State Label für Scoring (neu)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+/// Describes a tri-state label for scoring prompts.
 pub enum TernaryLabel {
     Yes,
     No,
@@ -21,22 +27,26 @@ pub enum TernaryLabel {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Request payload used when uploading a PDF via the upload API.
 pub struct UploadRequest {
     pub file_name: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Response returned after a successful upload request.
 pub struct UploadResponse {
     pub id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Event emitted once a PDF has been stored.
 pub struct PdfUploaded {
     pub pdf_id: i32,
     pub pipeline_id: uuid::Uuid,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Event emitted after text extraction completed for a PDF.
 pub struct TextExtracted {
     pub pdf_id: i32,
     pub pipeline_id: uuid::Uuid,
@@ -44,43 +54,48 @@ pub struct TextExtracted {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+/// Location of a highlighted text passage within a PDF.
 pub struct TextPosition {
     pub page: u32,
     pub bbox: [f32; 4],
     pub quote: Option<String>,
 }
 
-/// Einzelnes Scoring-Resultat (per Batch/Attempt ODER konsolidiert).
-/// Abwärtskompatibel: `result` (bool) bleibt erhalten.
-/// Neu: `vote` (Tri-State), `strength`, `confidence`, `score` (-1..+1), `label` (Tri-State, z. B. fürs konsolidierte Ergebnis).
 #[derive(Serialize, Deserialize, Debug, Clone)]
+/// Single scoring result produced either by an attempt or via consolidation.
 pub struct ScoringResult {
     pub prompt_id: i32,
 
-    /// Abwärtskompatibles Boolean (true == yes). Bei `unsure` i. d. R. false.
+    /// Backwards compatible boolean (true == yes). Often `false` for
+    /// `TernaryLabel::Unsure` values.
     pub result: bool,
 
     pub source: TextPosition,
     pub explanation: String,
 
-    /// Neu / optional:
     #[serde(default)]
-    pub vote: Option<TernaryLabel>,       // yes | no | unsure (bei Attempts)
+    /// Vote cast by an individual scoring attempt.
+    pub vote: Option<TernaryLabel>,
 
     #[serde(default)]
-    pub strength: Option<f32>,            // 0..1 (Evidenzstärke der Stimme)
+    /// Evidence strength of the vote on a scale from 0.0 to 1.0.
+    pub strength: Option<f32>,
 
     #[serde(default)]
-    pub confidence: Option<f32>,          // 0..1 (Antwortsicherheit der Stimme)
+    /// Confidence of the model in the scoring decision.
+    pub confidence: Option<f32>,
 
     #[serde(default)]
-    pub score: Option<f32>,               // -1..+1 (z. B. konsolidierter Wert)
+    /// Normalised score mapped to the -1.0..=1.0 range.
+    pub score: Option<f32>,
 
     #[serde(default)]
-    pub label: Option<TernaryLabel>,      // yes|no|unsure (z. B. konsolidiert)
+    /// Final tri-state label used in consolidated results.
+    pub label: Option<TernaryLabel>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+/// Result produced by a prompt execution.
 pub struct PromptResult {
     pub prompt_id: i32,
     pub prompt_type: PromptType,
@@ -96,6 +111,7 @@ pub struct PromptResult {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+/// Execution log entry capturing intermediate pipeline state.
 pub struct RunStep {
     pub seq_no: u32,
     pub step_id: String,
@@ -107,6 +123,7 @@ pub struct RunStep {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+/// Comprehensive result object returned by the pipeline runner.
 pub struct PipelineRunResult {
     pub run_id: Option<Uuid>,
 
@@ -116,22 +133,23 @@ pub struct PipelineRunResult {
 
     pub extracted: std::collections::HashMap<String, serde_json::Value>,
 
-    /// Konsolidierte Scoring-Ergebnisse (ein Eintrag je Regel)
+    /// Consolidated scoring results (one entry per rule).
     pub scoring: Vec<ScoringResult>,
 
     pub extraction: Vec<PromptResult>,
     pub decision: Vec<PromptResult>,
     pub log: Vec<RunStep>,
 
-    /// Neu / optional: finale Scores je Regel (−1..+1) und zugehörige Tri-State Labels
     #[serde(default)]
+    /// Final numeric scores per rule mapped to the -1.0..=1.0 range.
     pub final_scores: Option<std::collections::HashMap<String, f32>>,
 
     #[serde(default)]
+    /// Tri-state labels associated with the final scores.
     pub final_score_labels: Option<std::collections::HashMap<String, TernaryLabel>>,
 
-    /// Optional: Metadaten (werden oft vom history-service ergänzt)
     #[serde(default)]
+    /// Optional metadata, often populated by the history service.
     pub status: Option<String>,
     #[serde(default)]
     pub started_at: Option<String>,
@@ -140,6 +158,7 @@ pub struct PipelineRunResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Configuration for a single pipeline step.
 pub struct PipelineStep {
     pub id: Uuid,
     #[serde(rename = "type")]
@@ -147,47 +166,53 @@ pub struct PipelineStep {
     #[serde(rename = "promptId")]
     pub prompt_id: i32,
 
-    // optional routing / decisions
     #[serde(default)]
+    /// Optional route identifier used for branching.
     pub route: Option<String>,
     #[serde(default, rename = "yesKey")]
+    /// Optional key emitted when the step evaluates to "yes".
     pub yes_key: Option<String>,
     #[serde(default, rename = "noKey")]
+    /// Optional key emitted when the step evaluates to "no".
     pub no_key: Option<String>,
 
     #[serde(default)]
+    /// Whether the step is active in the current pipeline configuration.
     pub active: bool,
 
+    /// Additional configuration passed to the step implementation.
     pub config: Option<Value>,
 }
 
 #[derive(Serialize, Deserialize)]
+/// High level pipeline configuration comprising multiple steps.
 pub struct PipelineConfig {
     pub name: String,
     pub steps: Vec<PipelineStep>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Represents a tenant that owns uploads and pipeline runs.
 pub struct Tenant {
     pub id: Uuid,
     pub name: String,
 }
 
-/// Request: Mandant anlegen
 #[derive(Debug, Clone, Deserialize)]
+/// Request payload for creating a tenant.
 pub struct CreateTenantRequest {
     pub name: String,
 }
 
-/// (Optional) Upload-Request
 #[derive(Debug, Clone, Deserialize)]
+/// Request payload for creating an upload entry.
 pub struct CreateUploadRequest {
     pub pipeline_id: Option<Uuid>,
     pub tenant_id: Uuid,
 }
 
-/// (Optional) Upload-DTO (Response)
 #[derive(Debug, Clone, Serialize)]
+/// Upload response returned by the upload API.
 pub struct UploadDto {
     pub id: i64,
     pub pdf_id: Option<i32>,

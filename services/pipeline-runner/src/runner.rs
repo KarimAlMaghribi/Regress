@@ -1,4 +1,4 @@
-// services/pipeline-runner/src/runner.rs
+//! Orchestrates the execution of pipeline steps and integrates OpenAI calls.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -13,15 +13,22 @@ use shared::dto::{
 use shared::openai_client as ai;
 
 #[derive(Clone, Debug)]
+/// Runtime configuration for batched OpenAI requests.
 pub struct BatchCfg {
-    pub page_batch_size: usize, // PIPELINE_PAGE_BATCH_SIZE
-    pub max_parallel: usize,    // PIPELINE_MAX_PARALLEL
-    pub max_chars: usize,       // PIPELINE_MAX_CHARS
-    pub openai_timeout_ms: u64, // PIPELINE_OPENAI_TIMEOUT_MS
-    pub openai_retries: usize,  // PIPELINE_OPENAI_RETRIES
+    /// Number of pages to include per extraction batch.
+    pub page_batch_size: usize,
+    /// Maximum number of concurrent OpenAI requests.
+    pub max_parallel: usize,
+    /// Maximum number of characters per request payload.
+    pub max_chars: usize,
+    /// Timeout for OpenAI requests in milliseconds.
+    pub openai_timeout_ms: u64,
+    /// Number of retries to attempt when OpenAI calls fail.
+    pub openai_retries: usize,
 }
 
 #[derive(Debug, Clone)]
+/// Aggregated outcome produced by executing a pipeline.
 pub struct RunOutcome {
     pub extraction: Vec<PromptResult>,
     pub scoring: Vec<ScoringResult>,
@@ -29,6 +36,8 @@ pub struct RunOutcome {
     pub log: Vec<RunStep>,
 }
 
+/// Executes a pipeline against the provided pages using the supplied batching
+/// configuration.
 pub async fn execute_with_pages(
     cfg: &PipelineConfig,
     pages: &[(i32, String)],
@@ -885,6 +894,7 @@ async fn fetch_prompt_text_for_log(prompt_id: i32) -> String {
     }
 }
 
+/// Calculates a weighted average score from boolean decisions and weights.
 pub fn compute_overall_score(items: &[(bool, f32)]) -> Option<f32> {
     if items.is_empty() {
         return None;

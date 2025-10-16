@@ -1,3 +1,5 @@
+//! Adapter that re-uploads processed files back into the ingestion pipeline.
+
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -22,6 +24,7 @@ pub struct UploadResult {
 }
 
 impl UploadAdapter {
+    /// Creates a new adapter that posts processed PDFs back to the upload API.
     pub fn new(url: String, token: Option<String>, timeout: std::time::Duration) -> Result<Self> {
         let client = Client::builder()
             .timeout(timeout)
@@ -30,6 +33,8 @@ impl UploadAdapter {
         Ok(Self { client, url, token })
     }
 
+    /// Uploads the file to the configured endpoint and returns the API response
+    /// metadata.
     pub async fn upload(&self, file_path: &Path, file_name: &str) -> Result<UploadResult> {
         let mut form = Form::new().text("defer_pipeline", "true".to_string());
         let part = Part::file(file_path)

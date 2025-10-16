@@ -1,13 +1,12 @@
-// shared/src/evidence_resolver.rs
-// Seitenauflösung ohne externe Crates (kompatibel mit --locked)
+//! Lightweight heuristics to resolve evidence snippets back to PDF pages.
 
 use std::collections::HashMap;
 
-/// Einfache Normalisierung:
-/// - Kleinbuchstaben
-/// - weiche Trennzeichen entfernen
-/// - Silbentrennung am Zeilenumbruch entfernen: "-\n" / "-\r\n" / "- " + Zeilenumbruch
-/// - Whitespace zu Einzel-Leerzeichen kollabieren
+/// Normalises user provided text so that simple similarity metrics behave
+/// consistently.
+///
+/// The normalisation performs lower-casing, removes soft hyphen characters,
+/// merges hyphenated line breaks, and collapses repeated whitespace.
 pub fn normalize(s: &str) -> String {
     let lower = s.to_lowercase();
     let chars: Vec<char> = lower.chars().collect();
@@ -17,13 +16,14 @@ pub fn normalize(s: &str) -> String {
     while i < chars.len() {
         let c = chars[i];
 
-        // weicher Trennstrich U+00AD überspringen
+        // Skip soft hyphen (U+00AD) characters.
         if c == '\u{00AD}' {
             i += 1;
             continue;
         }
 
-        // Silbentrennung: '-' + whitespace + alnum  => '-' und whitespace verwerfen
+        // Remove hyphenation across line breaks so the underlying words remain
+        // searchable.
         if c == '-' && i + 2 < chars.len() && chars[i + 1].is_whitespace() && chars[i + 2].is_alphanumeric() {
             // überspringe '-' und alle folgenden Whitespaces
             i += 1;
@@ -48,9 +48,11 @@ pub fn normalize(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// Sehr einfache Ähnlichkeitsmetrik:
-/// 1) exakter Teilstring-Treffer => Score 1.0
-/// 2) sonst Token-Overlap: Anteil der Tokens (len>=3), die im Seiteninhalt vorkommen
+/// Calculates a lightweight similarity score between a normalised needle and
+/// haystack.
+///
+/// Exact substring matches score 1.0. Otherwise we compute the overlap of
+/// tokens (minimum length 3) found in the haystack.
 fn similarity(needle_norm: &str, hay_norm: &str) -> f32 {
     if needle_norm.is_empty() || hay_norm.is_empty() {
         return 0.0;
@@ -74,7 +76,10 @@ fn similarity(needle_norm: &str, hay_norm: &str) -> f32 {
     (hit as f32) / (tokens.len() as f32)
 }
 
-/// Liefert (Seite, Score), wenn eine Seite den Schwellwert erreicht.
+/// Attempts to resolve the page number for a given quote or value.
+///
+/// Returns the page together with a similarity score when the best match
+/// reaches the configured threshold.
 pub fn resolve_page(
     quote: &str,
     value: &str,

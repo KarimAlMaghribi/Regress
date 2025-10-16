@@ -24,6 +24,20 @@ graph TD;
 * **metrics** – exposes Prometheus metrics and a `/health` route.
 * **history-service** – records all runs and provides a WebSocket for live updates.
 
+## Code Documentation
+
+The Rust crates now expose comprehensive module and item level documentation.
+Each service describes its purpose at the top of the file and the most
+important structs and functions are annotated with `///` doc comments. This
+ensures `cargo doc` renders meaningful guidance when navigating the codebase
+and helps new contributors understand responsibilities without jumping between
+implementations. The SharePoint ingest helpers, pipeline consolidation logic,
+and shared client utilities now include per-function notes clarifying expected
+inputs, side effects, and retry behaviour. Prompt guardrails have also been
+rewritten to remove inline "hint" comments while still stating the strict JSON
+contracts, so the LLM instructions remain clear without exposing implementation
+details.
+
 ## Building
 
 The `text-extraction` service depends on the native

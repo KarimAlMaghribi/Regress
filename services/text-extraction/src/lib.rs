@@ -1,3 +1,5 @@
+//! Text extraction helpers combining `pdftotext` and optional OCR.
+
 use std::{env, sync::Arc, time::Duration};
 
 use anyhow::{anyhow, Context, Result};
@@ -40,6 +42,7 @@ pub async fn extract_text(path: &str) -> Result<String> {
 }
 
 #[derive(Clone, Debug)]
+/// Holds the extracted text and metadata for a single page.
 pub struct PageExtraction {
     pub page_no: i32,
     pub text: String,
@@ -48,6 +51,7 @@ pub struct PageExtraction {
 }
 
 #[derive(Clone, Debug, Serialize)]
+/// Layout information describing bounding boxes for extracted words.
 pub struct PageLayout {
     pub page_no: i32,
     pub page_width: i32,
@@ -56,12 +60,14 @@ pub struct PageLayout {
 }
 
 #[derive(Clone, Debug, Serialize)]
+/// Single OCR word alongside its bounding box.
 pub struct Word {
     pub bbox: [i32; 4],
     pub text: String,
 }
 
 #[derive(Clone, Debug)]
+/// Configuration derived from environment variables controlling extraction.
 struct ExtractionOptions {
     pdftext_layout: bool,
     ocr_enabled: bool,
@@ -75,6 +81,7 @@ struct ExtractionOptions {
 }
 
 #[derive(Clone, Debug, Copy, PartialEq, Eq)]
+/// Available layout extraction strategies.
 enum LayoutBackend {
     BBox,
     PdfToHtml,

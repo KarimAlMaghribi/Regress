@@ -1,3 +1,5 @@
+//! Lightweight TCP scanner that discovers the SharePoint conversion worker.
+
 use anyhow::{bail, Context, Result};
 use std::{env, fs, io::Read, net::SocketAddr, path::Path};
 use tokio::{
@@ -13,6 +15,7 @@ pub struct ScanConfig {
 }
 
 impl ScanConfig {
+    /// Loads scan configuration flags and limits from environment variables.
     pub fn from_env() -> Self {
         let enabled = env::var("SCAN_ENABLED")
             .ok()
