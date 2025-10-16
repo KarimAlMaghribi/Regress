@@ -351,7 +351,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   <Box component="img" src={logo} alt="Regress logo" sx={{ width: 120 }} />
                 </Box>
                 <Typography variant="body2" color="text.secondary">
-                  Regress – zuverlässige Regressionstests und KI-gestützte Analysen in einem klaren Corporate Layout.
+                  Regress – zuverlässige Regressionstests und KI-gestützte Analysen.
                 </Typography>
               </Stack>
             </Grid>
@@ -361,11 +361,11 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   Kontakt
                 </Typography>
                 <Stack spacing={0.5}>
-                  <Button component="a" href="mailto:contact@regress.ai" variant="text" color="primary">
-                    contact@regress.ai
+                  <Button component="a" href="mailto:Stefan.Winkel@adesso.de" variant="text" color="primary">
+                    Stefan.Winkel@adesso.de
                   </Button>
                   <Typography variant="body2" color="text.secondary">
-                    Tel. +49 231 1234567
+                    Tel. +49 15155870138
                   </Typography>
                 </Stack>
               </Stack>
@@ -380,7 +380,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                     Servicezeiten: Mo–Fr, 8–18 Uhr
                   </Typography>
                   <Typography variant="body2" color="text.secondary">
-                    Standort: Dortmund & Remote
+                    Standort: Leipzig & Remote
                   </Typography>
                 </Stack>
               </Stack>

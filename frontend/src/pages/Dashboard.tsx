@@ -163,7 +163,6 @@ export default function Dashboard() {
         title="Dashboard"
         subtitle="Überblick"
         breadcrumb={[{ label: 'Dashboard' }]}
-        tag="Corporate Style"
       />
 
       <Stack spacing={8}>
@@ -254,10 +253,6 @@ export default function Dashboard() {
             <Typography variant="h2" sx={{ fontSize: { xs: '1.75rem', md: '2rem' }, mb: 1.5 }}>
               Alle zentralen Funktionen auf einen Blick
             </Typography>
-            <Typography variant="body1" color="text.secondary" sx={{ maxWidth: { md: '60%' } }}>
-              Die Module orientieren sich an den täglichen Aufgaben Ihrer Teams und führen nahtlos in bestehende
-              Workflows.
-            </Typography>
           </Box>
           <Grid container spacing={3}>
             {featureSections.map((item) => (
@@ -312,54 +307,6 @@ export default function Dashboard() {
             ))}
           </Grid>
         </Stack>
-
-        <Stack spacing={3}>
-          <Typography variant="subtitle2" color="text.secondary">
-            Referenzen
-          </Typography>
-          <Grid container spacing={3}>
-            {referenceItems.map((reference) => (
-              <Grid item xs={12} md={4} key={reference.title}>
-                <Paper sx={{ p: { xs: 3, md: 4 }, height: '100%' }}>
-                  <Stack spacing={1.5} sx={{ height: '100%' }}>
-                    <Chip label={reference.industry} size="small" color="primary" variant="outlined" />
-                    <Typography variant="h5">{reference.title}</Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
-                      {reference.description}
-                    </Typography>
-                    <Button component={Link} to={reference.to} color="primary" endIcon={<ArrowForwardIcon fontSize="small" />}>
-                      Projekt ansehen
-                    </Button>
-                  </Stack>
-                </Paper>
-              </Grid>
-            ))}
-          </Grid>
-        </Stack>
-
-        <Paper sx={{ p: { xs: 3, md: 4 } }}>
-          <Stack spacing={2.5}>
-            <Typography variant="subtitle2" color="text.secondary">
-              Zusammenarbeit
-            </Typography>
-            <Typography variant="h3" sx={{ fontSize: { xs: '1.5rem', md: '1.75rem' } }}>
-              Unternehmensweite Transparenz schaffen
-            </Typography>
-            <Typography variant="body1" color="text.secondary" sx={{ maxWidth: { md: '70%' } }}>
-              Stimmen Sie Releases, Reviews und Governance in einem gemeinsamen Workspace ab. Nutzen Sie die
-              Plattformmodule, um Abläufe mit Stakeholdern aus Entwicklung, Fachbereich und Compliance zu
-              verzahnen.
-            </Typography>
-            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
-              <Button component={Link} to="/history" variant="text" color="primary" endIcon={<ArrowForwardIcon fontSize="small" />}>
-                Historie öffnen
-              </Button>
-              <Button component={Link} to="/prompts" variant="text" color="primary" endIcon={<ArrowForwardIcon fontSize="small" />}>
-                Prompt-Verwaltung ansehen
-              </Button>
-            </Stack>
-          </Stack>
-        </Paper>
       </Stack>
     </Box>
   );
