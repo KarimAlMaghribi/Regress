@@ -25,8 +25,8 @@ import MenuIcon from '@mui/icons-material/Menu';
 import SearchIcon from '@mui/icons-material/Search';
 import { alpha, useTheme } from '@mui/material/styles';
 import { usePromptNotifications } from '../context/PromptNotifications';
-import logoWhite from '../imgs/logo_white.svg';
-import logoBlack from '../imgs/logo_black.svg';
+import logoWhite from '../imgs/logo_white.png';
+import logoBlack from '../imgs/logo_black.png';
 
 interface NavItem {
   label: string;
