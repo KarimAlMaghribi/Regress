@@ -914,6 +914,24 @@ async fn app_main() -> anyhow::Result<()> {
                         }
 
                         // 4) Event für UI/Monitoring – mit run_id
+                        let (started_at, finished_at) = match sqlx::query!(
+                            "SELECT started_at, finished_at FROM pipeline_runs WHERE id = $1",
+                            run_id
+                        )
+                        .fetch_optional(&pool)
+                        .await
+                        {
+                            Ok(Some(row)) => (
+                                row.started_at.map(|dt| dt.to_rfc3339()),
+                                row.finished_at.map(|dt| dt.to_rfc3339()),
+                            ),
+                            Ok(None) => (None, None),
+                            Err(e) => {
+                                warn!(%e, %run_id, "failed to fetch pipeline_run timings");
+                                (None, None)
+                            }
+                        };
+
                         let result = PipelineRunResult {
                             run_id: Some(run_id),
                             pdf_id: evt.pdf_id,
@@ -927,8 +945,8 @@ async fn app_main() -> anyhow::Result<()> {
                             final_scores: Some(final_scores_hm),
                             final_score_labels: Some(final_score_labels_hm),
                             status: Some("finished".to_string()),
-                            started_at: None,
-                            finished_at: None,
+                            started_at,
+                            finished_at,
                         };
 
                         if let Ok(mut result_json) = serde_json::to_value(&result) {
