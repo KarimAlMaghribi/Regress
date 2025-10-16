@@ -17,6 +17,7 @@ import RunDetailsPage from "./pages/RunDetailsPage";
 import TenantsPage from "./pages/TenantsPage";
 import SharePointUpload from './pages/SharePointUpload';
 import Settings from './pages/Settings';
+import Help from './pages/Help';
 
 export default function App() {
   return (
@@ -49,6 +50,7 @@ function AnimatedRoutes() {
       {pattern: /^\/tenants$/, title: 'Tenants'},
       {pattern: /^\/settings$/, title: 'Settings'},
       {pattern: /^\/ingest$/, title: 'SharePoint Upload'},
+      {pattern: /^\/help$/, title: 'Help'},
     ];
 
     const baseTitle = 'Regress';
@@ -71,6 +73,7 @@ function AnimatedRoutes() {
           <Route path="/tenants" element={<PageFade><TenantsPage/></PageFade>}/>
           <Route path="/ingest" element={<PageFade><SharePointUpload/></PageFade>}/>
           <Route path="/settings" element={<PageFade><Settings/></PageFade>}/>
+          <Route path="/help" element={<PageFade><Help/></PageFade>}/>
           <Route path="*" element={<PageFade><Dashboard/></PageFade>}/>
         </Routes>
       </AnimatePresence>
