@@ -1,6 +1,6 @@
 use actix_cors::Cors;
 use actix_web::web::Payload;
-use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
+use actix_web::{guard, web, App, HttpRequest, HttpResponse, HttpServer};
 use awc::Client;
 use futures_util::future;
 use tracing::info;
@@ -182,7 +182,7 @@ async fn main() -> std::io::Result<()> {
                     .route(web::delete().to(ingest_root))
                     .route(web::patch().to(ingest_root))
                     .route(web::head().to(ingest_root))
-                    .route(web::options().to(ingest_root)),
+                    .route(web::route().guard(guard::Options()).to(ingest_root)),
             )
             .service(
                 web::resource("/ingest/{tail:.*}")
@@ -192,7 +192,7 @@ async fn main() -> std::io::Result<()> {
                     .route(web::delete().to(ingest))
                     .route(web::patch().to(ingest))
                     .route(web::head().to(ingest))
-                    .route(web::options().to(ingest)),
+                    .route(web::route().guard(guard::Options()).to(ingest)),
             )
     })
     .bind(("0.0.0.0", 8080))?

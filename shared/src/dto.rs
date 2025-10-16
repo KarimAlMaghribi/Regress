@@ -196,14 +196,3 @@ pub struct UploadDto {
     pub tenant_id: Uuid,
 }
 
-#[derive(Deserialize)]
-struct ListQuery {
-    tenant: Option<String>,
-    status: Option<String>,
-    limit: Option<i64>,
-    offset: Option<i64>,
-}
-
-fn default_true() -> bool {
-    true
-}
