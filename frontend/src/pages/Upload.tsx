@@ -26,6 +26,7 @@ import CircularProgress from '@mui/material/CircularProgress';
 import PageHeader from '../components/PageHeader';
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import DownloadIcon from '@mui/icons-material/Download';
+import RefreshIcon from '@mui/icons-material/Refresh';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {UPLOAD_API, useUploadStore} from '../hooks/useUploadStore';
 import {usePipelineList} from '../hooks/usePipelineList';
