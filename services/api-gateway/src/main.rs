@@ -23,6 +23,7 @@ async fn health() -> HttpResponse {
         "http://text-extraction:8083/health",
         "http://prompt-manager:8082/health",
         "http://metrics:8085/health",
+        "http://sharepoint-ingest:8080/healthz",
     ];
 
     let checks = urls.iter().map(|u| client.get(*u).send());
@@ -71,7 +72,10 @@ async fn uploads(req: HttpRequest, body: Payload) -> HttpResponse {
 /// GET /uploads/{id}/extract -> pdf-ingest:/uploads/{id}/extract
 async fn upload_extract(req: HttpRequest, body: Payload) -> HttpResponse {
     let id = req.match_info().query("id");
-    let url = with_qs(&format!("http://pdf-ingest:8081/uploads/{id}/extract"), &req);
+    let url = with_qs(
+        &format!("http://pdf-ingest:8081/uploads/{id}/extract"),
+        &req,
+    );
     proxy(req, body, url.as_str()).await
 }
 
@@ -125,6 +129,24 @@ async fn pipelines(req: HttpRequest, body: Payload) -> HttpResponse {
     proxy(req, body, url.as_str()).await
 }
 
+/// /ingest (root) -> sharepoint-ingest:/
+async fn ingest_root(req: HttpRequest, body: Payload) -> HttpResponse {
+    let url = with_qs("http://sharepoint-ingest:8080", &req);
+    proxy(req, body, url.as_str()).await
+}
+
+/// /ingest[...] -> sharepoint-ingest:/[...]
+async fn ingest(req: HttpRequest, body: Payload) -> HttpResponse {
+    let tail = req.match_info().query("tail");
+    let base = if tail.is_empty() {
+        "http://sharepoint-ingest:8080".to_string()
+    } else {
+        format!("http://sharepoint-ingest:8080/{tail}")
+    };
+    let url = with_qs(&base, &req);
+    proxy(req, body, url.as_str()).await
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
@@ -151,8 +173,11 @@ async fn main() -> std::io::Result<()> {
             // pipelines
             .route("/pipelines", web::to(pipelines_root))
             .service(web::resource("/pipelines/{tail:.*}").route(web::to(pipelines)))
+            // ingest
+            .route("/ingest", web::to(ingest_root))
+            .service(web::resource("/ingest/{tail:.*}").route(web::to(ingest)))
     })
-        .bind(("0.0.0.0", 8080))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8080))?
+    .run()
+    .await
 }
