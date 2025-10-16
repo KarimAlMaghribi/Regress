@@ -1,9 +1,14 @@
 import create from 'zustand';
 
-import { getUploadApiBase } from '../utils/runtimeEnv';
-
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
-const UPLOAD_API = getUploadApiBase();
+const runtimeIngest =
+  typeof window !== 'undefined'
+    ? ((window as unknown as { __ENV__?: { INGEST_URL?: string } }).__ENV__?.INGEST_URL ?? undefined)
+    : undefined;
+const UPLOAD_API =
+  (runtimeIngest as string | undefined) ||
+  (import.meta.env.VITE_INGEST_URL as string | undefined) ||
+  'http://localhost:8081';
 
 type AnyRun = Record<string, any>;
 

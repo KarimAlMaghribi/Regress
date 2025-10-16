@@ -17,7 +17,6 @@ import DownloadIcon from '@mui/icons-material/Download';
 import { useUploadStore } from '../hooks/useUploadStore';
 import { usePipelineList } from '../hooks/usePipelineList';
 import { useTenants } from '../hooks/useTenants';
-import { getUploadApiBase } from '../utils/runtimeEnv';
 
 declare global { interface Window { __ENV__?: any } }
 
@@ -64,7 +63,17 @@ export default function Upload() {
     accept: { 'application/pdf': ['.pdf'], 'application/zip': ['.zip'] },
   });
 
-  const ingest = useMemo(() => getUploadApiBase(), []);
+  const ingest = useMemo(() => {
+    const runtimeIngest =
+      typeof window !== 'undefined'
+        ? ((window as unknown as { __ENV__?: { INGEST_URL?: string } }).__ENV__?.INGEST_URL ?? undefined)
+        : undefined;
+    return (
+      (runtimeIngest as string | undefined) ||
+      (import.meta.env.VITE_INGEST_URL as string | undefined) ||
+      'http://localhost:8081'
+    );
+  }, []);
 
   const upload = () => {
     if (!files.length || !tenantId) return;
