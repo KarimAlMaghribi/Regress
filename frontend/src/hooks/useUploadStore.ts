@@ -2,11 +2,10 @@ import create from 'zustand';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const INGEST = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-const UPLOAD = import.meta.env.VITE_UPLOAD_API_URL || INGEST;
 
-export const UPLOAD_API = UPLOAD;
+type AnyRun = Record<string, any>;
 
-export type AnyRun = Record<string, any>;
+/* --------------------------- helpers: run merge --------------------------- */
 
 function countKeys(o: any): number {
   return o && typeof o === 'object' ? Object.keys(o).length : 0;
@@ -14,54 +13,68 @@ function countKeys(o: any): number {
 
 function normalizeRunShape(run: AnyRun | null | undefined): AnyRun {
   if (!run || typeof run !== 'object') return {};
-  const normalized: AnyRun = { ...run };
-  if (normalized.overall_score === undefined && typeof normalized.overallScore === 'number') normalized.overall_score = normalized.overallScore;
-  if (!normalized.scores && normalized.final_scores && typeof normalized.final_scores === 'object') normalized.scores = normalized.final_scores;
-  if (!normalized.decisions && normalized.final_decisions && typeof normalized.final_decisions === 'object') normalized.decisions = normalized.final_decisions;
-  if (normalized.extracted == null) normalized.extracted = {};
-  if (normalized.scores == null) normalized.scores = {};
-  if (normalized.decisions == null) normalized.decisions = {};
-  if (!Array.isArray(normalized.log) && normalized.log != null) normalized.log = [];
-  return normalized;
+  const n: AnyRun = { ...run };
+  // camel → snake
+  if (n.overall_score === undefined && typeof n.overallScore === 'number') n.overall_score = n.overallScore;
+  if (!n.scores && n.final_scores && typeof n.final_scores === 'object') n.scores = n.final_scores;
+  if (!n.decisions && n.final_decisions && typeof n.final_decisions === 'object') n.decisions = n.final_decisions;
+  // leere Maps sicherstellen
+  if (n.extracted == null) n.extracted = {};
+  if (n.scores == null) n.scores = {};
+  if (n.decisions == null) n.decisions = {};
+  // arrays
+  if (!Array.isArray(n.log) && n.log != null) n.log = [];
+  return n;
 }
 
-function mergeRunPreferRicher(oldRunRaw: AnyRun | null | undefined, incomingRunRaw: AnyRun | null | undefined): AnyRun {
+/**
+ * Bevorzuge das "reichere" Objekt:
+ *  - extracted/scores/decisions: behalte vorhandene, wenn Neues leer ist
+ *  - overall_score: behalte vorhandenen Nicht-Null Wert, wenn Neues null/undefined ist
+ *  - log/extraction/scoring/decision: einfache Zusammenführung mit Dedupe
+ *  - run_id/id: konservieren
+ */
+function mergeRunPreferRicher(oldRunRaw: AnyRun | null | undefined, incRunRaw: AnyRun | null | undefined): AnyRun {
   const oldRun = normalizeRunShape(oldRunRaw);
-  const incomingRun = normalizeRunShape(incomingRunRaw);
-  const merged: AnyRun = { ...oldRun, ...incomingRun };
+  const incRun = normalizeRunShape(incRunRaw);
 
-  if (countKeys(incomingRun.extracted) === 0 && countKeys(oldRun.extracted) > 0) merged.extracted = oldRun.extracted;
-  if (countKeys(incomingRun.scores) === 0 && countKeys(oldRun.scores) > 0) merged.scores = oldRun.scores;
-  if (countKeys(incomingRun.decisions) === 0 && countKeys(oldRun.decisions) > 0) merged.decisions = oldRun.decisions;
+  const merged: AnyRun = { ...oldRun, ...incRun };
 
-  if ((incomingRun.overall_score === null || incomingRun.overall_score === undefined) &&
+  // Finals niemals durch leere Maps überschreiben
+  if (countKeys(incRun.extracted) === 0 && countKeys(oldRun.extracted) > 0) merged.extracted = oldRun.extracted;
+  if (countKeys(incRun.scores)    === 0 && countKeys(oldRun.scores)    > 0) merged.scores    = oldRun.scores;
+  if (countKeys(incRun.decisions) === 0 && countKeys(oldRun.decisions) > 0) merged.decisions = oldRun.decisions;
+
+  // overall_score konservieren, wenn Neues leer ist
+  if ((incRun.overall_score === null || incRun.overall_score === undefined) &&
       (oldRun.overall_score !== null && oldRun.overall_score !== undefined)) {
     merged.overall_score = oldRun.overall_score;
   }
 
-  merged.run_id = incomingRun.run_id ?? oldRun.run_id ?? incomingRun.id ?? oldRun.id;
+  // run_id/id konservieren
+  merged.run_id = incRun.run_id ?? oldRun.run_id ?? incRun.id ?? oldRun.id;
 
+  // Arrays deduplizieren
   const dedupeJSON = (arr?: any[]) => {
     if (!Array.isArray(arr)) return [];
     const seen = new Set<string>();
     const out: any[] = [];
-    for (const item of arr) {
-      const key = JSON.stringify(item ?? null);
-      if (!seen.has(key)) {
-        seen.add(key);
-        out.push(item);
-      }
+    for (const x of arr) {
+      const k = JSON.stringify(x ?? null);
+      if (!seen.has(k)) { seen.add(k); out.push(x); }
     }
     return out;
   };
 
-  merged.extraction = dedupeJSON([...(oldRun.extraction || []), ...(incomingRun.extraction || [])]);
-  merged.scoring = dedupeJSON([...(oldRun.scoring || []), ...(incomingRun.scoring || [])]);
-  merged.decision = dedupeJSON([...(oldRun.decision || []), ...(incomingRun.decision || [])]);
-  merged.log = dedupeJSON([...(oldRun.log || []), ...(incomingRun.log || [])]);
+  merged.extraction = dedupeJSON([...(oldRun.extraction || []), ...(incRun.extraction || [])]);
+  merged.scoring    = dedupeJSON([...(oldRun.scoring    || []), ...(incRun.scoring    || [])]);
+  merged.decision   = dedupeJSON([...(oldRun.decision   || []), ...(incRun.decision   || [])]);
+  merged.log        = dedupeJSON([...(oldRun.log        || []), ...(incRun.log        || [])]);
 
   return merged;
 }
+
+/* --------------------------- types / store API --------------------------- */
 
 export interface UploadEntry {
   id: number;
@@ -72,6 +85,7 @@ export interface UploadEntry {
   layout: boolean;
   selectedPipelineId?: string;
   loading?: boolean;
+  // NEU: wir halten das (zusammengeführte) Run-Ergebnis am Eintrag
   result?: AnyRun;
   runId?: string;
 }
@@ -88,54 +102,55 @@ interface UploadState {
   stopAutoRefresh: () => void;
 }
 
+/* ------------------------------- the store ------------------------------- */
+
 export const useUploadStore = create<UploadState>((set, get) => ({
   entries: [],
   error: undefined,
   autoRefreshId: undefined,
 
   async load() {
-    const ingest = UPLOAD_API;
-    try {
-      const [uploadData, texts] = await Promise.all([
-        fetch(`${ingest.replace(/\/$/, '')}/uploads`).then(r => r.json()),
-        fetch('http://localhost:8083/texts').then(r => r.json()).catch(() => [] as any[]),
-      ]);
+    const ingest = INGEST;
+    const [uploadData, texts] = await Promise.all([
+      fetch(`${ingest}/uploads`).then(r => r.json()),
+      // OCR-Status
+      fetch('http://localhost:8083/texts').then(r => r.json()).catch(() => [] as any[]),
+    ]);
 
-      const prevEntries = get().entries;
-      const ocrIds = (texts as { id: number }[]).map(t => t.id);
-      const nextEntries: UploadEntry[] = (uploadData as any[]).map((item: any) => ({
-        id: item.id,
-        pdfId: item.pdf_id ?? null,
-        status: item.status,
-        pdfUrl: item.pdf_id ? `${ingest.replace(/\/$/, '')}/pdf/${item.pdf_id}` : '',
-        ocr: item.pdf_id ? ocrIds.includes(item.pdf_id) : false,
-        layout: item.status === 'ready',
-        selectedPipelineId: '',
-        result: undefined,
-        runId: undefined,
-      }));
+    const prev = get().entries;
+    const ocrIds = (texts as { id: number }[]).map(t => t.id);
 
-      const byId = new Map<number, UploadEntry>(prevEntries.map(entry => [entry.id, entry]));
-      const merged = nextEntries.map(entry => {
-        const oldEntry = byId.get(entry.id);
-        if (!oldEntry) return entry;
+    // map neue Einträge
+    const nextRaw: UploadEntry[] = (uploadData as any[]).map((d: any) => ({
+      id: d.id,
+      pdfId: d.pdf_id ?? null,
+      status: d.status,
+      pdfUrl: d.pdf_id ? `${ingest}/pdf/${d.pdf_id}` : '',
+      ocr: d.pdf_id ? ocrIds.includes(d.pdf_id) : false,
+      layout: d.status === 'ready',
+      selectedPipelineId: '',
+      // falls Backend bereits was mitliefert (selten), übernehmen:
+      result: undefined,
+      runId: undefined,
+    }));
 
-        const keepLoading = oldEntry.loading && entry.status !== 'ready';
-        return {
-          ...oldEntry,
-          ...entry,
-          selectedPipelineId: oldEntry.selectedPipelineId ?? entry.selectedPipelineId,
-          loading: keepLoading || false,
-          result: mergeRunPreferRicher(oldEntry.result, (entry as any).result),
-          runId: oldEntry.runId ?? entry.runId,
-        };
-      });
+    // merge mit Bestand (behalte richer run / UI state)
+    const byId = new Map<number, UploadEntry>(prev.map(e => [e.id, e]));
+    const merged: UploadEntry[] = nextRaw.map(n => {
+      const old = byId.get(n.id);
+      if (!old) return n;
+      const keepLoading = old.loading && n.status !== 'ready';
+      return {
+        ...old,
+        ...n,
+        selectedPipelineId: old.selectedPipelineId ?? n.selectedPipelineId,
+        loading: keepLoading || false,
+        result: mergeRunPreferRicher(old.result, (n as any).result),
+        runId: old.runId ?? n.runId,
+      };
+    });
 
-      set({ entries: merged, error: undefined });
-    } catch (err) {
-      console.error('load uploads', err);
-      set({ error: (err as Error).message });
-    }
+    set({ entries: merged, error: undefined });
   },
 
   startAutoRefresh(intervalMs) {
@@ -144,7 +159,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       try {
         await get().load();
         set({ error: undefined });
-        const allReady = get().entries.every(entry => entry.status === 'ready');
+        const allReady = get().entries.every(e => e.status === 'ready');
         if (allReady) {
           clearInterval(id);
           set({ autoRefreshId: undefined });
@@ -159,67 +174,84 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
   stopAutoRefresh() {
     const id = get().autoRefreshId;
-    if (!id) return;
-    clearInterval(id);
-    set({ autoRefreshId: undefined });
+    if (id) {
+      clearInterval(id);
+      set({ autoRefreshId: undefined });
+    }
   },
 
   updateFile(id, changes) {
     set(state => ({
-      entries: state.entries.map(entry => (entry.id === id ? { ...entry, ...changes } : entry)),
+      entries: state.entries.map(e => (e.id === id ? { ...e, ...changes } : e)),
     }));
   },
 
   async runPipeline(fileId, pipelineId) {
-    if (!pipelineId) return;
-
+    // UI: markiere loading
     set(state => ({
-      entries: state.entries.map(entry => (entry.id === fileId ? { ...entry, loading: true } : entry)),
+      entries: state.entries.map(e => e.id === fileId ? { ...e, loading: true } : e),
     }));
 
-    const response = await fetch(`${API.replace(/\/$/, '')}/pipelines/${pipelineId}/run`, {
+    const res = await fetch(`${API}/pipelines/${pipelineId}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_id: fileId }),
     });
 
-    const rawBody = await response.text();
-    const contentType = response.headers.get('content-type') || '';
-    let parsed: AnyRun | undefined = undefined;
-    if (rawBody && contentType.includes('application/json')) {
+    // Debug: Status + Header + Raw Body
+    console.log('⛽️ Pipeline run response:', {
+      status: res.status,
+      statusText: res.statusText,
+      headers: Object.fromEntries(res.headers.entries()),
+    });
+
+    const raw = await res.text();
+    console.log('📦 Raw response body:', raw);
+
+    // Try parse JSON if announced as JSON
+    const contentType = res.headers.get('content-type') || '';
+    let data: AnyRun | undefined = undefined;
+    if (raw && contentType.includes('application/json')) {
       try {
-        parsed = JSON.parse(rawBody);
-      } catch (err) {
-        console.warn('JSON parse failed for pipeline response', err);
+        data = JSON.parse(raw);
+        console.log('🔍 Parsed JSON:', data);
+      } catch (e) {
+        console.warn('⚠️ JSON.parse fehlgeschlagen:', e);
       }
+    } else if (!raw) {
+      console.log('ℹ️ Empty response body, skipping JSON parse');
+    } else {
+      console.log('ℹ️ Non-JSON response body, skipping JSON parse');
     }
 
+    // Update UI row: remove loading & merge possible result
     set(state => ({
-      entries: state.entries.map(entry => {
-        if (entry.id !== fileId) return entry;
-        const mergedRun = mergeRunPreferRicher(entry.result, parsed);
-        const runId = (parsed as any)?.run_id ?? (parsed as any)?.id ?? entry.runId;
-        return { ...entry, loading: false, result: mergedRun, runId };
+      entries: state.entries.map(e => {
+        if (e.id !== fileId) return e;
+        const mergedRun = mergeRunPreferRicher(e.result, data);
+        const runId = (data as any)?.run_id ?? (data as any)?.id ?? e.runId;
+        return { ...e, loading: false, result: mergedRun, runId };
       }),
     }));
 
-    if (!response.ok) {
-      throw new Error(((parsed as any)?.error as string) || `HTTP ${response.status}`);
+    if (!res.ok) {
+      // Oberfläche informiert, Fehler fliegt hoch
+      throw new Error(((data as any)?.error as string) || `HTTP ${res.status}`);
     }
   },
 
   async downloadExtractedText(fileId) {
-    const res = await fetch(`${UPLOAD_API.replace(/\/$/, '')}/uploads/${fileId}/extract`);
+    const res = await fetch(`${INGEST}/uploads/${fileId}/extract`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `extracted_${fileId}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `extracted_${fileId}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     URL.revokeObjectURL(url);
   },
 }));
