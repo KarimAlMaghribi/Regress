@@ -1,3 +1,5 @@
+//! Small service exposing aggregated metrics via HTTP.
+
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use chrono::{DateTime, Utc};
@@ -6,23 +8,27 @@ use shared::config::Settings;
 use tracing::{error, info};
 
 #[derive(Serialize)]
+/// Response item describing accuracy and cost for a single pipeline run.
 struct Metric {
     timestamp: DateTime<Utc>,
     accuracy: f64,
     cost: f64,
 }
 
+/// Liveness endpoint used by the orchestrator.
 async fn health() -> impl Responder {
     "OK"
 }
 
 #[derive(Default, Deserialize)]
+/// Query parameters accepted by the `/metrics` endpoint.
 struct Query {
     start: Option<DateTime<Utc>>,
     end: Option<DateTime<Utc>>,
     limit: Option<i64>,
 }
 
+/// Loads metrics from PostgreSQL applying the optional filters.
 async fn metrics(
     db: web::Data<tokio_postgres::Client>,
     query: web::Query<Query>,
@@ -51,7 +57,6 @@ async fn metrics(
     }
     sql.push_str(" ORDER BY run_time DESC");
     if let Some(l) = query.limit {
-        // l ist i64 -> keine SQL Injection
         sql.push_str(&format!(" LIMIT {}", l));
     }
 
@@ -81,11 +86,12 @@ async fn metrics(
 }
 
 mod db_connect {
+    //! Establishes resilient PostgreSQL connections for the metrics service.
     use tokio::time::{sleep, Duration};
     use tokio_postgres::{Client, NoTls};
     use tracing::{error, info, warn};
 
-    // sehr einfacher Parser für Host/Port aus der URL (ohne zusätzliche Crates)
+    /// Minimal parser that extracts host and port information from a URL.
     fn parse_host_port(url: &str) -> (Option<String>, Option<u16>) {
         // Format: scheme://[user[:pwd]@]host[:port]/...
         if let Some(after_scheme) = url.splitn(2, "://").nth(1) {
@@ -100,7 +106,7 @@ mod db_connect {
         }
     }
 
-    // true => TLS versuchen; false => NoTLS
+    /// Returns true when the connection string indicates TLS usage.
     fn want_tls(database_url: &str) -> bool {
         if let Some(q) = database_url.splitn(2, '?').nth(1) {
             for pair in q.split('&') {
@@ -111,16 +117,15 @@ mod db_connect {
                     return !v.eq_ignore_ascii_case("disable");
                 }
             }
-            // kein sslmode-Param im Query -> TLS versuchen
             true
         } else {
-            // kein Query-Teil -> TLS versuchen (failsafe)
             true
         }
     }
 
+    /// Attempts to connect to PostgreSQL using TLS first and falls back to
+    /// plaintext connections when required.
     pub async fn connect_with_retry(database_url: &str) -> Client {
-        // Preflight-DNS (nur Logging, kein Abort)
         let (host_opt, port_opt) = parse_host_port(database_url);
         if let Some(h) = host_opt.as_deref() {
             let p = port_opt.unwrap_or(5432);
@@ -185,6 +190,7 @@ mod db_connect {
 }
 
 #[actix_web::main]
+/// Boots the metrics HTTP server and initialises the database schema.
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting metrics service");

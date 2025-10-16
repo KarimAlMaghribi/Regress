@@ -1,3 +1,5 @@
+//! Microsoft Graph client wrappers used to download SharePoint content.
+
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -92,6 +94,8 @@ struct DriveResponse {
 }
 
 impl MsGraphClient {
+    /// Creates a new Microsoft Graph client using the provided configuration
+    /// values.
     pub fn new(config: &Config) -> Result<Self> {
         let http = Client::builder()
             .timeout(config.graph_timeout)
@@ -111,6 +115,7 @@ impl MsGraphClient {
         })
     }
 
+    /// Ensures the required folders exist inside the SharePoint drive.
     pub async fn bootstrap(&self, config: &Config) -> Result<()> {
         self.ensure_site_and_drive().await?;
         self.ensure_folder(&config.drive_input_path()).await?;
@@ -119,6 +124,7 @@ impl MsGraphClient {
         Ok(())
     }
 
+    /// Lists the immediate subfolders below the provided base path.
     pub async fn list_subfolders(&self, base_path: &str) -> Result<Vec<GraphFolder>> {
         let drive_id = self.ensure_site_and_drive().await?;
         let path = encode_path(base_path);
@@ -147,6 +153,7 @@ impl MsGraphClient {
         Ok(folders)
     }
 
+    /// Returns the PDF files contained in the specified SharePoint folder.
     pub async fn list_pdfs_in_folder(&self, folder_id: &str) -> Result<Vec<GraphFile>> {
         let drive_id = self.ensure_site_and_drive().await?;
         let url = format!(
@@ -179,6 +186,7 @@ impl MsGraphClient {
         Ok(files)
     }
 
+    /// Downloads the file with the given identifier into the destination path.
     pub async fn download_file(&self, file_id: &str, dest: &Path) -> Result<()> {
         let drive_id = self.ensure_site_and_drive().await?;
         let url = format!("{GRAPH_BASE}/drives/{drive_id}/items/{file_id}/content");
@@ -194,6 +202,8 @@ impl MsGraphClient {
         Ok(())
     }
 
+    /// Moves the SharePoint item to the destination path, creating folders when
+    /// needed.
     pub async fn move_item(&self, item_id: &str, dest_path: &str) -> Result<()> {
         let drive_id = self.ensure_site_and_drive().await?;
         let encoded = format!("/drive/root:/{}", dest_path);
@@ -228,6 +238,8 @@ impl MsGraphClient {
         Ok(())
     }
 
+    /// Ensures the provided drive path exists by creating the folder hierarchy
+    /// if it is missing.
     pub async fn ensure_folder(&self, drive_path: &str) -> Result<()> {
         let drive_id = self.ensure_site_and_drive().await?;
         let path = encode_path(drive_path);

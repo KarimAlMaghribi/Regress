@@ -1,3 +1,5 @@
+//! HTTP API exposing pipeline management endpoints and forwarding runs to Kafka.
+
 use actix_cors::Cors;
 use actix_web::web::Json;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};

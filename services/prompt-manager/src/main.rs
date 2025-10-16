@@ -1,3 +1,5 @@
+//! REST API for managing prompts, groups and pipeline associations.
+
 use axum::{
     extract::{Path, State, Query},
     http::StatusCode,
@@ -27,6 +29,7 @@ use model::{
     prompt::{Entity as Prompt, ActiveModel as PromptActiveModel},
 };
 
+/// Ensures the database connection string disables SSL for local setups.
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
         return url.to_string();
@@ -39,11 +42,13 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
+/// Simple liveness endpoint for orchestration.
 async fn health() -> &'static str { "OK" }
 
 /* ---------------- DTOs ---------------- */
 
 #[derive(Serialize)]
+/// API representation of a prompt including metadata.
 struct PromptData {
     id: i32,
     text: String,
@@ -56,6 +61,7 @@ struct PromptData {
 }
 
 #[derive(Deserialize)]
+/// Payload used to create or update prompts.
 struct PromptInput {
     text: String,
     // optional: bei Scoring/Decision -> default 1.0, sonst ignoriert
@@ -70,6 +76,7 @@ struct PromptInput {
 }
 
 #[derive(Serialize)]
+/// API representation of a prompt group with associated prompts.
 struct GroupData {
     id: i32,
     name: String,

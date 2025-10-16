@@ -1,8 +1,10 @@
-// services/pipeline-runner/src/json_relaxed.rs
+//! Parses loosely structured JSON snippets returned by LLMs.
 use serde_json::Value;
 
-/// Entfernt Code-Fences (```json ... ```), führende/folgende Texte
-/// und extrahiert den ersten balancierten JSON-Block.
+/// Attempts to parse a JSON value from partially structured LLM output.
+///
+/// The helper strips code fences, tolerates leading/trailing prose and falls
+/// back to extracting the first balanced JSON block.
 pub fn parse_json_relaxed(input: &str) -> Result<Value, String> {
     let t = strip_code_fences(input.trim());
     // 1) direkter Versuch
@@ -17,6 +19,7 @@ pub fn parse_json_relaxed(input: &str) -> Result<Value, String> {
     }
 }
 
+/// Removes optional markdown code fences surrounding the payload.
 fn strip_code_fences(s: &str) -> &str {
     let s = s.strip_prefix("```json").unwrap_or(s);
     let s = s.strip_prefix("```").unwrap_or(s);
@@ -24,6 +27,7 @@ fn strip_code_fences(s: &str) -> &str {
     s
 }
 
+/// Extracts the first balanced JSON object or array from the text.
 fn extract_first_balanced_json(s: &str) -> Option<String> {
     let mut in_str = false;
     let mut esc = false;

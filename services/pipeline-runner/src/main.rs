@@ -1,3 +1,5 @@
+//! Entry point for the pipeline runner service handling pipeline execution and persistence.
+
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     producer::{FutureProducer, FutureRecord},
@@ -10,6 +12,7 @@ use shared::dto::{
 use shared::openai_client;
 use shared::openai_settings;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::task::LocalSet;
@@ -19,6 +22,7 @@ use uuid::Uuid;
 
 mod runner;
 
+/// Ensures the connection string explicitly disables SSL for local usage.
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
         return url.to_string();
@@ -31,6 +35,7 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
+/// Parses an environment variable or falls back to a default value.
 fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
     std::env::var(key)
         .ok()
@@ -39,11 +44,13 @@ fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
 }
 
 #[tokio::main(flavor = "multi_thread")]
+/// Tokio entry point that installs tracing and delegates to [`app_main`].
 async fn main() -> anyhow::Result<()> {
     let local = LocalSet::new();
     local.run_until(async { app_main().await }).await
 }
 
+/// Sets up dependencies and runs the pipeline runner event loop.
 async fn app_main() -> anyhow::Result<()> {
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
@@ -76,13 +83,13 @@ async fn app_main() -> anyhow::Result<()> {
         batch_cfg.openai_timeout_ms, batch_cfg.openai_retries
     );
 
-    // ---------- SQLx Pool mit stabilen Idle-/Lifetime-Settings ----------
+    // Configure a SQLx pool with conservative timeouts so long-running batches stay healthy.
     let pool: PgPool = PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(10))
-        .idle_timeout(Some(Duration::from_secs(600)))   // 🔧 Idle-Conn nach 10 min recyceln
-        .max_lifetime(Some(Duration::from_secs(1800)))  // 🔧 Max. Lebenszeit 30 min
-        .test_before_acquire(true)                      // 🔧 nur gesunde Verbindungen ausgeben
+        .idle_timeout(Some(Duration::from_secs(600)))
+        .max_lifetime(Some(Duration::from_secs(1800)))
+        .test_before_acquire(true)
         .connect(&db_url)
         .await
         .map_err(|e| {
@@ -90,7 +97,7 @@ async fn app_main() -> anyhow::Result<()> {
             e
         })?;
 
-    // Basis-Tabellen idempotent sicherstellen
+    // Ensure base tables exist before the runner consumes Kafka messages.
     let _ = sqlx::query("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
         .execute(&pool)
         .await;
@@ -166,15 +173,15 @@ async fn app_main() -> anyhow::Result<()> {
         warn!(%e, "failed to load OpenAI configuration from settings, using defaults");
     }
 
-    // ---------- Kafka-Clients mit robusten Settings für lange Läufe ----------
+    // Configure Kafka clients with generous timeouts to support long running prompts.
     let consumer: StreamConsumer = ClientConfig::new()
         .set("group.id", "pipeline-runner")
         .set("bootstrap.servers", &broker)
-        .set("enable.auto.commit", "true")      // 🔧 Auto-Commit
-        .set("session.timeout.ms", "45000")     // 🔧 45s Session Timeout
-        .set("max.poll.interval.ms", "1800000") // 🔧 30 Min: lange LLM-Runs ohne Group-Leave
-        .set("heartbeat.interval.ms", "5000")   // 🔧 regelmäßige Heartbeats
-        .set("socket.keepalive.enable", "true") // 🔧 TCP-Keepalive
+        .set("enable.auto.commit", "true")
+        .set("session.timeout.ms", "45000")
+        .set("max.poll.interval.ms", "1800000")
+        .set("heartbeat.interval.ms", "5000")
+        .set("socket.keepalive.enable", "true")
         .create()
         .map_err(|e| {
             error!(%e, "failed to create kafka consumer");
@@ -974,6 +981,7 @@ async fn app_main() -> anyhow::Result<()> {
     }
 }
 
+/// Reads persisted OpenAI settings from the database and updates defaults.
 async fn configure_openai_from_settings(pool: &PgPool) -> anyhow::Result<()> {
     let stored = sqlx::query_scalar::<_, String>(
         "SELECT value FROM app_settings WHERE key = $1",

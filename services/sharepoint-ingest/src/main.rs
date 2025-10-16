@@ -1,3 +1,5 @@
+//! Service responsible for scanning SharePoint folders and enqueueing PDF jobs.
+
 mod config;
 mod job;
 mod msgraph;

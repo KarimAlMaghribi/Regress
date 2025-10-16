@@ -1,3 +1,5 @@
+//! Integration tests verifying the OCR extraction workflow.
+
 use base64;
 use text_extraction::{extract_text, extract_text_pages};
 

@@ -69,12 +69,10 @@ function pagesSpanFromBatch(batch: any): { start: number; end: number } | undefi
   return { start: raw[0] + 1, end: raw[raw.length - 1] + 1 };
 }
 
-// Versuche das passende Log-Item zum Step zu finden (primär über final_key → prompt_id)
 function findLogForStep(detail: RunDetail, step: RunStep): any | undefined {
   const logs: any[] = (detail as any)?.run?.log ?? (detail as any)?.log ?? [];
   if (!Array.isArray(logs) || logs.length === 0) return undefined;
 
-  // Versuch 1: final_key wie "score_7" / "decision_3" → prompt_id
   const key = (step as any)?.final_key ?? (step as any)?.definition?.json_key ?? "";
   let pid: number | undefined;
   const m = typeof key === "string" ? key.match(/_(\d+)$/) : null;

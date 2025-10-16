@@ -1,3 +1,5 @@
+//! Reverse proxy that routes frontend requests to the appropriate backend service.
+
 use actix_cors::Cors;
 use actix_web::web::Payload;
 use actix_web::{web, App, HttpRequest, HttpResponse, HttpServer};
@@ -5,7 +7,8 @@ use awc::Client;
 use futures_util::future;
 use tracing::info;
 
-/// Querystring anhängen, falls vorhanden
+/// Builds a fully-qualified URL by appending the request query string when
+/// present.
 fn with_qs(base: &str, req: &HttpRequest) -> String {
     let qs = req.query_string();
     if qs.is_empty() {
@@ -15,6 +18,8 @@ fn with_qs(base: &str, req: &HttpRequest) -> String {
     }
 }
 
+/// Executes readiness checks against downstream services to determine if the
+/// gateway should report a healthy status.
 async fn health() -> HttpResponse {
     info!("health check request");
     let client = Client::default();
@@ -42,6 +47,8 @@ async fn health() -> HttpResponse {
     }
 }
 
+/// Proxies the incoming request and body to the provided URL while preserving
+/// headers from the caller.
 async fn proxy(req: HttpRequest, body: Payload, url: &str) -> HttpResponse {
     let client = Client::default();
     let mut forward = client.request(req.method().clone(), url);
@@ -57,19 +64,19 @@ async fn proxy(req: HttpRequest, body: Payload, url: &str) -> HttpResponse {
     HttpResponse::build(status).body(bytes)
 }
 
-/// POST /upload  -> pdf-ingest:/upload
+/// Forwards file upload requests to the pdf-ingest service.
 async fn upload(req: HttpRequest, body: Payload) -> HttpResponse {
     info!("forwarding upload request");
     proxy(req, body, "http://pdf-ingest:8081/upload").await
 }
 
-/// GET /uploads -> pdf-ingest:/uploads
+/// Relays list and metadata queries to the pdf-ingest service.
 async fn uploads(req: HttpRequest, body: Payload) -> HttpResponse {
     let url = with_qs("http://pdf-ingest:8081/uploads", &req);
     proxy(req, body, url.as_str()).await
 }
 
-/// GET /uploads/{id}/extract -> pdf-ingest:/uploads/{id}/extract
+/// Delegates extraction requests to pdf-ingest for the specified upload.
 async fn upload_extract(req: HttpRequest, body: Payload) -> HttpResponse {
     let id = req.match_info().query("id");
     let url = with_qs(
@@ -79,26 +86,27 @@ async fn upload_extract(req: HttpRequest, body: Payload) -> HttpResponse {
     proxy(req, body, url.as_str()).await
 }
 
-/// GET/DELETE /pdf/{id} -> pdf-ingest:/pdf/{id}
+/// Passes through PDF operations such as retrieval or deletion to
+/// pdf-ingest.
 async fn pdf_get_or_delete(req: HttpRequest, body: Payload) -> HttpResponse {
     let id = req.match_info().query("id");
     let url = with_qs(&format!("http://pdf-ingest:8081/pdf/{id}"), &req);
     proxy(req, body, url.as_str()).await
 }
 
-/// GET /te/texts -> text-extraction:/texts
+/// Routes list requests to the text-extraction service.
 async fn te_texts(req: HttpRequest, body: Payload) -> HttpResponse {
     let url = with_qs("http://text-extraction:8083/texts", &req);
     proxy(req, body, url.as_str()).await
 }
 
-/// POST /te/analyze -> text-extraction:/analyze
+/// Sends analysis jobs to the text-extraction service.
 async fn te_analyze(req: HttpRequest, body: Payload) -> HttpResponse {
     let url = with_qs("http://text-extraction:8083/analyze", &req);
     proxy(req, body, url.as_str()).await
 }
 
-/// /prompts[...] -> prompt-manager:/prompts[...]
+/// Routes prompt CRUD operations to the prompt-manager service.
 async fn prompts(req: HttpRequest, body: Payload) -> HttpResponse {
     let tail = req.match_info().query("tail");
     let base = if tail.is_empty() {
@@ -111,7 +119,7 @@ async fn prompts(req: HttpRequest, body: Payload) -> HttpResponse {
     proxy(req, body, url.as_str()).await
 }
 
-/// /pipelines (root) -> pipeline-api:/pipelines
+/// Provides pass-through access to pipeline API endpoints.
 async fn pipelines_root(req: HttpRequest, body: Payload) -> HttpResponse {
     let url = with_qs("http://pipeline-api:8084/pipelines", &req);
     proxy(req, body, url.as_str()).await
