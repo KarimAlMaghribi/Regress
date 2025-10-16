@@ -1,3 +1,6 @@
+//! Utility helpers for manipulating PDFs that originate from SharePoint prior
+//! to handing them off to downstream OCR and layout pipelines.
+
 use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
@@ -5,6 +8,7 @@ use std::collections::BTreeMap;
 use anyhow::{anyhow, Context, Result};
 use lopdf::{Document, Object, ObjectId};
 
+/// Merge the provided PDF files into a single document written to `output`.
 pub fn merge_pdfs(inputs: &[PathBuf], output: &Path) -> Result<()> {
     if inputs.is_empty() {
         anyhow::bail!("no pdf inputs provided");

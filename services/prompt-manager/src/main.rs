@@ -30,6 +30,7 @@ use model::{
     prompt::{Entity as Prompt, ActiveModel as PromptActiveModel},
 };
 
+/// Append `sslmode=disable` for local Postgres usage when not provided.
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
         return url.to_string();
@@ -42,10 +43,12 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
+/// Lightweight readiness probe consumed by Kubernetes and health checks.
 async fn health() -> &'static str { "OK" }
 
 // ---------------- DTOs ----------------
 
+/// Serializable representation of a prompt including optional metadata.
 #[derive(Serialize)]
 struct PromptData {
     id: i32,
@@ -58,6 +61,7 @@ struct PromptData {
     favorite: bool,
 }
 
+/// Payload accepted when creating or updating a prompt.
 #[derive(Deserialize)]
 struct PromptInput {
     text: String,
@@ -72,6 +76,7 @@ struct PromptInput {
     group_ids: Vec<i32>,
 }
 
+/// Serializable representation of a prompt group.
 #[derive(Serialize)]
 struct GroupData {
     id: i32,
@@ -80,6 +85,7 @@ struct GroupData {
     favorite: bool,
 }
 
+/// Request body for creating or updating a prompt group.
 #[derive(Deserialize)]
 struct GroupInput {
     name: String,
@@ -88,6 +94,7 @@ struct GroupInput {
     favorite: bool,
 }
 
+/// Serializable pipeline template stored alongside prompts.
 #[derive(Serialize)]
 struct PipelineData {
     id: Uuid,
@@ -95,37 +102,44 @@ struct PipelineData {
     data: serde_json::Value,
 }
 
+/// Input payload when creating or updating a pipeline template.
 #[derive(Deserialize)]
 struct PipelineInput {
     name: String,
     data: serde_json::Value,
 }
 
+/// Error wrapper used when handlers return structured failures.
 #[derive(Serialize, Debug)]
 struct ErrorResponse { error: String }
 
+/// Default prompt type when the client omits the field.
 fn default_prompt_type() -> PromptType { PromptType::ExtractionPrompt }
 
+/// Filter parameters for listing prompts.
 #[derive(Deserialize)]
 struct ListParams {
     #[serde(rename = "type")]
     r#type: Option<PromptType>,
 }
 
+/// Check whether the prompt type supports a weight attribute.
 fn is_weighted(t: &PromptType) -> bool {
     matches!(t, PromptType::ScoringPrompt | PromptType::DecisionPrompt)
 }
 
-// Helper conversions between f64 and Decimal (NUMERIC)
+/// Convert an optional weight into the database representation.
 fn f64_to_decimal_opt(w: Option<f64>) -> Option<Decimal> {
     w.and_then(|x| Decimal::from_str(&format!("{:.3}", x)).ok())
 }
+/// Convert a database decimal column back into a floating point value.
 fn decimal_to_f64_opt(d: Option<Decimal>) -> Option<f64> {
     d.and_then(|v| v.to_string().parse::<f64>().ok())
 }
 
 // ---------------- Prompts ----------------
 
+/// Return prompts filtered by type for the management UI.
 async fn list_prompts(
     State(db): State<Arc<DatabaseConnection>>,
     Query(params): Query<ListParams>,
@@ -149,6 +163,7 @@ async fn list_prompts(
     Ok(Json(texts))
 }
 
+/// Retrieve the raw prompt text for editing purposes.
 async fn get_prompt(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
@@ -159,6 +174,7 @@ async fn get_prompt(
     Ok(model.text)
 }
 
+/// Insert a new prompt and optionally link it to groups.
 async fn create_prompt(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PromptInput>,
@@ -209,6 +225,7 @@ async fn create_prompt(
     }))
 }
 
+/// Update prompt text, metadata, and group associations.
 async fn update_prompt(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
@@ -266,6 +283,7 @@ async fn update_prompt(
     }))
 }
 
+/// Remove a prompt when it is no longer needed.
 async fn delete_prompt(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
@@ -281,6 +299,7 @@ async fn delete_prompt(
 #[derive(Deserialize)]
 struct FavoriteInput { favorite: bool }
 
+/// Toggle the favorite flag for quick UI filtering.
 async fn set_favorite(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
@@ -304,6 +323,7 @@ async fn set_favorite(
 
 // ---------------- Groups ----------------
 
+/// Return all prompt groups with their relationships.
 async fn list_groups(
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<Json<Vec<GroupData>>, (StatusCode, Json<ErrorResponse>)> {
@@ -323,6 +343,7 @@ async fn list_groups(
     Ok(Json(result))
 }
 
+/// Create a prompt group and associate existing prompts.
 async fn create_group(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<GroupInput>,
@@ -345,6 +366,7 @@ async fn create_group(
     }))
 }
 
+/// Update group metadata and prompt membership.
 async fn update_group(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
@@ -378,6 +400,7 @@ async fn update_group(
     }))
 }
 
+/// Mark a group as favorite for UI shortcuts.
 async fn set_group_favorite(
     Path(id): Path<i32>,
     State(db): State<Arc<DatabaseConnection>>,
@@ -402,6 +425,7 @@ async fn set_group_favorite(
 
 // ---------------- Pipelines ----------------
 
+/// Return stored pipeline templates managed alongside prompts.
 async fn list_pipelines(
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<Json<Vec<PipelineData>>, (StatusCode, Json<ErrorResponse>)> {
@@ -413,6 +437,7 @@ async fn list_pipelines(
     }).collect()))
 }
 
+/// Store a new pipeline template document.
 async fn create_pipeline(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PipelineInput>,
@@ -424,6 +449,7 @@ async fn create_pipeline(
     Ok(Json(PipelineData { id: res.id, name: res.name, data: res.config_json }))
 }
 
+/// Replace an existing pipeline template with new data.
 async fn update_pipeline(
     Path(id): Path<Uuid>,
     State(db): State<Arc<DatabaseConnection>>,
@@ -439,6 +465,7 @@ async fn update_pipeline(
     Ok(Json(PipelineData { id: res.id, name: res.name, data: res.config_json }))
 }
 
+/// Delete a stored pipeline template.
 async fn delete_pipeline(
     Path(id): Path<Uuid>,
     State(db): State<Arc<DatabaseConnection>>,
@@ -466,6 +493,7 @@ fn not_found() -> (StatusCode, Json<ErrorResponse>) {
 
 // ---------------- Bootstrap: ensure prompt schema ----------------
 
+/// Apply migrations that SeaORM does not manage automatically.
 async fn ensure_prompt_schema(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
     let be = db.get_database_backend();
 
@@ -512,6 +540,7 @@ async fn ensure_prompt_schema(db: &DatabaseConnection) -> Result<(), sea_orm::Db
 // ---------------- main ----------------
 
 #[tokio::main]
+/// Boot the prompt manager service, including schema setup.
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging from the RUST_LOG environment variable.
     fmt().with_env_filter(EnvFilter::from_default_env()).init();

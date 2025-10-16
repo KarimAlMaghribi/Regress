@@ -1,3 +1,6 @@
+//! Minimal Microsoft Graph client used by the SharePoint ingest service to list
+//! folders, download PDFs, and move processed documents between locations.
+
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -16,6 +19,7 @@ use crate::config::Config;
 const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
 const MAX_RETRIES: u32 = 3;
 
+/// Handles authentication and interaction with Microsoft Graph APIs.
 pub struct MsGraphClient {
     http: Client,
     tenant_id: String,
@@ -28,6 +32,7 @@ pub struct MsGraphClient {
     token: RwLock<Option<CachedToken>>,
 }
 
+/// Simplified representation of a folder returned by Microsoft Graph.
 #[derive(Clone, Debug)]
 pub struct GraphFolder {
     pub id: String,
@@ -35,6 +40,7 @@ pub struct GraphFolder {
     pub file_count: i64,
 }
 
+/// Metadata describing a PDF file within a SharePoint folder.
 #[derive(Clone, Debug)]
 pub struct GraphFile {
     pub id: String,
@@ -92,6 +98,8 @@ struct DriveResponse {
 }
 
 impl MsGraphClient {
+    /// Build a client using the supplied configuration, preparing HTTP
+    /// timeouts that mirror the upstream Graph limits.
     pub fn new(config: &Config) -> Result<Self> {
         let http = Client::builder()
             .timeout(config.graph_timeout)
@@ -111,6 +119,7 @@ impl MsGraphClient {
         })
     }
 
+    /// Ensure the configured site, drive, and key folders exist.
     pub async fn bootstrap(&self, config: &Config) -> Result<()> {
         self.ensure_site_and_drive().await?;
         self.ensure_folder(&config.drive_input_path()).await?;
@@ -119,6 +128,7 @@ impl MsGraphClient {
         Ok(())
     }
 
+    /// List child folders under the given path, filtering out file entries.
     pub async fn list_subfolders(&self, base_path: &str) -> Result<Vec<GraphFolder>> {
         let drive_id = self.ensure_site_and_drive().await?;
         let path = encode_path(base_path);
@@ -147,6 +157,7 @@ impl MsGraphClient {
         Ok(folders)
     }
 
+    /// Enumerate PDF files within the target folder by MIME type or extension.
     pub async fn list_pdfs_in_folder(&self, folder_id: &str) -> Result<Vec<GraphFile>> {
         let drive_id = self.ensure_site_and_drive().await?;
         let url = format!(
@@ -179,6 +190,7 @@ impl MsGraphClient {
         Ok(files)
     }
 
+    /// Download the specified file into the provided destination path.
     pub async fn download_file(&self, file_id: &str, dest: &Path) -> Result<()> {
         let drive_id = self.ensure_site_and_drive().await?;
         let url = format!("{GRAPH_BASE}/drives/{drive_id}/items/{file_id}/content");
@@ -194,6 +206,7 @@ impl MsGraphClient {
         Ok(())
     }
 
+    /// Move an item to another folder by issuing an update request.
     pub async fn move_item(&self, item_id: &str, dest_path: &str) -> Result<()> {
         let drive_id = self.ensure_site_and_drive().await?;
         let encoded = format!("/drive/root:/{}", dest_path);
@@ -228,6 +241,7 @@ impl MsGraphClient {
         Ok(())
     }
 
+    /// Ensure that the folder (and any missing parents) exist on the drive.
     pub async fn ensure_folder(&self, drive_path: &str) -> Result<()> {
         let drive_id = self.ensure_site_and_drive().await?;
         let path = encode_path(drive_path);
@@ -283,6 +297,7 @@ impl MsGraphClient {
         Ok(())
     }
 
+    /// Lazily fetch and cache the drive identifier backing the configured site.
     async fn ensure_site_and_drive(&self) -> Result<String> {
         if let Some(drive_id) = self.drive_id.read().clone() {
             return Ok(drive_id);
@@ -308,6 +323,7 @@ impl MsGraphClient {
         Ok(drive_id)
     }
 
+    /// Retrieve the site identifier for the configured SharePoint host/path.
     async fn fetch_site_id(&self) -> Result<String> {
         let url = format!("{GRAPH_BASE}/sites/{}:{}", self.site_host, self.site_path);
         let resp = self
@@ -318,6 +334,7 @@ impl MsGraphClient {
         Ok(site.id)
     }
 
+    /// Retrieve the drive identifier associated with the target site.
     async fn fetch_drive_id(&self, site_id: &str) -> Result<String> {
         let url = format!("{GRAPH_BASE}/sites/{site_id}/drive");
         let resp = self
@@ -328,11 +345,13 @@ impl MsGraphClient {
         Ok(drive.id)
     }
 
+    /// Prepare an authenticated request builder using the cached access token.
     async fn authorized_request(&self, method: Method, url: String) -> Result<RequestBuilder> {
         let token = self.access_token().await?;
         Ok(self.http.request(method, url).bearer_auth(token))
     }
 
+    /// Execute the request with exponential backoff for retryable responses.
     async fn send_with_retry(&self, builder: RequestBuilder) -> Result<Response> {
         let request = builder
             .build()
@@ -364,6 +383,7 @@ impl MsGraphClient {
         }
     }
 
+    /// Obtain a valid access token, refreshing it when necessary.
     async fn access_token(&self) -> Result<String> {
         if let Some(token) = self.valid_cached_token() {
             return Ok(token);
@@ -371,6 +391,7 @@ impl MsGraphClient {
         self.fetch_token().await
     }
 
+    /// Return the cached token when it has not expired.
     fn valid_cached_token(&self) -> Option<String> {
         self.token.read().as_ref().and_then(|token| {
             if token.expires_at > Instant::now() - Duration::from_secs(60) {
@@ -381,6 +402,7 @@ impl MsGraphClient {
         })
     }
 
+    /// Request a new OAuth access token using the client credentials grant.
     async fn fetch_token(&self) -> Result<String> {
         let url = format!(
             "https://login.microsoftonline.com/{}/oauth2/v2.0/token",
@@ -412,6 +434,7 @@ impl MsGraphClient {
     }
 }
 
+/// Encode individual path segments to be safely inserted into Graph URLs.
 fn encode_path(path: &str) -> String {
     path.split('/')
         .map(|segment| urlencoding::encode(segment).into_owned())
@@ -419,10 +442,12 @@ fn encode_path(path: &str) -> String {
         .join("/")
 }
 
+/// Determine whether the status code should trigger a retry attempt.
 fn should_retry(status: StatusCode) -> bool {
     status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()
 }
 
+/// Calculate the backoff duration with bounded jitter for retries.
 fn backoff_with_jitter(attempt: u32) -> Duration {
     let base = 200u64 * 2u64.pow(attempt.min(6));
     let jitter: u64 = rand::thread_rng().gen_range(0..100);

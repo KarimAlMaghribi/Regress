@@ -1,3 +1,6 @@
+//! Management API that stores pipeline configurations, publishes work to Kafka,
+//! and exposes endpoints for retrieving run metadata.
+
 use actix_cors::Cors;
 use actix_web::web::Json;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
@@ -15,6 +18,7 @@ use uuid::Uuid;
 
 mod consolidation; // belassen, falls später genutzt
 
+/// Shared application state for request handlers.
 #[derive(Clone)]
 struct AppState {
     pool: PgPool,
@@ -22,6 +26,7 @@ struct AppState {
     broker: String,
 }
 
+/// Public representation of a stored pipeline configuration.
 #[derive(Serialize)]
 struct PipelineInfo {
     id: Uuid,
@@ -31,6 +36,7 @@ struct PipelineInfo {
 
 /* ------------------------------ Helpers ------------------------------ */
 
+/// Ensure local development URLs do not require TLS connections.
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
         return url.to_string();
@@ -43,6 +49,7 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
+/// Convert a string into a filesystem- and JSON-friendly key.
 fn slugify(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_us = false;
@@ -59,6 +66,7 @@ fn slugify(s: &str) -> String {
     out.trim_matches('_').to_string()
 }
 
+/// Determine the JSON key used for a prompt result or derive one from text.
 fn key_for_prompt(items: &[shared::dto::PromptResult], prompt_id: i32) -> String {
     if let Some(k) = items
         .iter()
@@ -79,6 +87,7 @@ fn key_for_prompt(items: &[shared::dto::PromptResult], prompt_id: i32) -> String
 
 /* ------------------------------ DB Init ------------------------------ */
 
+/// Create the persistence tables required by the pipeline API.
 async fn init_db(pool: &PgPool) {
     if let Err(e) = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipelines (
@@ -117,6 +126,7 @@ async fn init_db(pool: &PgPool) {
 
 /* ------------------------------ Config R/W ------------------------------ */
 
+/// Load a stored pipeline configuration by identifier.
 async fn fetch_config(pool: &PgPool, id: Uuid) -> Result<PipelineConfig, HttpResponse> {
     let row = sqlx::query("SELECT config_json FROM pipelines WHERE id=$1")
         .bind(id)
@@ -130,6 +140,7 @@ async fn fetch_config(pool: &PgPool, id: Uuid) -> Result<PipelineConfig, HttpRes
     serde_json::from_value(value).map_err(|_| HttpResponse::InternalServerError().finish())
 }
 
+/// Persist the provided pipeline configuration if the record exists.
 async fn store_config(pool: &PgPool, id: Uuid, cfg: &PipelineConfig) -> Result<(), HttpResponse> {
     let json =
         serde_json::to_value(cfg).map_err(|_| HttpResponse::InternalServerError().finish())?;
@@ -179,6 +190,7 @@ fn openai_endpoint_for(key: &str) -> &'static str {
         .unwrap_or(OPENAI_VERSION_OPTIONS[0].1)
 }
 
+/// Retrieve a stored application setting by key.
 async fn fetch_setting(pool: &PgPool, key: &str) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = $1")
         .bind(key)
@@ -186,6 +198,7 @@ async fn fetch_setting(pool: &PgPool, key: &str) -> Result<Option<String>, sqlx:
         .await
 }
 
+/// Persist an application setting value while updating the timestamp.
 async fn store_setting(pool: &PgPool, key: &str, value: &str) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO app_settings (key, value, updated_at)
@@ -211,6 +224,7 @@ struct UpdateOpenAiVersion {
     version: String,
 }
 
+/// Return the configured OpenAI API version preference.
 async fn get_openai_version(data: web::Data<AppState>) -> impl Responder {
     match fetch_setting(&data.pool, OPENAI_VERSION_KEY).await {
         Ok(Some(key)) if is_valid_openai_version(&key) => {
@@ -237,6 +251,7 @@ async fn get_openai_version(data: web::Data<AppState>) -> impl Responder {
     }
 }
 
+/// Store the desired OpenAI API version when the option exists.
 async fn put_openai_version(
     data: web::Data<AppState>,
     payload: Json<UpdateOpenAiVersion>,
@@ -261,6 +276,7 @@ async fn put_openai_version(
 
 /* ------------------------------ Handlers ------------------------------ */
 
+/// Enumerate all stored pipelines with their metadata.
 async fn list_pipelines(data: web::Data<AppState>) -> impl Responder {
     match sqlx::query("SELECT id, name, config_json FROM pipelines")
         .fetch_all(&data.pool)
@@ -298,6 +314,7 @@ struct RunMetaRow {
     overall_score: Option<f32>,
 }
 
+/// Fetch a specific pipeline run including its recorded steps.
 async fn get_run(data: web::Data<AppState>, path: web::Path<uuid::Uuid>) -> impl Responder {
     let run_id = path.into_inner();
 
@@ -410,6 +427,7 @@ struct NameInput {
     name: String,
 }
 
+/// Create a new pipeline configuration and persist it to Postgres.
 async fn create_pipeline(
     data: web::Data<AppState>,
     Json(cfg): web::Json<PipelineConfig>,
@@ -438,6 +456,7 @@ async fn create_pipeline(
     }
 }
 
+/// Retrieve a single pipeline configuration by identifier.
 async fn get_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl Responder {
     match sqlx::query("SELECT config_json FROM pipelines WHERE id=$1")
         .bind(*path)
@@ -458,6 +477,7 @@ async fn get_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl 
 /// Update-Endpoint, der **Name-only** ODER **volle Pipeline** akzeptiert.
 /// - Wenn Body { "name": "..." } ist → nur Name setzen.
 /// - Wenn Body ein PipelineConfig ist → komplette Pipeline ersetzen.
+/// Replace the stored pipeline configuration with the provided payload.
 async fn update_pipeline(
     data: web::Data<AppState>,
     path: web::Path<Uuid>,
@@ -506,6 +526,7 @@ async fn update_pipeline(
     }
 }
 
+/// Delete the pipeline configuration when it exists.
 async fn delete_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl Responder {
     match sqlx::query("DELETE FROM pipelines WHERE id=$1")
         .bind(*path)
@@ -524,6 +545,7 @@ struct StepInput {
     step: PipelineStep,
 }
 
+/// Append a new step to the pipeline configuration.
 async fn add_step(
     data: web::Data<AppState>,
     path: web::Path<Uuid>,
@@ -561,6 +583,7 @@ struct StepPatch {
     config: Option<Value>,
 }
 
+/// Update an existing pipeline step identified by its ID string.
 async fn update_step(
     data: web::Data<AppState>,
     path: web::Path<(Uuid, String)>,
@@ -610,6 +633,7 @@ async fn update_step(
     }
 }
 
+/// Remove a step from the pipeline configuration.
 async fn delete_step(data: web::Data<AppState>, path: web::Path<(Uuid, String)>) -> impl Responder {
     let (id, step_id_str) = path.into_inner();
     let step_uuid = match Uuid::parse_str(&step_id_str) {
@@ -639,6 +663,7 @@ struct OrderInput {
     order: Vec<String>, // Step-IDs als String (UUIDs)
 }
 
+/// Persist a new ordering for the steps within a pipeline.
 async fn reorder_steps(
     data: web::Data<AppState>,
     path: web::Path<Uuid>,
@@ -680,6 +705,7 @@ struct RunInput {
     file_id: i32,
 }
 
+/// Publish a `pipeline-run` event for the specified PDF and pipeline.
 async fn run_pipeline(
     data: web::Data<AppState>,
     path: web::Path<Uuid>,
@@ -729,6 +755,7 @@ async fn run_pipeline(
 
 /* ------------------------------ main ------------------------------ */
 
+/// Launch the pipeline management REST API using Actix Web.
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();

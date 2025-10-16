@@ -1,3 +1,6 @@
+//! Kafka consumer that runs the extraction pipeline for uploaded PDFs and
+//! persists results back to Postgres while publishing final statuses.
+
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
     producer::{FutureProducer, FutureRecord},
@@ -17,6 +20,7 @@ use uuid::Uuid;
 
 mod runner;
 
+/// Append `sslmode=disable` to connection strings that omit the parameter.
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
         return url.to_string();
@@ -29,6 +33,7 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
+/// Parse an environment variable into the desired type with a default value.
 fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
     std::env::var(key)
         .ok()
@@ -36,12 +41,14 @@ fn env_parse<T: std::str::FromStr>(key: &str, default: T) -> T {
         .unwrap_or(default)
 }
 
+/// Launch the pipeline runner on a multi-threaded Tokio runtime.
 #[tokio::main(flavor = "multi_thread")]
 async fn main() -> anyhow::Result<()> {
     let local = LocalSet::new();
     local.run_until(async { app_main().await }).await
 }
 
+/// Configure dependencies and run the pipeline event loop.
 async fn app_main() -> anyhow::Result<()> {
     fmt().with_env_filter(EnvFilter::from_default_env()).init();
 
@@ -676,10 +683,12 @@ async fn app_main() -> anyhow::Result<()> {
                                 explanations_by_route: BTreeMap<String, Vec<String>>,
                             }
 
+                            /// Normalize free-form decision routes so they can be tallied.
                             fn normalize_route(route: &str) -> String {
                                 route.trim().to_ascii_uppercase()
                             }
 
+                            /// Map a textual route to a boolean when possible.
                             fn route_to_bool(route: &str) -> Option<bool> {
                                 match route {
                                     "YES" | "TRUE" | "JA" | "Y" | "1" => Some(true),

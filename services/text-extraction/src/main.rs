@@ -1,3 +1,6 @@
+//! Service that extracts text from uploaded PDFs, stores it in Postgres, and
+//! republishes events for downstream consumers.
+
 use actix_cors::Cors;
 use actix_web::{web, App, HttpResponse, HttpServer, Responder};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
@@ -19,6 +22,7 @@ use uuid::Uuid;
 
 use text_extraction::extract_text_pages;
 
+/// Append `sslmode=disable` when the connection string omits it.
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
         return url.to_string();
@@ -31,21 +35,25 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
+/// Lightweight readiness endpoint used for monitoring.
 async fn health() -> impl Responder {
     "OK"
 }
 
+/// Simplified representation of a stored PDF text entry.
 #[derive(serde::Serialize)]
 struct TextEntry {
     id: i32,
 }
 
+/// Request payload for re-emitting stored text events.
 #[derive(Deserialize)]
 struct AnalysisReq {
     ids: Vec<i32>,
     // prompt: String, // optional, falls du später was damit tust
 }
 
+/// Enumerate PDFs that have stored text content available for inspection.
 async fn list_texts(db: web::Data<Pool>) -> actix_web::Result<HttpResponse> {
     let client = db
         .get()
@@ -63,8 +71,7 @@ async fn list_texts(db: web::Data<Pool>) -> actix_web::Result<HttpResponse> {
     Ok(HttpResponse::Ok().json(items))
 }
 
-/// Bereits gespeicherten (seitenweise) Text erneut als `text-extracted` publizieren.
-/// Kein erneutes OCR, nur Re-Emit.
+/// Re-publish existing extracted text as `text-extracted` events without rerunning OCR.
 async fn start_analysis(
     db: web::Data<Pool>,
     prod: web::Data<FutureProducer>,
@@ -105,6 +112,7 @@ async fn start_analysis(
     Ok(HttpResponse::Ok().finish())
 }
 
+/// Launch the text extraction service and begin consuming Kafka events.
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();

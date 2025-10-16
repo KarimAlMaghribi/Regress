@@ -1,4 +1,5 @@
-// services/pipeline-runner/src/runner.rs
+//! Core pipeline execution logic shared by the Kafka consumer and any tests,
+//! handling batching, retries, and consolidation of model outputs.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -12,15 +13,23 @@ use shared::dto::{
 };
 use shared::openai_client as ai;
 
+/// Tuning parameters controlling how many pages are batched per request and
+/// how aggressively to retry OpenAI calls.
 #[derive(Clone, Debug)]
 pub struct BatchCfg {
-    pub page_batch_size: usize, // PIPELINE_PAGE_BATCH_SIZE
-    pub max_parallel: usize,    // PIPELINE_MAX_PARALLEL
-    pub max_chars: usize,       // PIPELINE_MAX_CHARS
-    pub openai_timeout_ms: u64, // PIPELINE_OPENAI_TIMEOUT_MS
-    pub openai_retries: usize,  // PIPELINE_OPENAI_RETRIES
+    /// Maximum number of pages to send in a single extraction batch.
+    pub page_batch_size: usize,
+    /// Maximum number of concurrent OpenAI requests to run.
+    pub max_parallel: usize,
+    /// Upper bound on characters included in a single prompt payload.
+    pub max_chars: usize,
+    /// Request timeout passed to the OpenAI client in milliseconds.
+    pub openai_timeout_ms: u64,
+    /// Number of retries attempted when a call fails.
+    pub openai_retries: usize,
 }
 
+/// Aggregated extraction, scoring, and decision results from a pipeline run.
 #[derive(Debug, Clone)]
 pub struct RunOutcome {
     pub extraction: Vec<PromptResult>,
@@ -29,6 +38,7 @@ pub struct RunOutcome {
     pub log: Vec<RunStep>,
 }
 
+/// Execute the configured pipeline against the provided document pages.
 pub async fn execute_with_pages(
     cfg: &PipelineConfig,
     pages: &[(i32, String)],
@@ -345,6 +355,8 @@ pub async fn execute_with_pages(
 }
 
 #[allow(dead_code)]
+/// Partition pages into batches obeying the configured size and character
+/// limits while allowing optional overlap.
 fn make_batches(
     pages: &[(i32, String)],
     page_batch_size: usize,
@@ -375,12 +387,14 @@ fn make_batches(
     out
 }
 
+/// Read a `usize` environment variable value or fall back to the default.
 fn env_usize(key: &str, default: usize) -> usize {
     std::env::var(key)
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(default)
 }
+/// Read a `u64` environment variable value or fall back to the default.
 fn env_u64(key: &str, default: u64) -> u64 {
     std::env::var(key)
         .ok()
@@ -388,6 +402,7 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// Build prompt batches specific to the current step configuration.
 fn make_batches_step(
     pages: &[(i32, String)],
     page_batch_size: usize,
@@ -471,6 +486,7 @@ fn make_batches_step(
     out
 }
 
+/// Collapse runs of whitespace to single spaces for stable comparisons.
 fn normalize_spaces(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut last_was_space = false;
@@ -488,6 +504,7 @@ fn normalize_spaces(s: &str) -> String {
     out.trim().to_string()
 }
 
+/// Invoke the extraction prompt with retry semantics and structured logging.
 async fn call_extract_with_retries(
     prompt_id: i32,
     text: &str,
@@ -543,6 +560,7 @@ async fn call_extract_with_retries(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("extract failed")))
 }
 
+/// Execute the scoring prompt with retries, returning a consistent result.
 async fn call_score_with_retries(
     prompt_id: i32,
     text: &str,
@@ -585,6 +603,7 @@ async fn call_score_with_retries(
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("score failed")))
 }
 
+/// Execute the decision prompt with retries, preserving evidence linking.
 async fn call_decide_with_retries(
     prompt_id: i32,
     text: &str,
@@ -673,6 +692,7 @@ async fn call_decide_with_retries(
 
 /* --------------------- Tri-State Konsolidierung für Scoring --------------------- */
 
+/// Clamp the provided floating point value to the range [0, 1].
 fn clamp01f(x: f32) -> f32 {
     if !x.is_finite() {
         return 0.0;
@@ -682,6 +702,7 @@ fn clamp01f(x: f32) -> f32 {
 
 /// Konsolidiert eine Liste von ScoringResult (Batches) zu einem gewichteten Tri-State Ergebnis.
 /// Null-Evidenz -> Unsure.
+/// Merge scoring results from multiple batches into a single aggregate.
 fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
     if v.is_empty() {
         return ScoringResult {
@@ -797,6 +818,7 @@ fn consolidate_scoring(v: &Vec<ScoringResult>) -> ScoringResult {
     }
 }
 
+/// Summarize decision prompt votes into a single consolidated response.
 fn consolidate_decision(
     v: &Vec<PromptResult>,
     yes: &str,
@@ -861,6 +883,7 @@ fn consolidate_decision(
     }
 }
 
+/// Interpret loosely formatted truthy strings as boolean `true`.
 fn fuzzy_true(s: &str) -> bool {
     matches!(
         s.trim().to_ascii_lowercase().as_str(),
@@ -868,6 +891,7 @@ fn fuzzy_true(s: &str) -> bool {
     )
 }
 
+/// Interpret loosely formatted falsy strings as boolean `false`.
 fn fuzzy_false(s: &str) -> bool {
     matches!(
         s.trim().to_ascii_lowercase().as_str(),
@@ -875,6 +899,7 @@ fn fuzzy_false(s: &str) -> bool {
     )
 }
 
+/// Fetch the prompt text for logging, ignoring errors in production usage.
 async fn fetch_prompt_text_for_log(prompt_id: i32) -> String {
     match ai::fetch_prompt_text(prompt_id).await {
         Ok(s) => s,
@@ -885,6 +910,7 @@ async fn fetch_prompt_text_for_log(prompt_id: i32) -> String {
     }
 }
 
+/// Compute a weighted average for boolean scores when confidence is present.
 pub fn compute_overall_score(items: &[(bool, f32)]) -> Option<f32> {
     if items.is_empty() {
         return None;

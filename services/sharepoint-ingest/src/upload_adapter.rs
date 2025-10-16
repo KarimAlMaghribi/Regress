@@ -1,3 +1,6 @@
+//! Thin wrapper around the upload API that submits PDF documents captured from
+//! SharePoint and records the resulting metadata for audit purposes.
+
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -7,6 +10,7 @@ use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
 
+/// Client responsible for talking to the upload microservice.
 #[derive(Clone)]
 pub struct UploadAdapter {
     client: Client,
@@ -14,6 +18,7 @@ pub struct UploadAdapter {
     token: Option<String>,
 }
 
+/// Response returned by the upload service after submitting a document.
 #[derive(Debug, Clone, Serialize)]
 pub struct UploadResult {
     pub status: String,
@@ -22,6 +27,7 @@ pub struct UploadResult {
 }
 
 impl UploadAdapter {
+    /// Construct the HTTP client with the configured timeout and optional auth.
     pub fn new(url: String, token: Option<String>, timeout: std::time::Duration) -> Result<Self> {
         let client = Client::builder()
             .timeout(timeout)
@@ -30,6 +36,7 @@ impl UploadAdapter {
         Ok(Self { client, url, token })
     }
 
+    /// Upload the provided file path and attach context required by the API.
     pub async fn upload(&self, file_path: &Path, file_name: &str) -> Result<UploadResult> {
         let mut form = Form::new().text("defer_pipeline", "true".to_string());
         let part = Part::file(file_path)

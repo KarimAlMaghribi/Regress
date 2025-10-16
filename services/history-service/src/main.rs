@@ -1,3 +1,6 @@
+//! WebSocket service that records pipeline history events and streams them to
+//! connected clients while maintaining a resilient Postgres connection.
+
 use actix::prelude::*;
 use actix_cors::Cors;
 use actix_web::web::Payload;
@@ -24,12 +27,14 @@ use uuid::Uuid;
    DB-Manager: NoTLS, Auto-Reconnect bei "connection closed" + Heartbeat (SELECT 1)
    ============================================================================================ */
 
+/// Lightweight Postgres wrapper with automatic reconnection and retry logic.
 struct Db {
     dsn: String,
     client: RwLock<Option<Arc<Client>>>,
 }
 
 impl Db {
+    /// Construct the connection manager and start the health check loop.
     async fn new(dsn: String) -> Arc<Self> {
         let db = Arc::new(Self {
             dsn,
@@ -61,6 +66,7 @@ impl Db {
         db
     }
 
+    /// Establish a single connection and return a future that drives it.
     async fn connect_once(&self) -> Result<(Arc<Client>, impl std::future::Future<Output = Result<(), tokio_postgres::Error>> + Send + 'static), tokio_postgres::Error> {
         let (client, connection) = tokio_postgres::connect(&self.dsn, NoTls).await?;
         let client = Arc::new(client);
@@ -74,6 +80,7 @@ impl Db {
         Ok((client, fut))
     }
 
+    /// Refresh the connection, replacing the cached client instance.
     async fn reconnect(&self) -> Result<(), tokio_postgres::Error> {
         let (client, connection_fut) = self.connect_once().await?;
         tokio::spawn(async move {
@@ -84,6 +91,7 @@ impl Db {
         Ok(())
     }
 
+    /// Fetch the active client, reconnecting if necessary.
     async fn current(&self) -> Result<Arc<Client>, tokio_postgres::Error> {
         if let Some(c) = self.client.read().await.as_ref() {
             return Ok(c.clone());
@@ -92,6 +100,7 @@ impl Db {
         Ok(self.client.read().await.as_ref().unwrap().clone())
     }
 
+    /// Issue a simple `SELECT 1` query to verify the connection.
     async fn ping(&self) -> Result<(), tokio_postgres::Error> {
         let c = self.current().await?;
         let _ = c.simple_query("SELECT 1").await?;
@@ -105,6 +114,7 @@ impl Db {
     }
 
     /// query mit 1x Auto-Reconnect-Retry
+    /// Execute a query with a single retry when the connection is closed.
     async fn query(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, tokio_postgres::Error> {
         let c1 = self.current().await?;
         match c1.query(sql, params).await {
@@ -120,6 +130,7 @@ impl Db {
     }
 
     /// execute mit 1x Auto-Reconnect-Retry
+    /// Execute a statement with retry logic mirroring [`Self::query`].
     async fn execute(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64, tokio_postgres::Error> {
         let c1 = self.current().await?;
         match c1.execute(sql, params).await {
@@ -135,6 +146,7 @@ impl Db {
     }
 
     /// query_opt mit 1x Auto-Reconnect-Retry
+    /// Run a query and return only the first row if present.
     async fn query_opt(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>, tokio_postgres::Error> {
         let mut rows = self.query(sql, params).await?;
         Ok(rows.pop()) // erste Zeile (oder None)
@@ -145,6 +157,7 @@ impl Db {
    Types & AppState
    ============================================================================================ */
 
+/// Record of an individual pipeline result stored for querying and streaming.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HistoryEntry {
     id: i32,
@@ -161,6 +174,7 @@ struct HistoryEntry {
     tenant_name: Option<String>,
 }
 
+/// Shared state containing the database handle and broadcast channel.
 #[derive(Clone)]
 struct AppState {
     db: Arc<Db>,
@@ -172,6 +186,7 @@ struct AppState {
    DB-Helfer (ohne gecachte Prepared Statements → reconnection-safe)
    ============================================================================================ */
 
+/// Ensure the database tables exist and create views used by the UI.
 async fn ensure_schema_db(db: &Db) {
     let _ = db.execute(
         "CREATE TABLE IF NOT EXISTS analysis_history ( \
@@ -237,6 +252,7 @@ fn row_to_entry_with_tenant(r: Row) -> HistoryEntry {
     }
 }
 
+/// Load the most recent history entries limited by the provided count.
 async fn latest_db(db: &Db, limit: i64) -> Vec<HistoryEntry> {
     match db.query(
         "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label, tenant_name \
@@ -251,6 +267,7 @@ async fn latest_db(db: &Db, limit: i64) -> Vec<HistoryEntry> {
     }
 }
 
+/// Fetch all history entries without filtering.
 async fn all_entries_db(db: &Db) -> Vec<HistoryEntry> {
     match db.query(
         "SELECT id,pdf_id,pipeline_id,state AS result,pdf_url,timestamp,status,score,label AS result_label, tenant_name \
@@ -265,6 +282,7 @@ async fn all_entries_db(db: &Db) -> Vec<HistoryEntry> {
     }
 }
 
+/// Fetch recent entries filtered by an optional status string.
 async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntry> {
     if let Some(s) = status {
         match db.query(
@@ -302,6 +320,7 @@ async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntr
 }
 
 // NEU: gleiche Logik wie oben, aber über die View v_analysis_history_with_tenant + Tenant-Filter
+/// Fetch recent entries and group them by tenant when provided.
 async fn latest_by_status_with_tenant_db(
     db: &Db,
     status: Option<String>,
@@ -395,6 +414,7 @@ async fn latest_by_status_with_tenant_db(
     }
 }
 
+/// Retrieve a single history entry by identifier.
 async fn fetch_entry_by_id(db: &Db, id: i32) -> Option<HistoryEntry> {
     match db
         .query_opt(
@@ -413,6 +433,7 @@ async fn fetch_entry_by_id(db: &Db, id: i32) -> Option<HistoryEntry> {
     }
 }
 
+/// Mark a PDF as pending when a new result is expected.
 async fn mark_pending_db(
     db: &Db,
     pdf_id: i32,
@@ -438,6 +459,7 @@ async fn mark_pending_db(
     }
 }
 
+/// Insert a run result and return the stored identifier.
 async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
     match db.query_opt(
         "SELECT id FROM analysis_history WHERE pdf_id=$1 AND status='running' \
@@ -502,6 +524,7 @@ async fn insert_result_db(db: &Db, entry: &HistoryEntry) -> i32 {
    HTTP-Handler
    ============================================================================================ */
 
+/// Stream classification history entries via Server-Sent Events.
 async fn classifications(
     state: web::Data<AppState>,
     query: web::Query<HashMap<String, String>>,
@@ -511,6 +534,7 @@ async fn classifications(
     HttpResponse::Ok().json(items)
 }
 
+/// Stream analysis history entries via Server-Sent Events.
 async fn analyses(
     state: web::Data<AppState>,
     query: web::Query<HashMap<String, String>>,
@@ -538,6 +562,7 @@ async fn analyses(
     HttpResponse::Ok().json(items)
 }
 
+/// Fetch a single history entry and return it as JSON.
 async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Responder {
     let pdf_id = path.into_inner();
     match state.db.query_opt(
@@ -582,6 +607,7 @@ async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Respon
     }
 }
 
+/// Verify the database connection for health reporting.
 async fn health(state: web::Data<AppState>) -> impl Responder {
     match state.db.ping().await {
         Ok(_) => HttpResponse::Ok().body("OK"),
@@ -590,6 +616,7 @@ async fn health(state: web::Data<AppState>) -> impl Responder {
 }
 
 // NEU: Tenants auflisten
+/// List tenants that have produced history entries.
 async fn tenants_list(state: web::Data<AppState>) -> impl Responder {
     match state.db.query("SELECT id, name FROM tenants ORDER BY name ASC", &[]).await {
         Ok(rows) => {
@@ -607,8 +634,10 @@ async fn tenants_list(state: web::Data<AppState>) -> impl Responder {
 
 // NEU: Tenant anlegen (idempotent per UNIQUE name)
 #[derive(Deserialize)]
+/// Request payload for registering a new tenant name.
 struct CreateTenantBody { name: String }
 
+/// Insert a tenant record used to categorize history entries.
 async fn tenants_create(state: web::Data<AppState>, body: web::Json<CreateTenantBody>) -> impl Responder {
     let nm = body.name.trim();
     if nm.is_empty() {
@@ -684,6 +713,7 @@ impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
     }
 }
 
+/// Upgrade incoming connections to WebSocket for push updates.
 async fn ws_index(req: HttpRequest, stream: Payload, state: web::Data<AppState>) -> Result<HttpResponse, Error> {
     let ws = WsConn { db: state.db.clone(), rx: state.tx.subscribe() };
     ws::start(ws, &req, stream)
@@ -693,6 +723,7 @@ async fn ws_index(req: HttpRequest, stream: Payload, state: web::Data<AppState>)
    Kafka-Consumer
    ============================================================================================ */
 
+/// Spawn background Kafka consumers and forward events to clients.
 async fn start_kafka(
     db: Arc<Db>,
     tx: tokio::sync::broadcast::Sender<HistoryEntry>,
@@ -804,6 +835,7 @@ async fn start_kafka(
    main
    ============================================================================================ */
 
+/// Launch the history service HTTP and WebSocket server.
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();

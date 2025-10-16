@@ -1,3 +1,6 @@
+//! Actix Web service coordinating SharePoint ingest jobs, antivirus scanning,
+//! PDF merging, and submission to the upload API.
+
 mod config;
 mod job;
 mod msgraph;
@@ -26,6 +29,7 @@ use uuid::Uuid;
 
 use crate::config::Config;
 
+/// Shared dependencies injected into request handlers.
 #[derive(Clone)]
 struct AppState {
     config: Arc<Config>,
@@ -35,11 +39,13 @@ struct AppState {
     semaphore: Arc<Semaphore>,
 }
 
+/// Body returned by the health endpoint when authorization succeeds.
 #[derive(serde::Serialize)]
 struct HealthResponse {
     status: &'static str,
 }
 
+/// Response containing the discovered folder metadata for the UI.
 #[derive(serde::Serialize)]
 struct FoldersResponse {
     base: String,
@@ -47,6 +53,7 @@ struct FoldersResponse {
     items: Vec<FolderItem>,
 }
 
+/// Individual folder entry returned to the frontend.
 #[derive(serde::Serialize)]
 struct FolderItem {
     id: String,
@@ -54,6 +61,7 @@ struct FolderItem {
     file_count: i64,
 }
 
+/// Payload accepted when creating ingest jobs.
 #[derive(serde::Deserialize)]
 struct JobCreateRequest {
     folder_ids: Vec<String>,
@@ -63,11 +71,13 @@ struct JobCreateRequest {
     filenames: Option<HashMap<String, Vec<String>>>,
 }
 
+/// Wrapper for the job list returned by the API.
 #[derive(serde::Serialize)]
 struct JobsResponse {
     jobs: Vec<job::JobSummary>,
 }
 
+/// Start the Actix runtime and serve the SharePoint ingest API.
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
@@ -141,6 +151,7 @@ async fn main() -> std::io::Result<()> {
     .await
 }
 
+/// Basic health probe that requires admin authorization.
 async fn healthz(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -149,6 +160,7 @@ async fn healthz(
     Ok(web::Json(HealthResponse { status: "ok" }))
 }
 
+/// Enumerate ingestable folders under the configured base path.
 async fn list_folders(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -175,6 +187,8 @@ async fn list_folders(
     }))
 }
 
+/// Create ingest jobs for the selected folders and kick off workers.
+/// Create ingest jobs for the selected folders and kick off workers.
 async fn create_jobs(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -222,6 +236,7 @@ async fn create_jobs(
     Ok(web::Json(JobsResponse { jobs: created }))
 }
 
+/// Return summaries for all managed jobs.
 async fn list_jobs(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -231,6 +246,7 @@ async fn list_jobs(
     Ok(web::Json(JobsResponse { jobs }))
 }
 
+/// Pause a running job when requested by the operator.
 async fn pause_job(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -249,6 +265,7 @@ async fn pause_job(
     }
 }
 
+/// Resume processing for a paused job.
 async fn resume_job(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -267,6 +284,7 @@ async fn resume_job(
     }
 }
 
+/// Cancel a job and abort its background task.
 async fn cancel_job(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -285,6 +303,7 @@ async fn cancel_job(
     }
 }
 
+/// Retry a job by moving the folder back to the input area.
 async fn retry_job(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -312,6 +331,7 @@ async fn retry_job(
     Ok(HttpResponse::Ok().json(json!({ "job": summary })))
 }
 
+/// Spawn the asynchronous worker responsible for processing a single job.
 fn spawn_job_worker(state: AppState, job: ManagedJob) {
     let job_id = job.state.lock().id;
     let jobs = state.jobs.clone();
@@ -393,6 +413,7 @@ fn spawn_job_worker(state: AppState, job: ManagedJob) {
     state.jobs.insert_handle(job_id, handle);
 }
 
+/// Execute the ingest pipeline for a single SharePoint folder.
 async fn run_job_inner(
     config: Arc<Config>,
     graph: Arc<MsGraphClient>,
@@ -489,6 +510,7 @@ async fn run_job_inner(
     Ok(())
 }
 
+/// Errors surfaced by the job control loop to signal cancellation or failure.
 #[derive(Debug)]
 enum JobRunError {
     Canceled,
@@ -501,6 +523,7 @@ impl From<anyhow::Error> for JobRunError {
     }
 }
 
+/// Wait for the job to be in the running state, responding to control signals.
 async fn wait_until_running(
     jobs: &JobRegistry,
     job_id: Uuid,
@@ -534,6 +557,7 @@ async fn wait_until_running(
     }
 }
 
+/// Update status and move folders to the failed location when errors occur.
 async fn handle_control_error(
     err: JobRunError,
     jobs: &JobRegistry,
@@ -569,6 +593,7 @@ async fn handle_control_error(
     }
 }
 
+/// Sort files for merging based on the requested order or override list.
 fn order_files(
     mut files: Vec<GraphFile>,
     order: JobOrder,
@@ -602,6 +627,7 @@ fn order_files(
     files
 }
 
+/// Replace problematic characters with underscores to form safe filenames.
 fn sanitize_filename(name: &str) -> String {
     let sanitized: String = name
         .chars()
@@ -613,6 +639,7 @@ fn sanitize_filename(name: &str) -> String {
     sanitized.trim_matches('_').to_string()
 }
 
+/// Produce a safe path component defaulting to `attachment` when empty.
 fn sanitize_path_component(name: &str) -> String {
     let sanitized = sanitize_filename(name);
     if sanitized.is_empty() {
@@ -622,6 +649,7 @@ fn sanitize_path_component(name: &str) -> String {
     }
 }
 
+/// Validate the bearer token when an admin token is configured.
 fn ensure_authorized(req: &HttpRequest, config: &Config) -> actix_web::Result<()> {
     if let Some(expected) = &config.admin_token {
         let auth = req

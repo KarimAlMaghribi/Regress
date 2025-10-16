@@ -1,3 +1,6 @@
+//! File validation and antivirus scanning helpers used during SharePoint ingest
+//! to reject unsafe or malformed uploads before processing begins.
+
 use anyhow::{bail, Context, Result};
 use std::{env, fs, io::Read, net::SocketAddr, path::Path};
 use tokio::{
@@ -5,6 +8,7 @@ use tokio::{
     net::TcpStream,
 };
 
+/// Configuration describing how the ClamAV scanner should be used.
 #[derive(Clone, Debug)]
 pub struct ScanConfig {
     pub enabled: bool,
@@ -13,6 +17,8 @@ pub struct ScanConfig {
 }
 
 impl ScanConfig {
+    /// Populate configuration flags from environment variables while retaining
+    /// sensible defaults for optional values.
     pub fn from_env() -> Self {
         let enabled = env::var("SCAN_ENABLED")
             .ok()
@@ -36,7 +42,7 @@ impl ScanConfig {
     }
 }
 
-/// Wirf Fehler, wenn Datei nicht valide PDF ist.
+/// Validate that the file has a PDF extension, magic header, and MIME type.
 pub fn assert_pdf(path: &Path) -> Result<()> {
     if path
         .extension()
@@ -64,7 +70,7 @@ pub fn assert_pdf(path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Wirf Fehler bei Fund. Gibt Ok(()) wenn sauber oder Scan deaktiviert.
+/// Run the ClamAV `INSTREAM` command and fail when malware is detected.
 pub async fn scan_with_clamd(path: &Path, cfg: &ScanConfig) -> Result<()> {
     if !cfg.enabled {
         return Ok(());

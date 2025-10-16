@@ -1,7 +1,11 @@
+//! Reads environment variables required to communicate with SharePoint and the
+//! upload API, providing ergonomic helpers for commonly referenced paths.
+
 use std::{env, time::Duration};
 
 use anyhow::{Context, Result};
 
+/// Runtime configuration for the SharePoint ingest worker.
 #[derive(Debug, Clone)]
 pub struct Config {
     pub tenant_id: String,
@@ -24,6 +28,8 @@ pub struct Config {
 }
 
 impl Config {
+    /// Construct a [`Config`] by reading relevant environment variables while
+    /// supplying defaults compatible with local development.
     pub fn from_env() -> Result<Self> {
         let tenant_id = env::var("TENANT_ID").context("TENANT_ID missing")?;
         let client_id = env::var("CLIENT_ID").context("CLIENT_ID missing")?;
@@ -91,14 +97,17 @@ impl Config {
         })
     }
 
+    /// Resolve the folder path containing pending documents.
     pub fn drive_input_path(&self) -> String {
         self.input_folder.clone()
     }
 
+    /// Resolve the folder path for successfully processed documents.
     pub fn drive_processed_path(&self) -> String {
         self.processed_folder.clone()
     }
 
+    /// Resolve the folder path for documents that failed to ingest.
     pub fn drive_failed_path(&self) -> String {
         self.failed_folder.clone()
     }
