@@ -1,3 +1,5 @@
+//! Configuration loading for the SharePoint ingest service.
+
 use std::{env, time::Duration};
 
 use anyhow::{Context, Result};
@@ -24,6 +26,8 @@ pub struct Config {
 }
 
 impl Config {
+    /// Loads configuration settings from environment variables, applying
+    /// sensible defaults where appropriate.
     pub fn from_env() -> Result<Self> {
         let tenant_id = env::var("TENANT_ID").context("TENANT_ID missing")?;
         let client_id = env::var("CLIENT_ID").context("CLIENT_ID missing")?;
@@ -91,14 +95,17 @@ impl Config {
         })
     }
 
+    /// Returns the SharePoint folder path for new documents.
     pub fn drive_input_path(&self) -> String {
         self.input_folder.clone()
     }
 
+    /// Returns the SharePoint folder path for processed documents.
     pub fn drive_processed_path(&self) -> String {
         self.processed_folder.clone()
     }
 
+    /// Returns the SharePoint folder path for failed documents.
     pub fn drive_failed_path(&self) -> String {
         self.failed_folder.clone()
     }

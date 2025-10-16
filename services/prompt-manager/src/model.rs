@@ -1,3 +1,5 @@
+//! SeaORM entity definitions for prompts, groups and pipelines.
+
 use sea_orm::entity::prelude::*;
 
 /* ---------- PROMPTS ---------- */
@@ -12,7 +14,7 @@ pub mod prompt {
         pub id: i32,
         pub text: String,
         pub prompt_type: String,
-        // DB: NUMERIC(6,3) -> SeaORM: Decimal; optional (nur Scoring/Decision haben Gewicht)
+        /// Optional weight used by scoring and decision prompts.
         pub weight: Option<Decimal>,
         pub json_key: Option<String>,
         pub favorite: bool,
@@ -71,9 +73,11 @@ pub mod pipeline {
     #[sea_orm(table_name = "pipelines")]
     pub struct Model {
         #[sea_orm(primary_key)]
-        pub id: Uuid,          // UUID – passt zu pipeline-api und DB
+        /// UUID matching pipeline identifiers in the API and database.
+        pub id: Uuid,
         pub name: String,
-        pub config_json: Json, // statt "data"
+        /// Stored pipeline configuration as JSON blob.
+        pub config_json: Json,
     }
 
     #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

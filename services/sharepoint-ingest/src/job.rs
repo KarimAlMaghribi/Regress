@@ -1,3 +1,5 @@
+//! Background job definitions that coordinate SharePoint downloads and uploads.
+
 use std::{collections::HashMap, sync::Arc};
 
 use chrono::{DateTime, Utc};
@@ -55,21 +57,25 @@ pub struct JobState {
 }
 
 impl JobState {
+    /// Updates the job status and refreshes the modification timestamp.
     pub fn set_status(&mut self, status: JobStatus) {
         self.status = status;
         self.updated_at = Utc::now();
     }
 
+    /// Stores progress information as a value between 0 and 1.
     pub fn set_progress(&mut self, progress: f32) {
         self.progress = progress.clamp(0.0, 1.0);
         self.updated_at = Utc::now();
     }
 
+    /// Sets a human readable status message.
     pub fn set_message<T: Into<String>>(&mut self, message: T) {
         self.message = Some(message.into());
         self.updated_at = Utc::now();
     }
 
+    /// Records the outcome produced by the upload adapter.
     pub fn set_output(&mut self, output: UploadResult) {
         self.output = Some(output);
         self.updated_at = Utc::now();
@@ -110,6 +116,7 @@ pub struct JobSummary {
 }
 
 impl JobRegistry {
+    /// Constructs an empty registry that can track SharePoint ingestion jobs.
     pub fn new() -> Self {
         Self {
             inner: Arc::new(JobRegistryInner {
@@ -119,6 +126,7 @@ impl JobRegistry {
         }
     }
 
+    /// Creates and registers a new managed job instance.
     pub fn create_job(
         &self,
         folder_id: String,
@@ -150,10 +158,12 @@ impl JobRegistry {
         managed
     }
 
+    /// Associates a spawned worker handle with the job identifier.
     pub fn insert_handle(&self, job_id: Uuid, handle: JoinHandle<()>) {
         self.inner.handles.lock().insert(job_id, handle);
     }
 
+    /// Returns a snapshot summary for every tracked job.
     pub fn list(&self) -> Vec<JobSummary> {
         self.inner
             .jobs
@@ -178,10 +188,12 @@ impl JobRegistry {
             .collect()
     }
 
+    /// Retrieves a managed job by identifier if it exists.
     pub fn get(&self, id: &Uuid) -> Option<ManagedJob> {
         self.inner.jobs.read().get(id).cloned()
     }
 
+    /// Applies an in-place update to the job state using the provided closure.
     pub fn update<F: FnOnce(&mut JobState)>(&self, id: &Uuid, updater: F) {
         if let Some(job) = self.inner.jobs.read().get(id) {
             let mut state = job.state.lock();
@@ -189,6 +201,7 @@ impl JobRegistry {
         }
     }
 
+    /// Sends a cancel command to the job, returning whether it existed.
     pub fn cancel(&self, id: &Uuid) -> bool {
         if let Some(job) = self.get(id) {
             let _ = job.control_tx.send(JobCommand::Cancel);
@@ -198,6 +211,7 @@ impl JobRegistry {
         }
     }
 
+    /// Sends a pause command to the job, returning whether it existed.
     pub fn pause(&self, id: &Uuid) -> bool {
         if let Some(job) = self.get(id) {
             let _ = job.control_tx.send(JobCommand::Pause);
@@ -207,6 +221,7 @@ impl JobRegistry {
         }
     }
 
+    /// Sends a resume command to the job, returning whether it existed.
     pub fn resume(&self, id: &Uuid) -> bool {
         if let Some(job) = self.get(id) {
             let _ = job.control_tx.send(JobCommand::Run);
@@ -217,6 +232,7 @@ impl JobRegistry {
     }
 }
 
+/// Produces a serialisable summary for the given managed job.
 pub fn job_summary(job: &ManagedJob) -> JobSummary {
     let state = job.state.lock();
     JobSummary {

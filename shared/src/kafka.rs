@@ -1,3 +1,5 @@
+//! Kafka administration utilities used for bootstrapping topics.
+
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::error::{KafkaError, RDKafkaErrorCode};
 use rdkafka::ClientConfig;

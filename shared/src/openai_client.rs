@@ -1,4 +1,4 @@
-// shared/src/openai_client.rs
+//! OpenAI client utilities with shared prompt templates and response handling.
 
 use crate::dto::{ScoringResult, TernaryLabel, TextPosition};
 use crate::openai_settings;
@@ -28,6 +28,7 @@ static CHAT_ENDPOINT: Lazy<RwLock<Option<String>>> = Lazy::new(|| {
     ))
 });
 
+/// Overrides the default model and endpoint used for OpenAI requests.
 pub fn configure_openai_defaults(model: impl Into<String>, endpoint: impl Into<String>) {
     let model = model.into();
     let trimmed_model = model.trim();
@@ -152,20 +153,16 @@ Keine englischen Sätze oder Erklärungen. Halte dich präzise an das geforderte
 const EXTRACTION_GUARD_SUFFIX: &str = r#"
 IMPORTANT EXTRACTION CONTRACT (STRICT):
 
-Return STRICT JSON ONLY:
-{
-  "value": string|null,   // exact substring copied from DOCUMENT (after trivial whitespace fixes) or null if not present/unsure
-  "source": {
-    "page":  integer|null,  // 1-based page where the substring occurs, or null
-    "bbox":  [number,number,number,number], // use [0,0,0,0] if unknown
-    "quote": string|null    // <=120 chars, exact snippet from DOCUMENT around the value, or null
-  }
-}
+Return STRICT JSON ONLY with:
+- "value": string|null — exact substring from DOCUMENT after light whitespace normalisation, or null when unavailable.
+- "source.page": integer|null — 1-based page index or null if unknown.
+- "source.bbox": [number,number,number,number] — bounding box or [0,0,0,0] if unknown.
+- "source.quote": string|null — verbatim snippet (≤120 chars) from DOCUMENT, or null when absent.
 
 Rules:
 - Use ONLY content that appears in DOCUMENT. Do NOT invent text, pages or coordinates.
-- NO placeholders or generic labels (e.g. "Schadennummer", "Max Mustermann", "nicht angegeben").
-- If you are unsure or the answer is not present in DOCUMENT -> {"value":null,"source":{"page":null,"bbox":[0,0,0,0],"quote":null}}.
+- Avoid placeholders or generic labels (e.g. "Schadennummer", "Max Mustermann", "nicht angegeben").
+- When unsure or the answer is missing, return {"value":null,"source":{"page":null,"bbox":[0,0,0,0],"quote":null}}.
 - Output JSON only. No prose, no markdown.
 "#;
 
@@ -176,14 +173,14 @@ Do NOT invent content. Always return STRICT JSON that matches this single-object
 
 {
   "vote": "yes" | "no" | "unsure",
-  "strength": number,      // 0..1, how strongly the evidence supports your vote
-  "confidence": number,    // 0..1, how certain you are about your classification
+  "strength": number,
+  "confidence": number,
   "source": {
-    "page":  integer,      // 1-based page index with the most relevant quote
-    "bbox":  [number,number,number,number], // use [0,0,0,0] if unknown
-    "quote": string        // verbatim snippet from DOCUMENT supporting your vote
+    "page":  integer,
+    "bbox":  [number,number,number,number],
+    "quote": string
   },
-  "explanation": string    // short reason (1-2 sentences)
+  "explanation": string
 }
 
 Hard rules:
@@ -198,14 +195,14 @@ You route a decision based ONLY on the provided document. Do NOT invent content.
 
 Return ONE JSON object:
 {
-  "answer":  true|false|null,  // null if undecided from DOCUMENT
-  "route":   string|null,      // optional; if you provide it, it must be "true" or "false" consistent with "answer"
+  "answer":  true|false|null,
+  "route":   string|null,
   "source": {
     "page":  integer|null,
     "bbox":  [number,number,number,number],
     "quote": string|null
   },
-  "explanation": string        // short reason (1-2 sentences)
+  "explanation": string
 }
 
 Rules:
@@ -499,8 +496,11 @@ fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMes
 
 /* ======================= OpenAI Call ======================= */
 
-/// Send chat messages to OpenAI and return the assistant's answer (as raw JSON string).
-/// Erzwingt response_format=json_object und berücksichtigt function/tool arguments.
+/// Sends chat messages to OpenAI and returns the assistant's answer as a raw
+/// JSON string.
+///
+/// The helper enforces `response_format=json_object` when no tool call is
+/// requested and transparently handles function/tool arguments.
 pub async fn call_openai_chat(
     client: &Client,
     model: &str,
@@ -625,6 +625,8 @@ pub async fn call_openai_chat(
 /* ======================= Fehler & DTOs ======================= */
 
 #[derive(thiserror::Error, Debug)]
+/// Error type covering failures that can happen while communicating with
+/// OpenAI or parsing its responses.
 pub enum PromptError {
     #[error("extraction failed")]
     ExtractionFailed,
@@ -641,6 +643,7 @@ pub enum PromptError {
 }
 
 #[derive(Debug, Clone)]
+/// Simplified representation of an OpenAI response used by the services.
 pub struct OpenAiAnswer {
     pub boolean: Option<bool>,
     pub route: Option<String>,
@@ -651,7 +654,8 @@ pub struct OpenAiAnswer {
 
 /* ======================= Evidence-Fix (kanonische PDF-Seiten) ======================= */
 
-/// Überschreibt `source.page` in `OpenAiAnswer` anhand Quote/Value mit korrekter 1-basierter PDF-Seite.
+/// Updates the `source.page` field using heuristics that map quotes back to
+/// PDF pages.
 pub fn enrich_with_pdf_evidence_answer(answer: &mut OpenAiAnswer, page_map: &HashMap<u32, String>) {
     let quote = answer
         .source
@@ -673,7 +677,7 @@ pub fn enrich_with_pdf_evidence_answer(answer: &mut OpenAiAnswer, page_map: &Has
     }
 }
 
-/// Überschreibt `source.page` in einer Liste von JSON-Extraction-Objekten.
+/// Updates `source.page` inside the provided JSON extraction objects.
 pub fn enrich_with_pdf_evidence_list(items: &mut [JsonValue], page_map: &HashMap<u32, String>) {
     for it in items.iter_mut() {
         let quote = it
@@ -691,7 +695,7 @@ pub fn enrich_with_pdf_evidence_list(items: &mut [JsonValue], page_map: &HashMap
     }
 }
 
-/// Öffentliche Hilfsfunktion für andere Crates: Quote/Value → (Seite, Score)
+/// Convenience wrapper that exposes page resolution to other crates.
 pub fn resolve_page_for_quote_value(
     quote: &str,
     value: &str,
@@ -702,6 +706,7 @@ pub fn resolve_page_for_quote_value(
 
 /* ======================= Extraction (STRICT, mit Guard) ======================= */
 
+/// Executes an extraction prompt and returns the structured answer.
 pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let prompt = fetch_prompt(prompt_id).await?;
@@ -755,6 +760,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
 
 /* ======================= Scoring (Tri-State mit Function-Call) ======================= */
 
+/// Executes a scoring prompt and normalises the tri-state result.
 pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let question = fetch_prompt(prompt_id).await?;
@@ -865,6 +871,7 @@ pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, Prom
 
 /* ======================= Decision (STRICT, mit Guard) ======================= */
 
+/// Executes a decision prompt and extracts the resulting boolean answer.
 pub async fn decide(
     prompt_id: i32,
     document: &str,
@@ -934,10 +941,12 @@ pub async fn decide(
 
 /* ======================= Sonstiges ======================= */
 
+/// Lightweight helper returning a mock response. Used for smoke tests.
 pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> {
     Ok(serde_json::json!(null))
 }
 
+/// Downloads the prompt content from the prompt manager service.
 async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
     let client = Client::builder().timeout(Duration::from_secs(120)).finish();
     let base =
@@ -970,6 +979,7 @@ async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
     Err(PromptError::Parse(DeError::custom("invalid JSON")))
 }
 
+/// Public wrapper that exposes prompt fetching to other crates.
 pub async fn fetch_prompt_text(id: i32) -> Result<String, PromptError> {
     fetch_prompt(id).await
 }

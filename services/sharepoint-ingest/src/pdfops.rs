@@ -1,3 +1,5 @@
+//! Helper utilities for combining and storing SharePoint sourced PDFs.
+
 use std::path::{Path, PathBuf};
 
 use std::collections::BTreeMap;
@@ -5,6 +7,7 @@ use std::collections::BTreeMap;
 use anyhow::{anyhow, Context, Result};
 use lopdf::{Document, Object, ObjectId};
 
+/// Merges the provided PDF files into a single output document.
 pub fn merge_pdfs(inputs: &[PathBuf], output: &Path) -> Result<()> {
     if inputs.is_empty() {
         anyhow::bail!("no pdf inputs provided");

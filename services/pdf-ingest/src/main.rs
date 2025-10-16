@@ -1,3 +1,5 @@
+//! Handles PDF uploads, merges documents and publishes Kafka events.
+
 use actix_cors::Cors;
 use actix_multipart::Multipart;
 use actix_web::http::header;
@@ -22,11 +24,13 @@ use lopdf::{Bookmark, Document, Object, ObjectId};
 use serde::{Serialize, Deserialize};
 use zip::ZipArchive;
 
+/// Liveness endpoint used for container health checks.
 async fn health() -> impl Responder {
     "OK"
 }
 
 #[derive(Serialize)]
+/// Minimal representation of an upload stored in the database.
 struct UploadEntry {
     id: i32,
     pdf_id: Option<i32>,
@@ -34,11 +38,13 @@ struct UploadEntry {
 }
 
 #[derive(Deserialize)]
+/// Query parameters used for listing uploads.
 struct UploadQuery {
     tenant_id: Option<Uuid>,
     pipeline_id: Option<Uuid>,
 }
 
+/// Ensures SSL is disabled in local connection strings.
 fn ensure_sslmode_disable(url: &str) -> String {
     if url.to_ascii_lowercase().contains("sslmode=") {
         return url.to_string();
@@ -51,6 +57,7 @@ fn ensure_sslmode_disable(url: &str) -> String {
     }
 }
 
+/// Combines multiple PDF documents into a single PDF.
 fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
     let mut max_id = 1;
     let mut pagenum = 1;
@@ -180,6 +187,7 @@ fn merge_documents(documents: Vec<Document>) -> std::io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Handles multipart uploads, stores the merged PDF and publishes events.
 async fn upload(
     req: HttpRequest,
     q: web::Query<UploadQuery>,
@@ -333,6 +341,7 @@ async fn upload(
     info!(step = "uploads.updated", upload_id, pdf_id = id, status = "ocr", pipeline_id = %pid, "upload updated");
 
     // Quellen speichern (Dateinamen)
+    /// Normalises filenames extracted from ZIP archives or multipart payloads.
     fn normalize_source_name(raw: &str) -> Option<String> {
         let trimmed = raw.trim();
         if trimmed.is_empty() {
@@ -412,6 +421,7 @@ async fn upload(
     Ok(HttpResponse::Ok().json(UploadResponse { id: id.to_string() }))
 }
 
+/// Returns recent uploads for the administrative UI.
 async fn list_uploads(db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     let client = db
         .get()
@@ -437,6 +447,7 @@ async fn list_uploads(db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     Ok(HttpResponse::Ok().json(items))
 }
 
+/// Streams a previously stored merged PDF back to the caller.
 async fn get_pdf(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     let client = db
         .get()
@@ -458,6 +469,7 @@ async fn get_pdf(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpResponse
     }
 }
 
+/// Returns the OCR JSON stored for a merged PDF.
 async fn get_extract(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     let client = db
         .get()
@@ -485,6 +497,7 @@ async fn get_extract(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpResp
     }
 }
 
+/// Deletes a merged PDF and its metadata from the database.
 async fn delete_pdf(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpResponse, Error> {
     let id = id.into_inner();
     let client = db
@@ -513,6 +526,7 @@ async fn delete_pdf(id: web::Path<i32>, db: web::Data<Pool>) -> Result<HttpRespo
 }
 
 #[actix_web::main]
+/// Boots the PDF ingest service and configures Kafka as well as PostgreSQL.
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt::init();
     info!("starting pdf-ingest service");

@@ -1,3 +1,5 @@
+//! Shared utilities and DTOs reused across backend services.
+
 pub mod config;
 pub mod dto;
 pub mod error;

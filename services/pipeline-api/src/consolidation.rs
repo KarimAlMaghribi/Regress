@@ -1,3 +1,5 @@
+//! Aggregates prompt outputs into consolidated per-prompt results used by the UI.
+
 use serde::Serialize;
 use serde_json::Value as JsonValue;
 use shared::dto::{PromptResult, ScoringResult, TextPosition};
@@ -79,6 +81,7 @@ pub struct DecisionOutcome {
 }
 
 /* -------------------- Extraction → 1 Wert -------------------- */
+/// Aggregates individual prompt results into a single canonical field value.
 pub fn consolidate_field(
     results: &[PromptResult],
     prompt_id: i32,
@@ -315,6 +318,8 @@ fn select_extraction_winner<'a>(
 }
 
 /* -------------------- Scoring → 1 Ja/Nein -------------------- */
+/// Consolidates scoring prompts by applying weighted heuristics to the
+/// individual extractor outputs.
 pub fn consolidate_scoring_weighted(
     results: &[ScoringResult],
     prompt_id: i32,
@@ -411,6 +416,8 @@ pub fn consolidate_scoring_weighted(
 }
 
 /* -------------------- Decision → 1 Route -------------------- */
+/// Consolidates decision prompts by selecting the most confident answer and
+/// associated context.
 pub fn consolidate_decision_generic(
     decisions: &[PromptResult],
     prompt_id: i32,
