@@ -12,6 +12,7 @@ import {
   Stack,
   Divider,
   Typography,
+  Paper,
 } from '@mui/material';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
@@ -135,7 +136,7 @@ export default function Prompts() {
   };
 
   return (
-      <Stack spacing={3}>
+      <Stack spacing={4}>
         <PageHeader
             title="Prompts"
             subtitle="Erstellen & verwalten von Prompt-Vorlagen"
@@ -156,13 +157,37 @@ export default function Prompts() {
             }
         />
 
+        <Paper
+            variant="outlined"
+            sx={{
+              p: { xs: 3, md: 4 },
+              borderRadius: 'var(--radius-card)',
+              boxShadow: 'var(--shadow-z1)',
+              background:
+                  theme.palette.mode === 'dark'
+                      ? alpha(theme.palette.primary.main, 0.12)
+                      : 'linear-gradient(130deg, rgba(0,110,199,0.08), rgba(247,250,252,0.92))',
+            }}
+        >
+          <Stack spacing={2}>
+            <Typography variant="h6" sx={{ fontWeight: 600 }}>
+              Governance & Bibliothek
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Strukturierte Verwaltung aller Prompt-Artefakte – inklusive Favoriten, Typ-spezifischer Einstellungen
+              und Direktzugriff auf Optimierungstools.
+            </Typography>
+          </Stack>
+        </Paper>
+
         {/* Neu-Formular */}
         <Card
             variant="outlined"
             sx={{
-              borderRadius: 3,
+              borderRadius: 'var(--radius-card)',
               borderColor: accent.border,
-              background: `linear-gradient(135deg, ${alpha(theme.palette.background.paper, 0.96)}, ${alpha(theme.palette.background.paper, 0.92)})`,
+              boxShadow: 'var(--shadow-z1)',
+              background: `linear-gradient(135deg, ${alpha(theme.palette.background.paper, 0.97)}, ${alpha(theme.palette.background.paper, 0.9)})`,
             }}
         >
           <CardContent sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
@@ -255,7 +280,7 @@ export default function Prompts() {
         </Card>
 
         {/* Liste */}
-        <Stack spacing={1.5}>
+        <Stack spacing={2}>
           {prompts.map((p) => {
             const meta = typeMeta(p.type);
             const canSave = p.type !== 'ExtractionPrompt' || (p.json_key && p.json_key.trim().length > 0);
@@ -264,8 +289,9 @@ export default function Prompts() {
                     key={p.id}
                     variant="outlined"
                     sx={{
-                      borderRadius: 3,
+                      borderRadius: 'var(--radius-card)',
                       borderColor: accent.border,
+                      boxShadow: 'var(--shadow-z1)',
                       backgroundColor: alpha(theme.palette.background.paper, 0.98),
                     }}
                 >
@@ -393,6 +419,24 @@ export default function Prompts() {
                 </Card>
             );
           })}
+          {!prompts.length && (
+              <Paper
+                  variant="outlined"
+                  sx={{
+                    borderRadius: 'var(--radius-card)',
+                    p: { xs: 3, md: 4 },
+                    textAlign: 'center',
+                    color: 'text.secondary',
+                  }}
+              >
+                <Typography variant="subtitle1" sx={{ fontWeight: 600, mb: 1 }}>
+                  Noch keine Prompts vorhanden
+                </Typography>
+                <Typography variant="body2">
+                  Lege über das Formular oben eine neue Vorlage an und starte mit der kuratierten Bibliothek.
+                </Typography>
+              </Paper>
+          )}
         </Stack>
       </Stack>
   );
