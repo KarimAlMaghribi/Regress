@@ -15,7 +15,7 @@ import DomainIcon from '@mui/icons-material/Domain'; // neu: für "Tenants"
 import { motion } from 'framer-motion';
 import { useTheme } from '@mui/material/styles';
 import logoWhite from '../imgs/logo_white.png';
-import logoBlack from '../imgs/logo_black.svg';
+import logoBlack from '../imgs/logo_black.png';
 
 export interface SidebarProps {
   open: boolean;
