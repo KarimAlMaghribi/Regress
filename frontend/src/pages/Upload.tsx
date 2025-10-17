@@ -181,7 +181,7 @@ export default function Upload() {
       width: 60,
       sortable: false,
       renderCell: params => (
-          <IconButton size="small" onClick={() => downloadExtractedText(params.row.id)}
+          <IconButton size="small" onClick={() => useUploadStore.downloadExtractedText(params.row.id)}
                       disabled={!params.row.ocr}>
             <DownloadIcon fontSize="small"/>
           </IconButton>

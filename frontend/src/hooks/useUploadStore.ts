@@ -2,9 +2,6 @@ import create from 'zustand';
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
 const INGEST = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-const UPLOAD = import.meta.env.VITE_UPLOAD_API_URL || INGEST;
-
-export const UPLOAD_API = UPLOAD;
 
 export type AnyRun = Record<string, any>;
 
@@ -209,7 +206,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   },
 
   async downloadExtractedText(fileId) {
-    const res = await fetch(`${UPLOAD_API.replace(/\/$/, '')}/uploads/${fileId}/extract`);
+    const res = await fetch(`${INGEST.replace(/\/$/, '')}/uploads/${fileId}/extract`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const blob = new Blob([text], { type: 'text/plain' });
