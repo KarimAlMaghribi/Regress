@@ -278,17 +278,23 @@ impl MsGraphClient {
                         )
                     };
                     let name = segment.to_string();
-                    self.send_with_retry(
-                        self.authorized_request(Method::POST, create_url)
-                            .await?
-                            .json(&serde_json::json!({
-                                "name": name,
-                                "folder": serde_json::json!({}),
-                                "@microsoft.graph.conflictBehavior": "retain"
-                            })),
-                    )
-                    .await?
-                    .error_for_status()?;
+                    let resp = self
+                        .send_with_retry(
+                            self.authorized_request(Method::POST, create_url)
+                                .await?
+                                .json(&serde_json::json!({
+                                    "name": name,
+                                    "folder": serde_json::json!({}),
+                                    "@microsoft.graph.conflictBehavior": "fail"
+                                })),
+                        )
+                        .await?;
+
+                    if resp.status() == StatusCode::CONFLICT {
+                        continue;
+                    }
+
+                    resp.error_for_status()?;
                 }
             }
         }
