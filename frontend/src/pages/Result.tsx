@@ -4,7 +4,7 @@ import { useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import RunDetails from '../components/RunDetails';
 import { PipelineRunResult } from '../types/pipeline';
-import { UPLOAD_API } from '../hooks/useUploadStore';
+import {UPLOAD_API} from '../utils/api';
 
 type ResultData = PipelineRunResult;
 export default function Result() {

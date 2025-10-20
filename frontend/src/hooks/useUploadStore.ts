@@ -1,10 +1,6 @@
 import create from 'zustand';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
-const INGEST = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
-const UPLOAD = import.meta.env.VITE_UPLOAD_API_URL || INGEST;
-
-export const UPLOAD_API = UPLOAD;
+import {API_BASE, UPLOAD_API} from '../utils/api';
 
 export type AnyRun = Record<string, any>;
 
@@ -177,7 +173,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       entries: state.entries.map(entry => (entry.id === fileId ? { ...entry, loading: true } : entry)),
     }));
 
-    const response = await fetch(`${API.replace(/\/$/, '')}/pipelines/${pipelineId}/run`, {
+    const response = await fetch(`${API_BASE.replace(/\/$/, '')}/pipelines/${pipelineId}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_id: fileId }),
