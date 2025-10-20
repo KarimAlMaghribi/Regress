@@ -1,6 +1,6 @@
 import create from 'zustand';
 
-import {API_BASE, INGEST_API} from '../utils/api';
+import {API_BASE, INGEST_API, PDF_OPEN_BASE} from '../utils/api';
 
 export type AnyRun = Record<string, any>;
 
@@ -66,6 +66,8 @@ export interface UploadEntry {
   pdfUrl: string;
   ocr: boolean;
   layout: boolean;
+  displayName: string;
+  sourceNames: string[];
   selectedPipelineId?: string;
   loading?: boolean;
   result?: AnyRun;
@@ -91,6 +93,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
   async load() {
     const ingest = INGEST_API;
+    const pdfBase = PDF_OPEN_BASE;
     try {
       const [uploadData, texts] = await Promise.all([
         fetch(`${ingest.replace(/\/$/, '')}/uploads`).then(r => r.json()),
@@ -99,17 +102,23 @@ export const useUploadStore = create<UploadState>((set, get) => ({
 
       const prevEntries = get().entries;
       const ocrIds = (texts as { id: number }[]).map(t => t.id);
-      const nextEntries: UploadEntry[] = (uploadData as any[]).map((item: any) => ({
-        id: item.id,
-        pdfId: item.pdf_id ?? null,
-        status: item.status,
-        pdfUrl: item.pdf_id ? `${ingest.replace(/\/$/, '')}/pdf/${item.pdf_id}` : '',
-        ocr: item.pdf_id ? ocrIds.includes(item.pdf_id) : false,
-        layout: item.status === 'ready',
-        selectedPipelineId: '',
-        result: undefined,
-        runId: undefined,
-      }));
+      const nextEntries: UploadEntry[] = (uploadData as any[]).map((item: any) => {
+        const names: string[] = Array.isArray(item.names) ? item.names : [];
+        const fallbackName = item.pdf_id ? `PDF #${item.pdf_id}` : `Upload ${item.id}`;
+        return {
+          id: item.id,
+          pdfId: item.pdf_id ?? null,
+          status: item.status,
+          pdfUrl: item.pdf_id ? `${pdfBase.replace(/\/$/, '')}/pdf/${item.pdf_id}` : '',
+          ocr: item.pdf_id ? ocrIds.includes(item.pdf_id) : false,
+          layout: item.status === 'ready',
+          displayName: names[0] ?? fallbackName,
+          sourceNames: names,
+          selectedPipelineId: '',
+          result: undefined,
+          runId: undefined,
+        };
+      });
 
       const byId = new Map<number, UploadEntry>(prevEntries.map(entry => [entry.id, entry]));
       const merged = nextEntries.map(entry => {
@@ -120,6 +129,8 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         return {
           ...oldEntry,
           ...entry,
+          displayName: entry.displayName || oldEntry.displayName,
+          sourceNames: entry.sourceNames.length ? entry.sourceNames : oldEntry.sourceNames ?? [],
           selectedPipelineId: oldEntry.selectedPipelineId ?? entry.selectedPipelineId,
           loading: keepLoading || false,
           result: mergeRunPreferRicher(oldEntry.result, (entry as any).result),

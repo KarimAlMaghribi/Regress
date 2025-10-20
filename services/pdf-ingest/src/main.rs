@@ -35,6 +35,8 @@ struct UploadEntry {
     id: i32,
     pdf_id: Option<i32>,
     status: String,
+    #[serde(default)]
+    names: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -439,7 +441,10 @@ async fn list_uploads(db: web::Data<Pool>) -> Result<HttpResponse, Error> {
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let rows = client
         .query(
-            "SELECT id, pdf_id, status FROM uploads ORDER BY id DESC",
+            "SELECT u.id, u.pdf_id, u.status, ps.names \
+             FROM uploads u \
+             LEFT JOIN pdf_sources ps ON ps.pdf_id = u.pdf_id \
+             ORDER BY u.id DESC",
             &[],
         )
         .await
@@ -451,6 +456,10 @@ async fn list_uploads(db: web::Data<Pool>) -> Result<HttpResponse, Error> {
             id: r.get(0),
             pdf_id: r.get(1),
             status: r.get(2),
+            names: r
+                .get::<_, Option<String>>(3)
+                .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+                .unwrap_or_default(),
         })
         .collect();
 

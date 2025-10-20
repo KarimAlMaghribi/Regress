@@ -1,5 +1,5 @@
 const DEFAULT_PLACEHOLDER_HOSTS = new Set(['helium.adesso.claims']);
-const DEFAULT_INGEST_PORT = '8080';
+const DEFAULT_INGEST_PORT = '8081';
 
 const getWindowLocation = () => {
   if (typeof window === 'undefined') return undefined;
