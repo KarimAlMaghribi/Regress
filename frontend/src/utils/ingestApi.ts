@@ -8,6 +8,7 @@ import {
 } from '../types/ingest';
 
 type RuntimeEnv = {
+  INGEST_URL?: string;
   INGEST_API_URL?: string;
   INGEST_POLL_MS?: string;
 };
@@ -17,10 +18,21 @@ const runtimeEnv: RuntimeEnv =
         ((window as unknown as { __ENV__?: RuntimeEnv }).__ENV__ ?? {})) ||
     {};
 
+const pickFirst = <T extends string>(...values: Array<T | undefined | null | false>): T | undefined => {
+  for (const value of values) {
+    if (value) return value;
+  }
+  return undefined;
+};
+
 const BASE_URL =
-    (import.meta.env.VITE_INGEST_API_BASE as string | undefined) ||
-    runtimeEnv.INGEST_API_URL ||
-    '/ingest';
+    pickFirst(
+        runtimeEnv.INGEST_URL,
+        runtimeEnv.INGEST_API_URL,
+        import.meta.env.VITE_INGEST_API_BASE as string | undefined,
+        import.meta.env.VITE_INGEST_URL as string | undefined,
+        '/ingest',
+    ) || 'http://localhost:8081';
 
 const client = axios.create({
   baseURL: BASE_URL,
