@@ -48,7 +48,7 @@ import {
   ScoringWeightsCard
 } from "../components/ScoringWeightsCard";
 import PdfViewer from "../components/PdfViewer";
-import {UPLOAD_API} from "../hooks/useUploadStore";
+import {UPLOAD_API} from "../utils/api";
 
 /* ===== Helfer ===== */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));

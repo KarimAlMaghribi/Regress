@@ -1,7 +1,6 @@
 import create from 'zustand';
 
-const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
-const INGEST = import.meta.env.VITE_INGEST_URL || 'http://localhost:8081';
+import {API_BASE, UPLOAD_API} from '../utils/api';
 
 export type AnyRun = Record<string, any>;
 
@@ -91,7 +90,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   autoRefreshId: undefined,
 
   async load() {
-    const ingest = INGEST;
+    const ingest = UPLOAD_API;
     try {
       const [uploadData, texts] = await Promise.all([
         fetch(`${ingest.replace(/\/$/, '')}/uploads`).then(r => r.json()),
@@ -174,7 +173,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       entries: state.entries.map(entry => (entry.id === fileId ? { ...entry, loading: true } : entry)),
     }));
 
-    const response = await fetch(`${API.replace(/\/$/, '')}/pipelines/${pipelineId}/run`, {
+    const response = await fetch(`${API_BASE.replace(/\/$/, '')}/pipelines/${pipelineId}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ file_id: fileId }),
@@ -206,7 +205,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   },
 
   async downloadExtractedText(fileId) {
-    const res = await fetch(`${INGEST.replace(/\/$/, '')}/uploads/${fileId}/extract`);
+    const res = await fetch(`${UPLOAD_API.replace(/\/$/, '')}/uploads/${fileId}/extract`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const blob = new Blob([text], { type: 'text/plain' });
