@@ -33,17 +33,15 @@ pub fn configure_openai_defaults(model: impl Into<String>, endpoint: impl Into<S
     let model = model.into();
     let trimmed_model = model.trim();
     if !trimmed_model.is_empty() {
-        *DEFAULT_MODEL
-            .write()
-            .expect("DEFAULT_MODEL lock poisoned") = Some(trimmed_model.to_string());
+        *DEFAULT_MODEL.write().expect("DEFAULT_MODEL lock poisoned") =
+            Some(trimmed_model.to_string());
     }
 
     let endpoint = endpoint.into();
     let trimmed_endpoint = endpoint.trim().trim_end_matches('/');
     if !trimmed_endpoint.is_empty() {
-        *CHAT_ENDPOINT
-            .write()
-            .expect("CHAT_ENDPOINT lock poisoned") = Some(trimmed_endpoint.to_string());
+        *CHAT_ENDPOINT.write().expect("CHAT_ENDPOINT lock poisoned") =
+            Some(trimmed_endpoint.to_string());
     }
 }
 
@@ -95,9 +93,7 @@ fn resolve_chat_endpoint() -> Option<String> {
         }
     }
 
-    Some(
-        openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string(),
-    )
+    Some(openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -125,10 +121,9 @@ fn requires_api_key_header(url: &str) -> bool {
 }
 
 fn resolve_endpoint_details() -> (String, AuthStyle, EndpointKind) {
-    let endpoint = resolve_chat_endpoint()
-        .unwrap_or_else(|| {
-            openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string()
-        });
+    let endpoint = resolve_chat_endpoint().unwrap_or_else(|| {
+        openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string()
+    });
 
     let kind = classify_endpoint(&endpoint);
     let auth = if requires_api_key_header(&endpoint) {
@@ -236,12 +231,14 @@ fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
 /* --- JSON-Parser --- */
 
 fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
+    let cleaned = strip_reasoning_tags(s);
+
     // 1) direkt
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(s) {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cleaned) {
         return Ok(v);
     }
     // 2) ```json ... ``` oder ``` ... ```
-    let mut t = s.trim();
+    let mut t = cleaned.trim();
     if t.starts_with("```json") {
         t = &t[7..];
     }
@@ -260,6 +257,35 @@ fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
         return Ok(serde_json::from_str::<serde_json::Value>(&json_str)?);
     }
     Err(anyhow::anyhow!("invalid JSON"))
+}
+
+fn strip_reasoning_tags<'a>(s: &'a str) -> std::borrow::Cow<'a, str> {
+    const OPEN: &str = "<think>";
+    const CLOSE: &str = "</think>";
+
+    if !s.contains(OPEN) {
+        return std::borrow::Cow::Borrowed(s);
+    }
+
+    let mut output = String::with_capacity(s.len());
+    let mut rest = s;
+
+    while let Some(start) = rest.find(OPEN) {
+        output.push_str(&rest[..start]);
+        rest = &rest[start + OPEN.len()..];
+
+        if let Some(end) = rest.find(CLOSE) {
+            rest = &rest[end + CLOSE.len()..];
+        } else {
+            // Kein schließendes Tag – wir geben den verbleibenden Text aus,
+            // um wertvolle Inhalte nicht zu verlieren.
+            output.push_str(rest);
+            return std::borrow::Cow::Owned(output);
+        }
+    }
+
+    output.push_str(rest);
+    std::borrow::Cow::Owned(output)
 }
 
 fn role_to_str(role: &ChatCompletionMessageRole) -> &'static str {
@@ -330,13 +356,12 @@ fn map_function_call_to_tool_choice(function_call: &JsonValue) -> Option<JsonVal
                 None
             }
         }
-        JsonValue::Object(map) => map
-            .get("name")
-            .and_then(|v| v.as_str())
-            .map(|name| json!({
+        JsonValue::Object(map) => map.get("name").and_then(|v| v.as_str()).map(|name| {
+            json!({
                 "type": "function",
                 "function": {"name": name}
-            })),
+            })
+        }),
         _ => None,
     }
 }
@@ -374,10 +399,10 @@ fn build_responses_payload(
     }
 
     if functions.is_none() {
-        payload
-            .as_object_mut()
-            .unwrap()
-            .insert("response_format".to_string(), json!({"type": "json_object"}));
+        payload.as_object_mut().unwrap().insert(
+            "response_format".to_string(),
+            json!({"type": "json_object"}),
+        );
     }
 
     payload
@@ -401,9 +426,7 @@ fn parse_responses_output(raw: &JsonValue) -> Option<String> {
                             return Some(trimmed.to_string());
                         }
                     }
-                    if let Some(arguments) =
-                        item.get("arguments").and_then(|v| v.as_str())
-                    {
+                    if let Some(arguments) = item.get("arguments").and_then(|v| v.as_str()) {
                         let trimmed = arguments.trim();
                         if !trimmed.is_empty() {
                             return Some(trimmed.to_string());
@@ -480,6 +503,26 @@ fn extract_first_balanced_json(s: &str) -> Option<String> {
     None
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_reasoning_tags_removes_think_blocks() {
+        let input = "prefix<think>internal {not json}</think>suffix";
+        let result = strip_reasoning_tags(input);
+        assert_eq!(result, "prefixsuffix");
+    }
+
+    #[test]
+    fn parse_json_block_handles_reasoning_prefix() {
+        let input = "<think>analysis</think>\n{\"value\": 1}";
+        let parsed =
+            parse_json_block(input).expect("should parse JSON after stripping think block");
+        assert_eq!(parsed.get("value").and_then(|v| v.as_i64()), Some(1));
+    }
+}
+
 /* ======================= Scoring-Prompt (Tri-State) ======================= */
 
 fn build_scoring_prompt(document: &str, question: &str) -> Vec<ChatCompletionMessage> {
@@ -529,9 +572,7 @@ pub async fn call_openai_chat(
             serde_json::to_value(&req).map_err(PromptError::Parse)?
         }
         EndpointKind::Responses => {
-            let functions_ref = functions_clone
-                .as_ref()
-                .map(|vec| vec.as_slice());
+            let functions_ref = functions_clone.as_ref().map(|vec| vec.as_slice());
             build_responses_payload(
                 model,
                 &messages,
@@ -551,16 +592,15 @@ pub async fn call_openai_chat(
     let mut request = client.post(endpoint.clone());
     request = match auth_style {
         AuthStyle::ApiKey => request.insert_header(("api-key", key.clone())),
-        AuthStyle::BearerToken => request.insert_header((header::AUTHORIZATION, format!("Bearer {}", key))),
+        AuthStyle::BearerToken => {
+            request.insert_header((header::AUTHORIZATION, format!("Bearer {}", key)))
+        }
     };
 
-    let mut res = request
-        .send_json(&payload)
-        .await
-        .map_err(|e| {
-            error!("network error to OpenAI: {e}");
-            PromptError::Network(e.to_string())
-        })?;
+    let mut res = request.send_json(&payload).await.map_err(|e| {
+        error!("network error to OpenAI: {e}");
+        PromptError::Network(e.to_string())
+    })?;
 
     let status = res.status();
     debug!(status = %status, endpoint = %endpoint, kind = ?endpoint_kind, "← headers = {:?}", res.headers());
@@ -955,18 +995,16 @@ async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
     let mut last_err: Option<PromptError> = None;
     for i in 0..=3 {
         match client.get(url.clone()).send().await {
-            Ok(mut resp) if resp.status().is_success() => {
-                match resp.body().await {
-                    Ok(text) => {
-                        debug!(id, %url, "prompt fetched ({} bytes)", text.len());
-                        return Ok(String::from_utf8_lossy(&text).to_string());
-                    }
-                    Err(e) => {
-                        warn!(id, retry = i, "fetch_prompt body read error: {e}");
-                        last_err = Some(PromptError::Network(e.to_string()));
-                    }
+            Ok(mut resp) if resp.status().is_success() => match resp.body().await {
+                Ok(text) => {
+                    debug!(id, %url, "prompt fetched ({} bytes)", text.len());
+                    return Ok(String::from_utf8_lossy(&text).to_string());
                 }
-            }
+                Err(e) => {
+                    warn!(id, retry = i, "fetch_prompt body read error: {e}");
+                    last_err = Some(PromptError::Network(e.to_string()));
+                }
+            },
             Ok(resp) => {
                 let status = resp.status();
                 warn!(
