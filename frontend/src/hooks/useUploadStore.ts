@@ -201,14 +201,29 @@ export const useUploadStore = create<UploadState>((set, get) => ({
       }
     }
 
+    let runId: string | undefined = undefined;
+
     set(state => ({
       entries: state.entries.map(entry => {
         if (entry.id !== fileId) return entry;
         const mergedRun = mergeRunPreferRicher(entry.result, parsed);
-        const runId = (parsed as any)?.run_id ?? (parsed as any)?.id ?? entry.runId;
+        runId = (parsed as any)?.run_id ?? (parsed as any)?.id ?? entry.runId;
         return { ...entry, loading: false, result: mergedRun, runId };
       }),
     }));
+
+    try {
+      window.dispatchEvent(new CustomEvent('pipeline-runner:update', {
+        detail: {
+          fileId,
+          pipelineId,
+          runId,
+          status: response.ok ? 'started' : 'error',
+        },
+      }));
+    } catch (err) {
+      console.warn('pipeline-runner event dispatch failed', err);
+    }
 
     if (!response.ok) {
       throw new Error(((parsed as any)?.error as string) || `HTTP ${response.status}`);

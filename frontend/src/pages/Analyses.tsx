@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Tabs, Tab, Paper, Button, Typography,
   Table, TableHead, TableRow, TableCell, TableBody,
@@ -367,7 +367,28 @@ export default function Analyses() {
   // NEU: PDF-Name Filter (clientseitig)
   const [pdfName, setPdfName] = useState<string>('');
 
-  const load = () => {
+  const resolvePipelineNamesForEntries = useCallback(async (entries: Entry[]) => {
+    const missing = new Set<string>();
+    for (const e of entries) {
+      const { id, name } = extractPipelineIdAndName(e);
+      if (id && !name && !pipelineNames[id]) missing.add(id);
+    }
+    if (missing.size === 0) return;
+
+    const updates: Record<string, string> = {};
+    await Promise.all(
+        Array.from(missing).map(async (id) => {
+          const n = await fetchPipelineNameById(id);
+          if (n) updates[id] = n;
+        })
+    );
+
+    if (Object.keys(updates).length) {
+      setPipelineNames(prev => ({ ...prev, ...updates }));
+    }
+  }, [pipelineNames]);
+
+  const load = useCallback(() => {
     const base =
         (window as any).__ENV__?.HISTORY_URL ||
         import.meta.env.VITE_HISTORY_URL ||
@@ -461,31 +482,18 @@ export default function Analyses() {
       void resolvePipelineNamesForEntries([...runningUnique, ...c]);
     })
     .catch(e => console.error('Analysen laden', e));
-  };
+  }, [tenant, resolvePipelineNamesForEntries]);
 
-  async function resolvePipelineNamesForEntries(entries: Entry[]) {
-    // finde alle IDs ohne bekannten Namen
-    const missing = new Set<string>();
-    for (const e of entries) {
-      const { id, name } = extractPipelineIdAndName(e);
-      if (id && !name && !pipelineNames[id]) missing.add(id);
-    }
-    if (missing.size === 0) return;
+  useEffect(() => { load(); }, [load]);
 
-    const updates: Record<string, string> = {};
-    await Promise.all(
-        Array.from(missing).map(async (id) => {
-          const n = await fetchPipelineNameById(id);
-          if (n) updates[id] = n;
-        })
-    );
-
-    if (Object.keys(updates).length) {
-      setPipelineNames(prev => ({ ...prev, ...updates }));
-    }
-  }
-
-  useEffect(load, [tenant]);
+  useEffect(() => {
+    const handle = () => {
+      load();
+      window.setTimeout(load, 1500);
+    };
+    window.addEventListener('pipeline-runner:update', handle);
+    return () => window.removeEventListener('pipeline-runner:update', handle);
+  }, [load]);
 
   const filteredRunning = useMemo(() => {
     let base = running;

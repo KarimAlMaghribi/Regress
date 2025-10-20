@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Paper,
@@ -236,50 +236,58 @@ export default function History() {
   };
 
   // Initial REST Load (running + completed)
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const urlFor = (status: HistoryStatus) => {
-          const u = new URL(`${BASE_HIST}/analyses`, window.location.origin);
-          u.searchParams.set('status', status);
-          if (tenant) u.searchParams.set('tenant', tenant);
-          return u.toString();
-        };
+  const loadEntries = useCallback(async () => {
+    try {
+      const urlFor = (status: HistoryStatus) => {
+        const u = new URL(`${BASE_HIST}/analyses`, window.location.origin);
+        u.searchParams.set('status', status);
+        if (tenant) u.searchParams.set('tenant', tenant);
+        return u.toString();
+      };
 
-        const loadStatus = async (status: HistoryStatus): Promise<any[]> => {
-          try {
-            const r = await fetch(urlFor(status));
-            if (!r.ok) return [];
-            const json = await r.json();
-            return Array.isArray(json) ? json : [];
-          } catch (err) {
-            console.error(`history load status ${status}`, err);
-            return [];
-          }
-        };
-
-        const [rRunning, rCompleted, rPending] = await Promise.all([
-          loadStatus('running'),
-          loadStatus('completed'),
-          loadStatus('pending'),
-        ]);
-        const initialRaw = [...rRunning, ...rCompleted, ...rPending].map(normalizeEntry);
-        const dedup = new Map(initialRaw.map(item => [item.id, item] as const));
-        const merged = Array.from(dedup.values());
-        merged.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
-        setEntries(merged);
-
-        const pdfIdParam = new URLSearchParams(location.search).get('pdfId');
-        if (pdfIdParam) {
-          const wanted = merged.find(e => String(e.pdfId) === pdfIdParam);
-          if (wanted) setSelected(wanted);
+      const loadStatus = async (status: HistoryStatus): Promise<any[]> => {
+        try {
+          const r = await fetch(urlFor(status));
+          if (!r.ok) return [];
+          const json = await r.json();
+          return Array.isArray(json) ? json : [];
+        } catch (err) {
+          console.error(`history load status ${status}`, err);
+          return [];
         }
-      } catch (e) {
-        console.error('history initial load failed', e);
+      };
+
+      const [rRunning, rCompleted, rPending] = await Promise.all([
+        loadStatus('running'),
+        loadStatus('completed'),
+        loadStatus('pending'),
+      ]);
+      const initialRaw = [...rRunning, ...rCompleted, ...rPending].map(normalizeEntry);
+      const dedup = new Map(initialRaw.map(item => [item.id, item] as const));
+      const merged = Array.from(dedup.values());
+      merged.sort((a, b) => dayjs(b.timestamp).valueOf() - dayjs(a.timestamp).valueOf());
+      setEntries(merged);
+
+      const pdfIdParam = new URLSearchParams(location.search).get('pdfId');
+      if (pdfIdParam) {
+        const wanted = merged.find(e => String(e.pdfId) === pdfIdParam);
+        if (wanted) setSelected(wanted);
       }
-    };
-    load();
+    } catch (e) {
+      console.error('history initial load failed', e);
+    }
   }, [tenant]);
+
+  useEffect(() => { void loadEntries(); }, [loadEntries]);
+
+  useEffect(() => {
+    const handle = () => {
+      void loadEntries();
+      window.setTimeout(() => { void loadEntries(); }, 1500);
+    };
+    window.addEventListener('pipeline-runner:update', handle);
+    return () => window.removeEventListener('pipeline-runner:update', handle);
+  }, [loadEntries]);
 
   // Pipeline-Namen nachladen, falls nur IDs vorhanden
   useEffect(() => {
