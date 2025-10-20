@@ -229,6 +229,21 @@ npm run dev # startet Vite unter http://localhost:5173
 
 Für API-Aufrufe liest das Frontend die Vite-Variablen `VITE_INGEST_URL`, `VITE_API_URL`, `VITE_HISTORY_URL` und `VITE_HISTORY_WS`. In der Entwicklung lassen sie sich über eine `.env.local` im `frontend/`-Verzeichnis anpassen. Achte darauf, dass `VITE_INGEST_URL` auf den Upload-/PDF-Ingest-Service zeigt (z. B. `http://localhost:8081` oder `/ingest`), damit Links wie `/pdf/{id}` weiterhin funktionieren.
 
+#### Runtime-Konfiguration (`env.js`)
+
+Produktions-Builds können zusätzlich zur Laufzeit Konfigurationswerte über
+`window.__ENV__` erhalten. Diese Werte werden – wie im Frontend-Code
+([`frontend/src/utils/api.ts`](frontend/src/utils/api.ts)) nachzulesen – **vor**
+allen Vite-Variablen ausgewertet und bestimmen damit unter anderem, welcher Host
+für `/uploads` verwendet wird.【F:frontend/src/utils/api.ts†L13-L43】
+
+Wenn im ausgelieferten Container ein `env.js` (z. B. via Docker Config)
+eingebunden wird, achte darauf, dass `INGEST_URL` bzw. `INGEST_API_URL` den
+korrekten Host/Port enthalten. Andernfalls bleiben Requests auf einem alten
+Host (z. B. `https://helium.adesso.claims:8091`), selbst wenn NGINX
+`sub_filter`-Regeln andere Ports ersetzen. Eine ausführliche Fehleranalyse und
+Konfigurationsmatrix findest du in [docs/frontend-runtime-config.md](docs/frontend-runtime-config.md).
+
 Weitere nützliche Befehle:
 
 ```bash
