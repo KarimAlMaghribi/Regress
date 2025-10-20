@@ -141,6 +141,7 @@ services:
     networks: [localnet]
     environment:
       VITE_INGEST_URL: http://pdf-ingest:8081
+      VITE_SHAREPOINT_INGEST_URL: http://api-gateway:8080/ingest
       VITE_HISTORY_WS: ws://history-service:8090
       VITE_API_URL: http://pipeline-api:8084
       VITE_HISTORY_URL: http://history-service:8090
