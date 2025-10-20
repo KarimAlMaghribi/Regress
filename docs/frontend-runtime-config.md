@@ -25,6 +25,10 @@ Browser diesen Host auflösen können, enden Requests an `/uploads` in einem
   falschen Host, solange `window.__ENV__.INGEST_URL` gefüllt ist.
 - Der Fallback auf die aktuelle Origin (`http://<host>:8080`) greift nur, wenn
   die Werte aus `env.js` entfernt oder leer sind.
+- Die SharePoint-Upload-Ansicht bevorzugt nun explizit
+  `SHAREPOINT_INGEST_URL`/`VITE_SHAREPOINT_INGEST_URL` und fällt ansonsten auf
+  `http://<host>:8080/ingest` zurück, um nicht versehentlich den PDF-Ingest-Port
+  anzusprechen.【F:frontend/src/utils/ingestApi.ts†L28-L82】
 
 ## Maßnahmen zur Behebung
 1. **Konfigurationswert anpassen:** Stelle sicher, dass `frontend_env_js_v2`

@@ -105,6 +105,7 @@ services:
     environment:
       PUBLIC_HOST: "${PUBLIC_HOST:-helium.adesso.claims}"
       VITE_INGEST_URL:  "http://${PUBLIC_HOST}:8081"
+      VITE_SHAREPOINT_INGEST_URL: "http://${PUBLIC_HOST}:8080/ingest"
       VITE_HISTORY_WS:  "ws://${PUBLIC_HOST}:8090"
       VITE_API_URL:     "http://${PUBLIC_HOST}:8084"
       VITE_HISTORY_URL: "http://${PUBLIC_HOST}:8090"
