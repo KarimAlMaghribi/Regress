@@ -1,5 +1,6 @@
 import axios from 'axios';
 import {resolveDefaultIngestBase} from './defaultIngestUrl';
+import {normalizeIngestBase} from './normalizeIngestBase';
 import {
   CreateJobsRequest,
   CreateJobsResponse,
@@ -28,18 +29,19 @@ const pickFirst = <T extends string>(...values: Array<T | undefined | null | fal
   return undefined;
 };
 
-const BASE_URL =
-    pickFirst(
-        runtimeEnv.SHAREPOINT_INGEST_URL,
-        runtimeEnv.SHAREPOINT_INGEST_API_URL,
-        runtimeEnv.INGEST_URL,
-        runtimeEnv.INGEST_API_URL,
-        import.meta.env.VITE_SHAREPOINT_INGEST_API_BASE as string | undefined,
-        import.meta.env.VITE_SHAREPOINT_INGEST_URL as string | undefined,
-        import.meta.env.VITE_INGEST_API_BASE as string | undefined,
-        import.meta.env.VITE_INGEST_URL as string | undefined,
-        '/ingest',
-    ) || resolveDefaultIngestBase();
+const ingestCandidate = pickFirst(
+    runtimeEnv.SHAREPOINT_INGEST_URL,
+    runtimeEnv.SHAREPOINT_INGEST_API_URL,
+    runtimeEnv.INGEST_URL,
+    runtimeEnv.INGEST_API_URL,
+    import.meta.env.VITE_SHAREPOINT_INGEST_API_BASE as string | undefined,
+    import.meta.env.VITE_SHAREPOINT_INGEST_URL as string | undefined,
+    import.meta.env.VITE_INGEST_API_BASE as string | undefined,
+    import.meta.env.VITE_INGEST_URL as string | undefined,
+    '/ingest',
+);
+
+const BASE_URL = normalizeIngestBase(ingestCandidate) || resolveDefaultIngestBase();
 
 const client = axios.create({
   baseURL: BASE_URL,
