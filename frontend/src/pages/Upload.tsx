@@ -29,7 +29,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {useUploadStore} from '../hooks/useUploadStore';
-import {UPLOAD_API} from '../utils/api';
+import {INGEST_API} from '../utils/api';
 import {usePipelineList} from '../hooks/usePipelineList';
 import {useTenants} from '../hooks/useTenants';
 import {alpha, useTheme} from '@mui/material/styles';
@@ -83,7 +83,7 @@ export default function Upload() {
     accept: {'application/pdf': ['.pdf'], 'application/zip': ['.zip']},
   });
 
-  const ingest = useMemo(() => UPLOAD_API, []);
+  const ingest = useMemo(() => INGEST_API, []);
 
   const upload = () => {
     if (!files.length || !tenantId) return;
@@ -153,7 +153,7 @@ export default function Upload() {
           <IconButton
               size="small"
               component="a"
-              href={`${UPLOAD_API.replace(/\/$/, '')}/pdf/${params.row.pdfId}`}
+              href={`${INGEST_API.replace(/\/$/, '')}/pdf/${params.row.pdfId}`}
               target="_blank"
               rel="noopener noreferrer"
           >

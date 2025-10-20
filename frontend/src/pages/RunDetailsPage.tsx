@@ -48,7 +48,7 @@ import {
   ScoringWeightsCard
 } from "../components/ScoringWeightsCard";
 import PdfViewer from "../components/PdfViewer";
-import {UPLOAD_API} from "../utils/api";
+import {INGEST_API} from "../utils/api";
 
 /* ===== Helfer ===== */
 const clamp01 = (n?: number | null) => Math.max(0, Math.min(1, Number.isFinite(n as number) ? (n as number) : 0));
@@ -150,7 +150,7 @@ function attemptEvidenceMeta(
 
 function resolvePdfUrl(raw?: string | null, pdfId?: number | null): string | undefined {
   // immer über denselben Origin-Proxypfad gehen
-  const base = (UPLOAD_API || "/ingest").replace(/\/$/, "");
+  const base = (INGEST_API || "/ingest").replace(/\/$/, "");
   if (pdfId != null) return `${base}/pdf/${pdfId}`;
   if (raw && typeof raw === "string") {
     try {
