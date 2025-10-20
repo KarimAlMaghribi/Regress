@@ -1,5 +1,5 @@
 const DEFAULT_PROTOCOL = 'http';
-const DEFAULT_PORT = '8080';
+const DEFAULT_PORT = '8081';
 
 const normalizeHost = (host: string): string => {
   if (host.includes(':') && !host.startsWith('[')) {

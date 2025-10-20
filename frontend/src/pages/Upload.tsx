@@ -16,6 +16,7 @@ import {
   Stack,
   Typography,
 } from '@mui/material';
+import {SelectChangeEvent} from '@mui/material/Select';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import DeleteIcon from '@mui/icons-material/Delete';
 import {DataGrid, GridColDef} from '@mui/x-data-grid';
@@ -29,7 +30,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import {useUploadStore} from '../hooks/useUploadStore';
-import {INGEST_API} from '../utils/api';
+import {INGEST_API, PDF_OPEN_BASE} from '../utils/api';
 import {usePipelineList} from '../hooks/usePipelineList';
 import {useTenants} from '../hooks/useTenants';
 import {alpha, useTheme} from '@mui/material/styles';
@@ -84,6 +85,7 @@ export default function Upload() {
   });
 
   const ingest = useMemo(() => INGEST_API, []);
+  const pdfOpenBase = useMemo(() => PDF_OPEN_BASE, []);
 
   const upload = () => {
     if (!files.length || !tenantId) return;
@@ -142,7 +144,31 @@ export default function Upload() {
     justifyContent: 'center',
   };
 
-  const columns: GridColDef[] = [
+  const columns: GridColDef[] = useMemo(() => [
+    {
+      field: 'displayName',
+      headerName: 'Dokument',
+      flex: 1.2,
+      minWidth: 220,
+      sortable: false,
+      filterable: false,
+      renderCell: params => {
+        const names: string[] = params.row.sourceNames || [];
+        const extraCount = Math.max(0, names.length - 1);
+        return (
+            <Stack spacing={0.25} sx={{py: 0.25}}>
+              <Typography variant="body2" sx={{fontWeight: 600}} noWrap>
+                {params.row.displayName}
+              </Typography>
+              {extraCount > 0 && (
+                  <Typography variant="caption" color="text.secondary" noWrap>
+                    +{extraCount} weitere Datei{extraCount > 1 ? 'en' : ''}
+                  </Typography>
+              )}
+            </Stack>
+        );
+      },
+    },
     {
       field: 'open',
       headerName: 'Öffnen',
@@ -153,13 +179,57 @@ export default function Upload() {
           <IconButton
               size="small"
               component="a"
-              href={`${INGEST_API.replace(/\/$/, '')}/pdf/${params.row.pdfId}`}
+              href={`${pdfOpenBase.replace(/\/$/, '')}/pdf/${params.row.pdfId}`}
               target="_blank"
               rel="noopener noreferrer"
           >
             <OpenInNewIcon fontSize="small"/>
           </IconButton>
       ) : null,
+    },
+    {
+      field: 'pipeline',
+      headerName: 'Pipeline',
+      flex: 1,
+      minWidth: 200,
+      sortable: false,
+      filterable: false,
+      renderCell: params => {
+        const value = params.row.selectedPipelineId || '';
+
+        const handleChange = (event: SelectChangeEvent<string>) => {
+          const selected = event.target.value as string;
+          updateFile(params.row.id, {selectedPipelineId: selected});
+        };
+
+        const stop = (event: React.SyntheticEvent) => {
+          event.stopPropagation();
+        };
+
+        return (
+            <Box sx={{width: '100%'}} onClick={stop} onKeyDown={stop}>
+              <Select
+                  size="small"
+                  fullWidth
+                  value={value}
+                  displayEmpty
+                  onChange={handleChange}
+                  onClick={stop}
+                  onClose={stop}
+                  disabled={pipelines.length === 0}
+              >
+                <MenuItem value="">
+                  <em>Pipeline wählen</em>
+                </MenuItem>
+                {pipelines.map(pipeline => (
+                    <MenuItem key={pipeline.id} value={pipeline.id}>
+                      {pipeline.name}
+                    </MenuItem>
+                ))}
+              </Select>
+            </Box>
+        );
+      },
     },
     {
       field: 'run',
@@ -182,7 +252,7 @@ export default function Upload() {
       width: 60,
       sortable: false,
       renderCell: params => (
-          <IconButton size="small" onClick={() => useUploadStore.downloadExtractedText(params.row.id)}
+          <IconButton size="small" onClick={() => downloadExtractedText(params.row.id)}
                       disabled={!params.row.ocr}>
             <DownloadIcon fontSize="small"/>
           </IconButton>
@@ -222,13 +292,13 @@ export default function Upload() {
           </IconButton>
       ),
     },
-  ];
+  ], [deletePdf, downloadExtractedText, pipelines, runPipeline, setSnackOpen, updateFile]);
 
   const uploadDisabled = !files.length || !tenantId;
   const isErrorMessage = message.toLowerCase().startsWith('error');
 
   return (
-      <Stack spacing={4}>
+      <Stack spacing={4} sx={{width: '100%'}}>
         <PageHeader
             title="Upload"
             subtitle="Dokumente mandantenbezogen bereitstellen und zur Pipeline weiterleiten"
@@ -375,6 +445,7 @@ export default function Upload() {
               p: {xs: 2, md: 3},
               borderRadius: 'var(--radius-card)',
               boxShadow: 'var(--shadow-z1)',
+              width: '100%',
             }}
         >
           <Stack spacing={2.5}>
@@ -394,6 +465,7 @@ export default function Upload() {
                 columns={columns}
                 pageSizeOptions={[5, 10, 25]}
                 initialState={{pagination: {paginationModel: {pageSize: 5, page: 0}}}}
+                sx={{width: '100%'}}
             />
           </Stack>
         </Paper>
