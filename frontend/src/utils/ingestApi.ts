@@ -1,4 +1,5 @@
 import axios from 'axios';
+import {resolveDefaultIngestBase} from './defaultIngestUrl';
 import {
   CreateJobsRequest,
   CreateJobsResponse,
@@ -38,7 +39,7 @@ const BASE_URL =
         import.meta.env.VITE_INGEST_API_BASE as string | undefined,
         import.meta.env.VITE_INGEST_URL as string | undefined,
         '/ingest',
-    ) || 'http://localhost:8080';
+    ) || resolveDefaultIngestBase();
 
 const client = axios.create({
   baseURL: BASE_URL,
