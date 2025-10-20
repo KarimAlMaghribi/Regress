@@ -1,6 +1,8 @@
 type RuntimeEnv = {
   PIPELINE_API_URL?: string;
   API_URL?: string;
+  PDF_INGEST_URL?: string;
+  PDF_INGEST_API_URL?: string;
   INGEST_URL?: string;
   INGEST_API_URL?: string;
 };
@@ -27,13 +29,16 @@ const API_BASE =
         env.VITE_API_URL,
     ) || 'http://localhost:8084';
 
-const INGEST_API =
+const PDF_INGEST_API =
     pickFirst(
-        runtimeEnv.INGEST_URL,
-        runtimeEnv.INGEST_API_URL,
-        env.VITE_INGEST_API_BASE,
-        env.VITE_INGEST_URL,
-        '/ingest',
+        runtimeEnv.PDF_INGEST_URL,
+        runtimeEnv.PDF_INGEST_API_URL,
+        env.VITE_PDF_INGEST_API_BASE,
+        env.VITE_PDF_INGEST_URL,
+        env.VITE_PDF_INGEST_API_URL,
+        '',
     ) || 'http://localhost:8081';
+
+const INGEST_API = PDF_INGEST_API;
 
 export {API_BASE, INGEST_API};
