@@ -6,7 +6,7 @@ COPY frontend/package.json frontend/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm corepack enable && npm ci
 
 COPY frontend/ .
-ARG VITE_INGEST_URL=http://localhost:8081
+ARG VITE_INGEST_URL=http://localhost:8080
 ARG VITE_HISTORY_WS=ws://localhost:8090
 ARG VITE_API_URL=http://localhost:8084
 ARG VITE_HISTORY_URL=http://localhost:8090

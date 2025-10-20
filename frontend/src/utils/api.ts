@@ -1,3 +1,5 @@
+import {resolveDefaultIngestBase} from './defaultIngestUrl';
+
 type RuntimeEnv = {
   PIPELINE_API_URL?: string;
   API_URL?: string;
@@ -33,11 +35,16 @@ const PDF_INGEST_API =
     pickFirst(
         runtimeEnv.PDF_INGEST_URL,
         runtimeEnv.PDF_INGEST_API_URL,
+        runtimeEnv.INGEST_URL,
+        runtimeEnv.INGEST_API_URL,
         env.VITE_PDF_INGEST_API_BASE,
         env.VITE_PDF_INGEST_URL,
         env.VITE_PDF_INGEST_API_URL,
+        env.VITE_INGEST_API_BASE,
+        env.VITE_INGEST_URL,
+        env.VITE_INGEST_API_URL,
         '',
-    ) || 'http://localhost:8081';
+    ) || resolveDefaultIngestBase();
 
 const INGEST_API = PDF_INGEST_API;
 
