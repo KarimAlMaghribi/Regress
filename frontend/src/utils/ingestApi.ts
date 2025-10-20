@@ -8,6 +8,8 @@ import {
 } from '../types/ingest';
 
 type RuntimeEnv = {
+  SHAREPOINT_INGEST_URL?: string;
+  SHAREPOINT_INGEST_API_URL?: string;
   INGEST_URL?: string;
   INGEST_API_URL?: string;
   INGEST_POLL_MS?: string;
@@ -27,12 +29,16 @@ const pickFirst = <T extends string>(...values: Array<T | undefined | null | fal
 
 const BASE_URL =
     pickFirst(
+        runtimeEnv.SHAREPOINT_INGEST_URL,
+        runtimeEnv.SHAREPOINT_INGEST_API_URL,
         runtimeEnv.INGEST_URL,
         runtimeEnv.INGEST_API_URL,
+        import.meta.env.VITE_SHAREPOINT_INGEST_API_BASE as string | undefined,
+        import.meta.env.VITE_SHAREPOINT_INGEST_URL as string | undefined,
         import.meta.env.VITE_INGEST_API_BASE as string | undefined,
         import.meta.env.VITE_INGEST_URL as string | undefined,
         '/ingest',
-    ) || 'http://localhost:8081';
+    ) || 'http://localhost:8080';
 
 const client = axios.create({
   baseURL: BASE_URL,
