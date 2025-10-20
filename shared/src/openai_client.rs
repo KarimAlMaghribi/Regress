@@ -952,31 +952,42 @@ async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
     let base =
         std::env::var("PROMPT_MANAGER_URL").unwrap_or_else(|_| "http://prompt-manager:8082".into());
     let url = format!("{}/prompts/{}", base, id);
+    let mut last_err: Option<PromptError> = None;
     for i in 0..=3 {
         match client.get(url.clone()).send().await {
             Ok(mut resp) if resp.status().is_success() => {
-                if let Ok(text) = resp.body().await {
-                    debug!(id, %url, "prompt fetched ({} bytes)", text.len());
-                    return Ok(String::from_utf8_lossy(&text).to_string());
+                match resp.body().await {
+                    Ok(text) => {
+                        debug!(id, %url, "prompt fetched ({} bytes)", text.len());
+                        return Ok(String::from_utf8_lossy(&text).to_string());
+                    }
+                    Err(e) => {
+                        warn!(id, retry = i, "fetch_prompt body read error: {e}");
+                        last_err = Some(PromptError::Network(e.to_string()));
+                    }
                 }
             }
             Ok(resp) => {
+                let status = resp.status();
                 warn!(
                     id,
                     %url,
-                    status = %resp.status(),
+                    status = %status,
                     retry = i,
                     "fetch_prompt HTTP error"
                 );
+                last_err = Some(PromptError::Http(status.as_u16()));
             }
             Err(e) => {
                 warn!(id, retry = i, "fetch_prompt network error: {e}");
+                last_err = Some(PromptError::Network(e.to_string()));
             }
         }
         let wait = 100 * (1u64 << i).min(8);
         time::sleep(Duration::from_millis(wait)).await;
     }
-    Err(PromptError::Parse(DeError::custom("invalid JSON")))
+    Err(last_err
+        .unwrap_or_else(|| PromptError::Network("prompt fetch failed after retries".to_string())))
 }
 
 /// Public wrapper that exposes prompt fetching to other crates.
