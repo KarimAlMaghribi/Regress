@@ -1,6 +1,6 @@
 import create from 'zustand';
 
-import {API_BASE, UPLOAD_API} from '../utils/api';
+import {API_BASE, INGEST_API} from '../utils/api';
 
 export type AnyRun = Record<string, any>;
 
@@ -90,7 +90,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   autoRefreshId: undefined,
 
   async load() {
-    const ingest = UPLOAD_API;
+    const ingest = INGEST_API;
     try {
       const [uploadData, texts] = await Promise.all([
         fetch(`${ingest.replace(/\/$/, '')}/uploads`).then(r => r.json()),
@@ -205,7 +205,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
   },
 
   async downloadExtractedText(fileId) {
-    const res = await fetch(`${UPLOAD_API.replace(/\/$/, '')}/uploads/${fileId}/extract`);
+    const res = await fetch(`${INGEST_API.replace(/\/$/, '')}/uploads/${fileId}/extract`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     const blob = new Blob([text], { type: 'text/plain' });
