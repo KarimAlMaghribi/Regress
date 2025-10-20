@@ -227,7 +227,7 @@ npm install
 npm run dev # startet Vite unter http://localhost:5173
 ```
 
-Für API-Aufrufe liest das Frontend die Vite-Variablen `VITE_INGEST_URL`, `VITE_API_URL`, `VITE_HISTORY_URL` und `VITE_HISTORY_WS`. In der Entwicklung lassen sie sich über eine `.env.local` im `frontend/`-Verzeichnis anpassen.
+Für API-Aufrufe liest das Frontend die Vite-Variablen `VITE_INGEST_URL`, `VITE_API_URL`, `VITE_HISTORY_URL` und `VITE_HISTORY_WS`. In der Entwicklung lassen sie sich über eine `.env.local` im `frontend/`-Verzeichnis anpassen. Achte darauf, dass `VITE_INGEST_URL` auf den Upload-/PDF-Ingest-Service zeigt (z. B. `http://localhost:8081` oder `/ingest`), damit Links wie `/pdf/{id}` weiterhin funktionieren.
 
 Weitere nützliche Befehle:
 
