@@ -4,7 +4,7 @@ import { useParams } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import RunDetails from '../components/RunDetails';
 import { PipelineRunResult } from '../types/pipeline';
-import {UPLOAD_API} from '../utils/api';
+import {INGEST_API} from '../utils/api';
 
 type ResultData = PipelineRunResult;
 export default function Result() {
@@ -19,7 +19,7 @@ export default function Result() {
       .then(setData)
       .catch(e => console.error('load result', e));
   }, [id]);
-  const pdfUrl = `${UPLOAD_API.replace(/\/$/, '')}/pdf/${id}`;
+  const pdfUrl = `${INGEST_API.replace(/\/$/, '')}/pdf/${id}`;
 
   return (
     <Box>

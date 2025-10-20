@@ -227,7 +227,7 @@ npm install
 npm run dev # startet Vite unter http://localhost:5173
 ```
 
-Für API-Aufrufe liest das Frontend die Vite-Variablen `VITE_INGEST_URL`, `VITE_API_URL`, `VITE_HISTORY_URL`, `VITE_HISTORY_WS` und `VITE_UPLOAD_API_URL`. In der Entwicklung lassen sie sich über eine `.env.local` im `frontend/`-Verzeichnis anpassen.
+Für API-Aufrufe liest das Frontend die Vite-Variablen `VITE_INGEST_URL`, `VITE_API_URL`, `VITE_HISTORY_URL` und `VITE_HISTORY_WS`. In der Entwicklung lassen sie sich über eine `.env.local` im `frontend/`-Verzeichnis anpassen. Achte darauf, dass `VITE_INGEST_URL` auf den Upload-/PDF-Ingest-Service zeigt (z. B. `http://localhost:8081` oder `/ingest`), damit Links wie `/pdf/{id}` weiterhin funktionieren.
 
 Weitere nützliche Befehle:
 
@@ -252,7 +252,7 @@ npx eslint src --max-warnings=0
 | `TENANT_ID`, `CLIENT_ID`, `CLIENT_SECRET`, `SITE_*` | Konfiguration für SharePoint-Ingest (Azure AD + SharePoint-Standort). | Siehe [`services/sharepoint-ingest/src/config.rs`](services/sharepoint-ingest/src/config.rs). |
 | `UPLOAD_API_TOKEN`, `ADMIN_TOKEN` | Auth für den Upload-Endpunkt bzw. SharePoint-Steuerung. | Optional; wenn gesetzt, erzwingt der Service Token-Validierung. |
 | `RUST_LOG`, `RUST_BACKTRACE` | Logging-Level & Backtrace-Ausgabe. | Beispiele siehe Compose (`info,pipeline_runner=debug`). |
-| `VITE_*` | Frontend-Umgebung (Upload-Service, Pipeline-API, History-API/WebSocket). | Siehe Compose-Definition für Standardwerte. |
+| `VITE_*` | Frontend-Umgebung (Ingest-Service, Pipeline-API, History-API/WebSocket). | Siehe Compose-Definition für Standardwerte. |
 
 Die Pipeline-API kennt mehrere vordefinierte Azure-Deployments und nutzt dabei dieselbe `OPENAI_API_KEY`-Variable.
 
