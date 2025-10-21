@@ -52,4 +52,5 @@ Eine detaillierte Beschreibung des Datenflusses (Upload, Extraktion und Klassifi
 1. **Entwicklung**: Jeder Dienst enthält ein eigenes `Cargo.toml`. Änderungen können separat kompiliert und getestet werden.
 2. **Konfiguration**: Datenbank- und Kafka-URLs können über Umgebungsvariablen angepasst werden. Beispielwerte sind in `docker-compose.yml` hinterlegt.
 3. **Erweiterbarkeit**: Neue Dienste lassen sich leicht hinzufügen. Wichtig ist, dass sie ihre Health-Route implementieren, damit das Gateway den Zustand prüfen kann.
+4. **Azure-Checks**: Hinweise zur Überprüfung der Azure-OpenAI-Anbindung und zum Aktivieren detaillierter Logs stehen in `docs/azure-openai-debugging.md`.
 
