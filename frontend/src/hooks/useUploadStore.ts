@@ -1,6 +1,19 @@
 import create from 'zustand';
 
-import {API_BASE, INGEST_API, PDF_OPEN_BASE} from '../utils/api';
+import {
+  API_BASE,
+  INGEST_API,
+  PDF_OPEN_BASE,
+  getOpenAiConfigurationError,
+} from '../utils/api';
+
+const combineWithOpenAiConfigError = (message?: string): string | undefined => {
+  const openAiError = getOpenAiConfigurationError();
+  if (!openAiError) return message;
+  if (!message) return openAiError;
+  if (message.includes(openAiError)) return message;
+  return `${openAiError} ${message}`.trim();
+};
 
 export type AnyRun = Record<string, any>;
 
@@ -88,7 +101,7 @@ interface UploadState {
 
 export const useUploadStore = create<UploadState>((set, get) => ({
   entries: [],
-  error: undefined,
+  error: getOpenAiConfigurationError(),
   autoRefreshId: undefined,
 
   async load() {
@@ -138,10 +151,10 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         };
       });
 
-      set({ entries: merged, error: undefined });
+      set({ entries: merged, error: getOpenAiConfigurationError() });
     } catch (err) {
       console.error('load uploads', err);
-      set({ error: (err as Error).message });
+      set({ error: combineWithOpenAiConfigError((err as Error).message) });
     }
   },
 
@@ -150,7 +163,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
     const id = window.setInterval(async () => {
       try {
         await get().load();
-        set({ error: undefined });
+        set({ error: getOpenAiConfigurationError() });
         const allReady = get().entries.every(entry => entry.status === 'ready');
         if (allReady) {
           clearInterval(id);
@@ -158,7 +171,7 @@ export const useUploadStore = create<UploadState>((set, get) => ({
         }
       } catch (err) {
         console.error('auto refresh', err);
-        set({ error: (err as Error).message });
+        set({ error: combineWithOpenAiConfigError((err as Error).message) });
       }
     }, intervalMs);
     set({ autoRefreshId: id });

@@ -6,12 +6,16 @@ type RuntimeEnv = {
   API_URL?: string;
   PDF_INGEST_URL?: string;
   PDF_INGEST_API_URL?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_CHAT_MODEL?: string;
 };
 
-const runtimeEnv: RuntimeEnv =
+const readRuntimeEnv = (): RuntimeEnv =>
     (typeof window !== 'undefined' &&
         ((window as unknown as { __ENV__?: RuntimeEnv }).__ENV__ ?? {})) ||
     {};
+
+const runtimeEnv: RuntimeEnv = readRuntimeEnv();
 
 const env = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env) || {};
 
@@ -79,4 +83,41 @@ const PDF_INGEST_API = normalizeIngestBase(pdfIngestCandidate) || resolveDefault
 const INGEST_API = PDF_INGEST_API;
 const PDF_OPEN_BASE = enforcePdfPort(PDF_INGEST_API);
 
-export {API_BASE, INGEST_API, PDF_OPEN_BASE};
+const resolveOpenAiApiKey = (): string | undefined => {
+  const currentRuntimeEnv = readRuntimeEnv();
+  return pickFirst(
+      currentRuntimeEnv.OPENAI_API_KEY,
+      env.VITE_OPENAI_API_KEY,
+      env.OPENAI_API_KEY,
+  );
+};
+
+const resolveOpenAiChatModel = (): string => {
+  const currentRuntimeEnv = readRuntimeEnv();
+  return (
+      pickFirst(
+          currentRuntimeEnv.OPENAI_CHAT_MODEL,
+          env.VITE_OPENAI_CHAT_MODEL,
+          env.OPENAI_CHAT_MODEL,
+      ) || 'gpt-4o-mini'
+  );
+};
+
+const OPENAI_API_KEY = resolveOpenAiApiKey();
+const OPENAI_CHAT_MODEL = resolveOpenAiChatModel();
+
+const getOpenAiConfigurationError = (): string | undefined => {
+  if (resolveOpenAiApiKey()) return undefined;
+  return 'OpenAI API key is not configured. Provide OPENAI_API_KEY (or VITE_OPENAI_API_KEY) via window.__ENV__ or import.meta.env to enable Azure OpenAI integrations.';
+};
+
+export {
+  API_BASE,
+  INGEST_API,
+  PDF_OPEN_BASE,
+  OPENAI_API_KEY,
+  OPENAI_CHAT_MODEL,
+  resolveOpenAiApiKey,
+  resolveOpenAiChatModel,
+  getOpenAiConfigurationError,
+};

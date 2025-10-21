@@ -78,6 +78,10 @@ export default function Upload() {
     if (error) setSnackOpen(true);
   }, [error]);
 
+  useEffect(() => {
+    if (!error) setSnackOpen(false);
+  }, [error]);
+
   const {getRootProps, getInputProps, isDragActive} = useDropzone({
     onDrop,
     multiple: true,
@@ -318,6 +322,12 @@ export default function Upload() {
             }
         />
 
+        {error && (
+            <Alert severity="error" variant="outlined">
+              {error}
+            </Alert>
+        )}
+
         <Grid container spacing={3}>
           <Grid item xs={12} md={5}>
             <Paper
@@ -470,9 +480,13 @@ export default function Upload() {
           </Stack>
         </Paper>
 
-        <Snackbar open={snackOpen} autoHideDuration={6000} onClose={() => setSnackOpen(false)}>
+        <Snackbar
+            open={snackOpen}
+            autoHideDuration={error ? null : 6000}
+            onClose={() => setSnackOpen(false)}
+        >
           <Alert onClose={() => setSnackOpen(false)} severity="error" sx={{width: '100%'}}>
-            Statusaktualisierung fehlgeschlagen, versuche es erneut.
+            {error || 'Statusaktualisierung fehlgeschlagen, versuche es erneut.'}
           </Alert>
         </Snackbar>
       </Stack>
