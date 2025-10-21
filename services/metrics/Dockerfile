@@ -7,9 +7,12 @@ WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential pkg-config clang lld libssl-dev ca-certificates && \
     rm -rf /var/lib/apt/lists/*
+ENV TMPDIR=/usr/local/tmp
+RUN mkdir -p "${TMPDIR}"
 COPY . .
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/usr/local/tmp,sharing=locked \
     cargo build --release \
       --manifest-path services/metrics/Cargo.toml --locked
 
