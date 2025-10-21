@@ -43,6 +43,8 @@ import type {
   JobSummary,
 } from '../types/ingest';
 import axios from 'axios';
+import {useTenants} from '../hooks/useTenants';
+import {INGEST_API} from '../utils/api';
 
 const statusChipColor: Record<JobStatus, 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'> = {
   queued: 'info',
@@ -109,6 +111,22 @@ export default function SharePointUpload() {
   const [jobError, setJobError] = React.useState<string | null>(null);
   const [actioningJobId, setActioningJobId] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
+  const { items: tenants, loading: tenantsLoading, error: tenantsError } = useTenants();
+  const [tenantId, setTenantId] = React.useState<string>('');
+  const uploadBase = React.useMemo(() => INGEST_API.replace(/\/$/, ''), []);
+  const tenantNameMap = React.useMemo(() => {
+    const map = new Map<string, string>();
+    tenants.forEach((tenant) => map.set(tenant.id, tenant.name));
+    return map;
+  }, [tenants]);
+
+  React.useEffect(() => {
+    if (!tenantId && tenants.length === 1) {
+      setTenantId(tenants[0].id);
+    } else if (tenantId && tenants.every((tenant) => tenant.id !== tenantId)) {
+      setTenantId('');
+    }
+  }, [tenantId, tenants]);
 
   const loadFolders = React.useCallback(async () => {
     setFoldersLoading(true);
@@ -199,12 +217,20 @@ export default function SharePointUpload() {
   };
 
   const startJobs = async () => {
+    if (!tenantId) {
+      setFolderError('Bitte wähle einen Mandanten aus, bevor Jobs gestartet werden.');
+      return;
+    }
     setCreatingJobs(true);
     setSuccessMessage(null);
     try {
+      setFolderError(null);
+      const uploadUrl = `${uploadBase}/upload?tenant_id=${encodeURIComponent(tenantId)}`;
       await createJobs({
         folder_ids: selectedFolders,
         order,
+        tenant_id: tenantId,
+        upload_url: uploadUrl,
       });
       setSuccessMessage('Jobs erfolgreich gestartet.');
       setSelectedFolders([]);
@@ -312,6 +338,7 @@ export default function SharePointUpload() {
         <TableHead>
           <TableRow>
             <TableCell>Ordner</TableCell>
+            <TableCell>Mandant</TableCell>
             <TableCell>Status</TableCell>
             <TableCell>Fortschritt</TableCell>
             <TableCell>Nachricht</TableCell>
@@ -323,9 +350,22 @@ export default function SharePointUpload() {
             const percent = Math.round(Math.min(Math.max(job.progress ?? 0, 0), 1) * 100);
             const isActioning = actioningJobId === job.id;
             const disableCancel = ['canceled', 'failed', 'succeeded'].includes(job.status);
+            const tenantLabel =
+              job.tenant_id && typeof job.tenant_id === 'string'
+                ? tenantNameMap.get(job.tenant_id) ?? job.tenant_id
+                : null;
             return (
               <TableRow key={job.id} hover>
                 <TableCell>{job.folder_name}</TableCell>
+                <TableCell>
+                  {tenantLabel ? (
+                    <Chip label={tenantLabel} size="small" />
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      —
+                    </Typography>
+                  )}
+                </TableCell>
                 <TableCell>
                   <Chip label={job.status} size="small" color={statusChipColor[job.status]} />
                 </TableCell>
@@ -427,6 +467,11 @@ export default function SharePointUpload() {
               {folderError}
             </Alert>
           )}
+          {tenantsError && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {tenantsError}
+            </Alert>
+          )}
           <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mb: 2 }}>
             <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
               {folderMeta
@@ -434,6 +479,22 @@ export default function SharePointUpload() {
                 : 'Ordnerübersicht'}
             </Typography>
             <Typography variant="body2">Ausgewählt: {selectedFolders.length}</Typography>
+            <FormControl size="small" sx={{ minWidth: 200 }}>
+              <InputLabel id="tenant-select-label">Mandant</InputLabel>
+              <Select
+                labelId="tenant-select-label"
+                value={tenantId}
+                label="Mandant"
+                onChange={(event) => setTenantId(event.target.value as string)}
+                disabled={tenantsLoading || tenants.length === 0}
+              >
+                {tenants.map((tenant) => (
+                  <MenuItem key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
             <FormControl size="small" sx={{ minWidth: 160 }}>
               <InputLabel id="order-label">Reihenfolge</InputLabel>
               <Select
@@ -458,7 +519,7 @@ export default function SharePointUpload() {
               <Button
                 variant="contained"
                 onClick={startJobs}
-                disabled={selectedFolders.length === 0 || creatingJobs}
+                disabled={selectedFolders.length === 0 || creatingJobs || !tenantId}
               >
                 {creatingJobs ? 'Starte...' : 'Jobs starten'}
               </Button>

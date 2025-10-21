@@ -28,6 +28,8 @@ export interface JobSummary {
   progress: number;
   message?: string | null;
   output?: unknown;
+  tenant_id?: string | null;
+  upload_url?: string | null;
 }
 
 export interface JobsResponse {
@@ -38,6 +40,8 @@ export interface CreateJobsRequest {
   folder_ids: string[];
   order?: JobOrder;
   filenames?: Record<string, string[]>;
+  tenant_id?: string;
+  upload_url?: string;
 }
 
 export interface CreateJobsResponse {

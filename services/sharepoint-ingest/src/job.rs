@@ -52,6 +52,8 @@ pub struct JobState {
     pub order: JobOrder,
     pub filenames_override: Option<Vec<String>>,
     pub output: Option<UploadResult>,
+    pub upload_url: Option<String>,
+    pub tenant_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -111,6 +113,8 @@ pub struct JobSummary {
     pub output: Option<UploadResult>,
     pub order: JobOrder,
     pub filenames_override: Option<Vec<String>>,
+    pub upload_url: Option<String>,
+    pub tenant_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -133,6 +137,8 @@ impl JobRegistry {
         folder_name: String,
         order: JobOrder,
         filenames_override: Option<Vec<String>>,
+        upload_url: Option<String>,
+        tenant_id: Option<Uuid>,
     ) -> ManagedJob {
         let id = Uuid::new_v4();
         let (tx, _rx) = watch::channel(JobCommand::Run);
@@ -147,6 +153,8 @@ impl JobRegistry {
             order,
             filenames_override,
             output: None,
+            upload_url,
+            tenant_id,
             created_at: now,
             updated_at: now,
         };
@@ -181,6 +189,8 @@ impl JobRegistry {
                     output: state.output.clone(),
                     order: state.order.clone(),
                     filenames_override: state.filenames_override.clone(),
+                    upload_url: state.upload_url.clone(),
+                    tenant_id: state.tenant_id,
                     created_at: state.created_at,
                     updated_at: state.updated_at,
                 }
@@ -245,6 +255,8 @@ pub fn job_summary(job: &ManagedJob) -> JobSummary {
         output: state.output.clone(),
         order: state.order.clone(),
         filenames_override: state.filenames_override.clone(),
+        upload_url: state.upload_url.clone(),
+        tenant_id: state.tenant_id,
         created_at: state.created_at,
         updated_at: state.updated_at,
     }

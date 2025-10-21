@@ -112,3 +112,17 @@ services:
     ports: ["3001:80"]
     deploy:
       restart_policy: { condition: any, delay: 5s, max_attempts: 10, window: 120s }
+
+  sharepoint-ingest:
+    image: docker.adesso.claims/regress:sharepoint-ingest-latest
+    networks: [ backendnet ]
+    environment:
+      TENANT_ID: "<uuid>"
+      CLIENT_ID: "<client_id>"
+      CLIENT_SECRET: "<client_secret>"
+      SITE_HOST: "<domain>.sharepoint.com"
+      SITE_PATH: "/sites/<sitename>"
+      INPUT_FOLDER: "Input"
+      PROCESSED_FOLDER: "Processed"
+      FAILED_FOLDER: "Failed"
+      UPLOAD_URL: "http://api-gateway:8080/upload"
