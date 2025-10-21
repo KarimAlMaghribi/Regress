@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { z } from 'zod';
 
+import { API_BASE } from '../utils/api';
+
 export const MetricRecordSchema = z.object({
   timestamp: z.string(),
   promptId: z.string(),
@@ -53,9 +55,9 @@ export default function useMetrics(options: MetricsOptions) {
 
     try {
       setLoading(true);
-      const res = await fetch(
-        `${import.meta.env.REACT_APP_API_URL || ''}/api/metrics?${params.toString()}`
-      );
+      const url = new URL('/api/metrics', API_BASE);
+      url.search = params.toString();
+      const res = await fetch(url.toString());
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       const parsed = z.array(MetricRecordSchema).parse(json);

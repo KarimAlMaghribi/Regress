@@ -19,6 +19,8 @@ const runtimeEnv: RuntimeEnv = readRuntimeEnv();
 
 const env = ((import.meta as unknown as { env?: Record<string, string | undefined> }).env) || {};
 
+const IMPORT_META_ENV_LABEL = `import${'.'}meta${'.'}env`;
+
 const pickFirst = <T extends string>(...values: Array<T | undefined | null | false>): T | undefined => {
   for (const value of values) {
     if (value) return value;
@@ -108,7 +110,7 @@ const OPENAI_CHAT_MODEL = resolveOpenAiChatModel();
 
 const getOpenAiConfigurationError = (): string | undefined => {
   if (resolveOpenAiApiKey()) return undefined;
-  return 'OpenAI API key is not configured. Provide OPENAI_API_KEY (or VITE_OPENAI_API_KEY) via window.__ENV__ or import.meta.env to enable Azure OpenAI integrations.';
+  return `OpenAI API key is not configured. Provide OPENAI_API_KEY (or VITE_OPENAI_API_KEY) via window.__ENV__ or ${IMPORT_META_ENV_LABEL} to enable Azure OpenAI integrations.`;
 };
 
 export {

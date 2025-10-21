@@ -37,6 +37,7 @@ import {
 import { motion } from 'framer-motion';
 import useMetrics, { MetricRecord } from '../hooks/useMetrics';
 import PageHeader from '../components/PageHeader';
+import { API_BASE } from '../utils/api';
 
 const ALL_METRICS: (keyof MetricRecord)[] = [
   'accuracy',
@@ -87,7 +88,8 @@ export default function PromptAnalysis() {
   };
 
   useEffect(() => {
-    fetch(`${import.meta.env.REACT_APP_API_URL || ''}/api/prompts`)
+    const url = new URL('/api/prompts', API_BASE);
+    fetch(url.toString())
       .then(async r => {
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || r.statusText);

@@ -21,6 +21,7 @@ import { DataGrid, GridColDef } from '@mui/x-data-grid';
 import { DatePicker } from '@mui/x-date-pickers/DatePicker';
 import useAnalysisHistory, { AnalysisResult } from '../hooks/useAnalysisHistory';
 import PageHeader from '../components/PageHeader';
+import { API_BASE } from '../utils/api';
 
 export default function AnalysisHistory() {
   const [promptId, setPromptId] = useState('');
@@ -37,7 +38,8 @@ export default function AnalysisHistory() {
   const [tab, setTab] = useState(0);
 
   useEffect(() => {
-    fetch(`${import.meta.env.REACT_APP_API_URL || ''}/api/prompts`)
+    const url = new URL('/api/prompts', API_BASE);
+    fetch(url.toString())
       .then(async r => {
         const j = await r.json();
         if (!r.ok) throw new Error(j.error || r.statusText);
