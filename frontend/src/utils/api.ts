@@ -108,7 +108,8 @@ const OPENAI_CHAT_MODEL = resolveOpenAiChatModel();
 
 const getOpenAiConfigurationError = (): string | undefined => {
   if (resolveOpenAiApiKey()) return undefined;
-  return 'OpenAI API key is not configured. Provide OPENAI_API_KEY (or VITE_OPENAI_API_KEY) via window.__ENV__ or import.meta.env to enable Azure OpenAI integrations.';
+  const importMetaEnvReference = ['import.meta', '.env'].join('');
+  return `OpenAI API key is not configured. Provide OPENAI_API_KEY (or VITE_OPENAI_API_KEY) via window.__ENV__ or ${importMetaEnvReference} to enable Azure OpenAI integrations.`;
 };
 
 export {
