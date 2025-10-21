@@ -44,15 +44,44 @@ const resolveDefaultSharePointBase = (): string => {
   return `${protocol}//${normalizeHost(host)}:8080/ingest`;
 };
 
-const sharePointCandidate = pickFirst(
+const stripTrailingSlash = (value: string): string => value.replace(/\/+$/, '');
+const ensureSharePointPath = (path: string): string => {
+  const trimmed = stripTrailingSlash(path);
+  if (trimmed === '' || trimmed === '/' || !trimmed.startsWith('/ingest')) {
+    return '/ingest';
+  }
+  return trimmed;
+};
+
+export const normalizeSharePointBase = (value: string | undefined): string | undefined => {
+  const normalized = normalizeIngestBase(value);
+  if (!normalized) return normalized;
+
+  if (normalized.startsWith('/')) {
+    return ensureSharePointPath(normalized);
+  }
+
+  try {
+    const url = new URL(normalized);
+    const normalizedPath = ensureSharePointPath(url.pathname || '');
+    url.pathname = normalizedPath;
+
+    return stripTrailingSlash(url.toString());
+  } catch {
+    return normalized;
+  }
+};
+
+const sharePointCandidateRaw = pickFirst(
     runtimeEnv.SHAREPOINT_INGEST_URL,
     runtimeEnv.SHAREPOINT_INGEST_API_URL,
     import.meta.env.VITE_SHAREPOINT_INGEST_API_BASE as string | undefined,
     import.meta.env.VITE_SHAREPOINT_INGEST_URL as string | undefined,
     import.meta.env.VITE_SHAREPOINT_INGEST_API_URL as string | undefined,
 );
+const sharePointCandidate = normalizeSharePointBase(sharePointCandidateRaw);
 
-const fallbackCandidate = pickFirst(
+const fallbackCandidateRaw = pickFirst(
     runtimeEnv.INGEST_URL,
     runtimeEnv.INGEST_API_URL,
     import.meta.env.VITE_INGEST_API_BASE as string | undefined,
@@ -60,6 +89,7 @@ const fallbackCandidate = pickFirst(
     import.meta.env.VITE_INGEST_API_URL as string | undefined,
     '/ingest',
 );
+const fallbackCandidate = normalizeSharePointBase(fallbackCandidateRaw);
 
 const resolveCandidate = (): string | undefined => {
   if (sharePointCandidate) {
@@ -92,16 +122,16 @@ const resolveCandidate = (): string | undefined => {
     }
   };
 
-  if (looksLikePdfIngest(fallbackCandidate)) {
+  if (fallbackCandidateRaw && looksLikePdfIngest(fallbackCandidateRaw)) {
     return undefined;
   }
 
   return fallbackCandidate;
 };
 
-const normalizedCandidate = normalizeIngestBase(resolveCandidate());
+const normalizedCandidate = resolveCandidate();
 
-const BASE_URL = normalizedCandidate || resolveDefaultSharePointBase();
+const BASE_URL = normalizedCandidate || normalizeSharePointBase(resolveDefaultSharePointBase()) || '/ingest';
 
 const client = axios.create({
   baseURL: BASE_URL,
