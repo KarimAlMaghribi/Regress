@@ -8,11 +8,12 @@ use reqwest::multipart::{Form, Part};
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::Value;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct UploadAdapter {
     client: Client,
-    url: String,
+    base_url: String,
     token: Option<String>,
 }
 
@@ -25,26 +26,59 @@ pub struct UploadResult {
 
 impl UploadAdapter {
     /// Creates a new adapter that posts processed PDFs back to the upload API.
-    pub fn new(url: String, token: Option<String>, timeout: std::time::Duration) -> Result<Self> {
+    pub fn new(
+        base_url: String,
+        token: Option<String>,
+        timeout: std::time::Duration,
+    ) -> Result<Self> {
         let client = Client::builder()
             .timeout(timeout)
             .build()
             .context("building upload client")?;
-        Ok(Self { client, url, token })
+        Ok(Self {
+            client,
+            base_url,
+            token,
+        })
     }
 
     /// Uploads the file to the configured endpoint and returns the API response
     /// metadata.
-    pub async fn upload(&self, file_path: &Path, file_name: &str) -> Result<UploadResult> {
+    pub async fn upload(
+        &self,
+        file_path: &Path,
+        file_name: &str,
+        override_url: Option<&str>,
+        tenant_id: Option<Uuid>,
+    ) -> Result<UploadResult> {
+        let tenant_value = tenant_id.map(|id| id.to_string());
         let mut form = Form::new().text("defer_pipeline", "true".to_string());
+        if let Some(tenant) = &tenant_value {
+            form = form.text("tenant_id", tenant.clone());
+        }
         let part = Part::file(file_path)
             .await?
             .file_name(file_name.to_string())
             .mime_str("application/pdf")?;
         form = form.part("file", part);
-        let mut req = self.client.post(&self.url).multipart(form);
+        let mut target_url = match override_url {
+            Some(url) => url.trim().to_string(),
+            None => self.base_url.clone(),
+        };
+        if let Some(tenant) = &tenant_value {
+            if !target_url.contains("tenant_id=") {
+                let separator = if target_url.contains('?') { '&' } else { '?' };
+                target_url.push(separator);
+                target_url.push_str("tenant_id=");
+                target_url.push_str(tenant);
+            }
+        }
+        let mut req = self.client.post(&target_url).multipart(form);
         if let Some(token) = &self.token {
             req = req.bearer_auth(token);
+        }
+        if let Some(tenant) = &tenant_value {
+            req = req.header("X-Tenant-ID", tenant.as_str());
         }
         let resp = req.send().await?.error_for_status()?;
         let body = resp.json::<Value>().await.unwrap_or(Value::Null);

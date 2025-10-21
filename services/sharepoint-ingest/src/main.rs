@@ -19,9 +19,9 @@ use anyhow::anyhow;
 use job::{job_summary, JobOrder, JobRegistry, JobStatus, ManagedJob};
 use msgraph::{GraphFile, GraphFolder, MsGraphClient};
 use pdfops::merge_pdfs;
+use scan::{assert_pdf, scan_with_clamd, ScanConfig};
 use serde_json::json;
 use tokio::sync::{watch, Semaphore};
-use scan::{assert_pdf, scan_with_clamd, ScanConfig};
 use tracing::{error, info, warn};
 use upload_adapter::UploadAdapter;
 use uuid::Uuid;
@@ -63,6 +63,10 @@ struct JobCreateRequest {
     order: Option<JobOrder>,
     #[serde(default)]
     filenames: Option<HashMap<String, Vec<String>>>,
+    #[serde(default)]
+    upload_url: Option<String>,
+    #[serde(default)]
+    tenant_id: Option<Uuid>,
 }
 
 #[derive(serde::Serialize)]
@@ -197,6 +201,16 @@ async fn create_jobs(
         .map(|f| (f.id.clone(), f))
         .collect();
 
+    let upload_override = payload.upload_url.as_ref().and_then(|url| {
+        let trimmed = url.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+    let tenant_override = payload.tenant_id;
+
     let app_state = state.get_ref().clone();
     let mut created = Vec::new();
     for folder_id in &payload.folder_ids {
@@ -215,6 +229,8 @@ async fn create_jobs(
             folder.name.clone(),
             job_order.clone(),
             filenames_override.clone(),
+            upload_override.clone(),
+            tenant_override,
         );
         let summary = job_summary(&job);
         spawn_job_worker(app_state.clone(), job);
@@ -300,14 +316,14 @@ async fn retry_job(
     };
     let snapshot = original.state.lock().clone();
     drop(original);
-    let job = state
-        .jobs
-        .create_job(
-            snapshot.folder_id,
-            snapshot.folder_name,
-            snapshot.order,
-            snapshot.filenames_override,
-        );
+    let job = state.jobs.create_job(
+        snapshot.folder_id,
+        snapshot.folder_name,
+        snapshot.order,
+        snapshot.filenames_override,
+        snapshot.upload_url,
+        snapshot.tenant_id,
+    );
     let summary = job_summary(&job);
     let app_state = state.get_ref().clone();
     spawn_job_worker(app_state, job);
@@ -462,8 +478,15 @@ async fn run_job_inner(
         s.set_message("security scan passed");
     });
     let upload_name = format!("{}-merged.pdf", sanitize_filename(&snapshot.folder_name));
+    let upload_override = snapshot.upload_url.clone();
+    let tenant_override = snapshot.tenant_id;
     let upload_result = uploader
-        .upload(&merged_path, &upload_name)
+        .upload(
+            &merged_path,
+            &upload_name,
+            upload_override.as_deref(),
+            tenant_override,
+        )
         .await
         .map_err(JobRunError::Failure)?;
     jobs.update(&job_id, |s| {

@@ -6,8 +6,6 @@ type RuntimeEnv = {
   API_URL?: string;
   PDF_INGEST_URL?: string;
   PDF_INGEST_API_URL?: string;
-  INGEST_URL?: string;
-  INGEST_API_URL?: string;
 };
 
 const runtimeEnv: RuntimeEnv =
@@ -35,14 +33,9 @@ const API_BASE =
 const pdfIngestCandidate = pickFirst(
     runtimeEnv.PDF_INGEST_URL,
     runtimeEnv.PDF_INGEST_API_URL,
-    runtimeEnv.INGEST_URL,
-    runtimeEnv.INGEST_API_URL,
     env.VITE_PDF_INGEST_API_BASE,
     env.VITE_PDF_INGEST_URL,
     env.VITE_PDF_INGEST_API_URL,
-    env.VITE_INGEST_API_BASE,
-    env.VITE_INGEST_URL,
-    env.VITE_INGEST_API_URL,
     '',
 );
 
