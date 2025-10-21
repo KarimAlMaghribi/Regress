@@ -118,22 +118,22 @@ const pollRaw = Number(
 export const INGEST_POLL_INTERVAL = Number.isFinite(pollRaw) && pollRaw > 0 ? pollRaw : 3000;
 
 export async function fetchFolders() {
-  const { data } = await client.get<FolderListResponse>('/folders');
+  const { data } = await client.get<FolderListResponse>('folders');
   return data;
 }
 
 export async function createJobs(payload: CreateJobsRequest) {
-  const { data } = await client.post<CreateJobsResponse>('/jobs', payload);
+  const { data } = await client.post<CreateJobsResponse>('jobs', payload);
   return data;
 }
 
 export async function fetchJobs() {
-  const { data } = await client.get<JobsResponse>('/jobs');
+  const { data } = await client.get<JobsResponse>('jobs');
   return data;
 }
 
 export async function triggerJobAction(jobId: string, action: 'pause' | 'resume' | 'cancel' | 'retry') {
-  const { data } = await client.post<JobActionResponse>(`/jobs/${jobId}/${action}`);
+  const { data } = await client.post<JobActionResponse>(`jobs/${jobId}/${action}`);
   return data;
 }
 
