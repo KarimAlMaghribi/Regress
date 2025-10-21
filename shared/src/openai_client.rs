@@ -5,10 +5,10 @@ use crate::openai_settings;
 use actix_web::http::header;
 use awc::Client;
 use once_cell::sync::Lazy;
-use openai::chat::{ChatCompletion, ChatCompletionMessage, ChatCompletionMessageRole};
-use serde::de::Error as DeError;
+use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
 use serde::Serialize;
-use serde_json::{json, Value as JsonValue};
+use serde::de::Error as _; // for JsonError::custom(...)
+use serde_json::{json, Error as JsonError, Value as JsonValue};
 use std::collections::HashMap;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -16,6 +16,18 @@ use tokio::time;
 use tracing::{debug, error, warn};
 #[path = "evidence_resolver.rs"]
 mod evidence_resolver;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EndpointKind {
+    ChatCompletions,
+    Responses,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthStyle {
+    BearerToken,
+    ApiKey,
+}
 
 static DEFAULT_MODEL: Lazy<RwLock<Option<String>>> = Lazy::new(|| {
     RwLock::new(Some(
@@ -27,6 +39,31 @@ static CHAT_ENDPOINT: Lazy<RwLock<Option<String>>> = Lazy::new(|| {
         openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string(),
     ))
 });
+static RESPONSES_ENDPOINT: Lazy<RwLock<Option<String>>> = Lazy::new(|| {
+    let default = openai_settings::OPENAI_VERSION_OPTIONS
+        .iter()
+        .find(|opt| opt.endpoint.to_ascii_lowercase().contains("/responses"))
+        .map(|opt| opt.endpoint.to_string());
+    RwLock::new(default)
+});
+static PREFERRED_ENDPOINT_KIND: Lazy<RwLock<EndpointKind>> =
+    Lazy::new(|| RwLock::new(EndpointKind::ChatCompletions));
+
+fn set_preferred_endpoint_kind(kind: EndpointKind) {
+    *PREFERRED_ENDPOINT_KIND
+        .write()
+        .expect("PREFERRED_ENDPOINT_KIND lock poisoned") = kind;
+}
+
+/// Forces chat completions as the preferred OpenAI endpoint.
+pub fn prefer_chat_endpoint() {
+    set_preferred_endpoint_kind(EndpointKind::ChatCompletions);
+}
+
+/// Forces responses as the preferred OpenAI endpoint.
+pub fn prefer_responses_endpoint() {
+    set_preferred_endpoint_kind(EndpointKind::Responses);
+}
 
 /// Overrides the default model and endpoint used for OpenAI requests.
 pub fn configure_openai_defaults(model: impl Into<String>, endpoint: impl Into<String>) {
@@ -38,10 +75,21 @@ pub fn configure_openai_defaults(model: impl Into<String>, endpoint: impl Into<S
     }
 
     let endpoint = endpoint.into();
-    let trimmed_endpoint = endpoint.trim().trim_end_matches('/');
+    let trimmed_endpoint = trim_endpoint(endpoint.as_str());
     if !trimmed_endpoint.is_empty() {
-        *CHAT_ENDPOINT.write().expect("CHAT_ENDPOINT lock poisoned") =
-            Some(trimmed_endpoint.to_string());
+        match classify_endpoint(&trimmed_endpoint) {
+            EndpointKind::Responses => {
+                *RESPONSES_ENDPOINT
+                    .write()
+                    .expect("RESPONSES_ENDPOINT lock poisoned") = Some(trimmed_endpoint.clone());
+                set_preferred_endpoint_kind(EndpointKind::Responses);
+            }
+            EndpointKind::ChatCompletions => {
+                *CHAT_ENDPOINT.write().expect("CHAT_ENDPOINT lock poisoned") =
+                    Some(trimmed_endpoint.clone());
+                set_preferred_endpoint_kind(EndpointKind::ChatCompletions);
+            }
+        }
     }
 }
 
@@ -66,46 +114,205 @@ fn resolve_default_model() -> String {
     openai_settings::model_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string()
 }
 
-fn resolve_chat_endpoint() -> Option<String> {
-    if let Ok(env) = std::env::var("OPENAI_CHAT_COMPLETIONS_ENDPOINT") {
-        let trimmed = env.trim();
-        if !trimmed.is_empty() {
-            return Some(trimmed.trim_end_matches('/').to_string());
-        }
+fn env_var_trimmed(name: &str) -> Option<String> {
+    std::env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .map(|value| trim_endpoint(&value))
+}
+
+fn trim_endpoint(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
     }
 
-    let endpoint = CHAT_ENDPOINT
+    if let Some(idx) = trimmed.find('?') {
+        let (path, query) = trimmed.split_at(idx);
+        format!("{}{}", path.trim_end_matches('/'), query)
+    } else {
+        trimmed.trim_end_matches('/').to_string()
+    }
+}
+
+fn join_url(base: &str, suffix: &str) -> String {
+    let b = base.trim_end_matches('/');
+    let s = suffix.trim_start_matches('/');
+    if b.is_empty() {
+        s.to_string()
+    } else if s.is_empty() {
+        b.to_string()
+    } else {
+        format!("{}/{}", b, s)
+    }
+}
+
+fn ensure_api_version(mut url: String, version: &str) -> String {
+    if url.contains("api-version=") {
+        return url;
+    }
+    let separator = if url.contains('?') { '&' } else { '?' };
+    url.push(separator);
+    url.push_str("api-version=");
+    url.push_str(version);
+    url
+}
+
+fn chat_api_version() -> String {
+    std::env::var("OPENAI_API_VERSION_CHAT")
+        .ok()
+        .and_then(|v| {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .unwrap_or_else(|| "2025-01-01-preview".to_string())
+}
+
+fn responses_api_version() -> String {
+    std::env::var("OPENAI_API_VERSION_RESPONSES")
+        .ok()
+        .and_then(|v| {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .unwrap_or_else(|| "2025-04-01-preview".to_string())
+}
+
+fn chat_deployment_name() -> String {
+    std::env::var("OPENAI_CHAT_DEPLOYMENT")
+        .or_else(|_| std::env::var("OPENAI_DEPLOYMENT"))
+        .ok()
+        .and_then(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        })
+        .unwrap_or_else(|| resolve_default_model())
+}
+
+fn is_azure_host(value: &str) -> bool {
+    value.to_ascii_lowercase().contains(".openai.azure.com")
+}
+
+fn build_azure_chat_endpoint(base: &str) -> String {
+    let cleaned = base.trim_end_matches('/');
+    let version = chat_api_version();
+    if cleaned.contains("/openai/deployments/") {
+        let endpoint = if cleaned.contains("/chat/completions") {
+            cleaned.to_string()
+        } else {
+            join_url(cleaned, "chat/completions")
+        };
+        return ensure_api_version(endpoint, &version);
+    }
+
+    let prefix = if cleaned.contains("/openai") {
+        cleaned.to_string()
+    } else {
+        join_url(cleaned, "openai")
+    };
+    let deployments = join_url(&prefix, &format!("deployments/{}", chat_deployment_name()));
+    let endpoint = join_url(&deployments, "chat/completions");
+    ensure_api_version(endpoint, &version)
+}
+
+fn resolve_chat_endpoint() -> String {
+    if let Some(env) = env_var_trimmed("OPENAI_CHAT_COMPLETIONS_ENDPOINT") {
+        return env;
+    }
+
+    if let Some(custom) = CHAT_ENDPOINT
         .read()
         .expect("CHAT_ENDPOINT lock poisoned")
-        .clone();
-    if let Some(value) = endpoint.filter(|value| !value.is_empty()) {
-        return Some(value);
+        .clone()
+        .filter(|value| !value.is_empty())
+    {
+        return custom;
     }
 
-    if let Ok(base) = std::env::var("OPENAI_API_BASE") {
-        let trimmed = base.trim();
-        if !trimmed.is_empty() {
-            let cleaned = trimmed.trim_end_matches('/');
-            if cleaned.contains(".openai.azure.com") {
-                return Some(cleaned.to_string());
-            }
-            return Some(format!("{}/v1/chat/completions", cleaned));
+    if let Some(base) = env_var_trimmed("OPENAI_API_BASE") {
+        if base.ends_with("/openai/v1") {
+            return join_url(&base, "chat/completions");
         }
+        if is_azure_host(&base) {
+            return build_azure_chat_endpoint(&base);
+        }
+        if base.ends_with("/v1") {
+            return join_url(&base, "chat/completions");
+        }
+        if base.contains("/chat/completions") {
+            return base;
+        }
+        return join_url(&base, "v1/chat/completions");
     }
 
-    Some(openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string())
+    openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string()
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuthStyle {
-    BearerToken,
-    ApiKey,
+fn build_azure_responses_endpoint(base: &str) -> String {
+    let cleaned = base.trim_end_matches('/');
+    let version = responses_api_version();
+    if cleaned.contains("/responses") {
+        return ensure_api_version(cleaned.to_string(), &version);
+    }
+
+    let prefix = if cleaned.contains("/openai") {
+        cleaned.to_string()
+    } else {
+        join_url(cleaned, "openai")
+    };
+    let prefix = if prefix.contains("/openai/v1") {
+        prefix
+    } else {
+        join_url(&prefix, "v1")
+    };
+    let endpoint = join_url(&prefix, "responses");
+    ensure_api_version(endpoint, &version)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum EndpointKind {
-    ChatCompletions,
-    Responses,
+fn resolve_responses_endpoint() -> String {
+    if let Some(env) = env_var_trimmed("OPENAI_RESPONSES_ENDPOINT") {
+        return env;
+    }
+
+    if let Some(custom) = RESPONSES_ENDPOINT
+        .read()
+        .expect("RESPONSES_ENDPOINT lock poisoned")
+        .clone()
+        .filter(|value| !value.is_empty())
+    {
+        return custom;
+    }
+
+    if let Some(base) = env_var_trimmed("OPENAI_API_BASE") {
+        if is_azure_host(&base) {
+            return build_azure_responses_endpoint(&base);
+        }
+        if base.ends_with("/openai/v1") {
+            return join_url(&base, "responses");
+        }
+        if base.ends_with("/v1") {
+            return join_url(&base, "responses");
+        }
+        if base.contains("/responses") {
+            return base;
+        }
+        return join_url(&base, "v1/responses");
+    }
+
+    "https://api.openai.com/v1/responses".to_string()
 }
 
 fn classify_endpoint(url: &str) -> EndpointKind {
@@ -121,18 +328,19 @@ fn requires_api_key_header(url: &str) -> bool {
 }
 
 fn resolve_endpoint_details() -> (String, AuthStyle, EndpointKind) {
-    let endpoint = resolve_chat_endpoint().unwrap_or_else(|| {
-        openai_settings::endpoint_for(openai_settings::DEFAULT_OPENAI_VERSION).to_string()
-    });
-
-    let kind = classify_endpoint(&endpoint);
+    let preferred = *PREFERRED_ENDPOINT_KIND
+        .read()
+        .expect("PREFERRED_ENDPOINT_KIND lock poisoned");
+    let endpoint = match preferred {
+        EndpointKind::ChatCompletions => resolve_chat_endpoint(),
+        EndpointKind::Responses => resolve_responses_endpoint(),
+    };
     let auth = if requires_api_key_header(&endpoint) {
         AuthStyle::ApiKey
     } else {
         AuthStyle::BearerToken
     };
-
-    (endpoint, auth, kind)
+    (endpoint, auth, preferred)
 }
 
 /* ======================= Deutsch-Guard (globale Vorgabe) ======================= */
@@ -142,6 +350,9 @@ Antworte ausschließlich auf Deutsch.
 Wenn die Aufgabe strikt JSON verlangt, gib nur das JSON ohne zusätzlichen Text aus.
 Keine englischen Sätze oder Erklärungen. Halte dich präzise an das geforderte Schema.
 "#;
+
+const STRICT_JSON_ONLY_SYSTEM_INSTRUCTION: &str =
+    "Liefere nur ein gültiges kompaktes JSON-Objekt ohne Markdown.";
 
 /* ======================= STRICT-JSON Guards (keine Füllwerte) ======================= */
 
@@ -228,16 +439,35 @@ fn msg(role: ChatCompletionMessageRole, txt: &str) -> ChatCompletionMessage {
     }
 }
 
+fn ensure_json_instruction(messages: &mut Vec<ChatCompletionMessage>) {
+    let has_instruction = messages.iter().any(|m| {
+        m.role == ChatCompletionMessageRole::System
+            && m.content
+                .as_ref()
+                .map(|c| c.trim() == STRICT_JSON_ONLY_SYSTEM_INSTRUCTION)
+                .unwrap_or(false)
+    });
+
+    if !has_instruction {
+        messages.insert(
+            0,
+            msg(
+                ChatCompletionMessageRole::System,
+                STRICT_JSON_ONLY_SYSTEM_INSTRUCTION,
+            ),
+        );
+    }
+}
+
 /* --- JSON-Parser --- */
 
-fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
+fn parse_json_block_value(s: &str) -> Result<JsonValue, JsonError> {
     let cleaned = strip_reasoning_tags(s);
 
-    // 1) direkt
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+    if let Ok(v) = serde_json::from_str::<JsonValue>(&cleaned) {
         return Ok(v);
     }
-    // 2) ```json ... ``` oder ``` ... ```
+
     let mut t = cleaned.trim();
     if t.starts_with("```json") {
         t = &t[7..];
@@ -249,14 +479,19 @@ fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
         t = &t[..t.len() - 3];
     }
     let t = t.trim();
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(t) {
+    if let Ok(v) = serde_json::from_str::<JsonValue>(t) {
         return Ok(v);
     }
-    // 3) ersten balancierten JSON-Block extrahieren (Ignorieren von Klammern in Strings)
+
     if let Some(json_str) = extract_first_balanced_json(t) {
-        return Ok(serde_json::from_str::<serde_json::Value>(&json_str)?);
+        return serde_json::from_str::<JsonValue>(&json_str);
     }
-    Err(anyhow::anyhow!("invalid JSON"))
+
+    Err(JsonError::custom("invalid JSON"))
+}
+
+fn parse_json_block(s: &str) -> anyhow::Result<serde_json::Value> {
+    parse_json_block_value(s).map_err(|e| e.into())
 }
 
 fn strip_reasoning_tags<'a>(s: &'a str) -> std::borrow::Cow<'a, str> {
@@ -398,12 +633,10 @@ fn build_responses_payload(
             .insert("tool_choice".to_string(), choice);
     }
 
-    if functions.is_none() {
-        payload.as_object_mut().unwrap().insert(
-            "response_format".to_string(),
-            json!({"type": "json_object"}),
-        );
-    }
+    payload.as_object_mut().unwrap().insert(
+        "response_format".to_string(),
+        json!({"type": "json_object"}),
+    );
 
     payload
 }
@@ -426,6 +659,15 @@ fn parse_responses_output(raw: &JsonValue) -> Option<String> {
                             return Some(trimmed.to_string());
                         }
                     }
+                }
+            }
+        }
+    }
+
+    if let Some(output) = raw.get("output").and_then(|v| v.as_array()) {
+        for entry in output {
+            if let Some(content) = entry.get("content").and_then(|v| v.as_array()) {
+                for item in content {
                     if let Some(arguments) = item.get("arguments").and_then(|v| v.as_str()) {
                         let trimmed = arguments.trim();
                         if !trimmed.is_empty() {
@@ -553,6 +795,11 @@ pub async fn call_openai_chat(
 ) -> Result<String, PromptError> {
     let key = std::env::var("OPENAI_API_KEY").map_err(|e| PromptError::Network(e.to_string()))?;
     let (endpoint, auth_style, endpoint_kind) = resolve_endpoint_details();
+    let mut messages = messages;
+    let has_funcs = functions.is_some();
+    if !has_funcs {
+        ensure_json_instruction(&mut messages);
+    }
     let functions_clone = functions.clone();
     let function_call_clone = function_call.clone();
 
@@ -563,7 +810,7 @@ pub async fn call_openai_chat(
                 messages: &messages,
                 functions: functions.as_deref(),
                 function_call,
-                response_format: if functions.is_some() {
+                response_format: if has_funcs {
                     None
                 } else {
                     Some(json!({"type":"json_object"}))
@@ -615,51 +862,31 @@ pub async fn call_openai_chat(
         return Err(PromptError::Http(status.as_u16()));
     }
 
-    let raw_value: Option<JsonValue> = serde_json::from_slice::<JsonValue>(&bytes).ok();
+    let raw_json: JsonValue = serde_json::from_slice::<JsonValue>(&bytes).map_err(|e| {
+        let snippet: String = body_preview.chars().take(200).collect();
+        warn!(kind = ?endpoint_kind, "failed to decode OpenAI response JSON: {e}; snippet={snippet}");
+        PromptError::Parse(e)
+    })?;
 
-    match endpoint_kind {
-        EndpointKind::Responses => {
-            if let Some(raw) = raw_value.as_ref() {
-                if let Some(ans) = parse_responses_output(raw) {
-                    let trimmed = ans.trim();
-                    if !trimmed.is_empty() {
-                        return Ok(trimmed.to_string());
-                    }
-                }
+    let extracted = match endpoint_kind {
+        EndpointKind::Responses => parse_responses_output(&raw_json),
+        EndpointKind::ChatCompletions => extract_choice_content_from_raw_json(&raw_json),
+    };
+
+    if let Some(text) = extracted {
+        match parse_json_block_value(&text) {
+            Ok(json_value) => Ok(json_value.to_string()),
+            Err(err) => {
+                let snippet: String = text.chars().take(200).collect();
+                warn!(kind = ?endpoint_kind, "invalid JSON fragment from OpenAI: {err}; snippet={snippet}");
+                Err(PromptError::Parse(err))
             }
         }
-        EndpointKind::ChatCompletions => {
-            if let Some(raw) = raw_value.as_ref() {
-                if let Some(ans) = extract_choice_content_from_raw_json(raw) {
-                    let trimmed = ans.trim();
-                    if !trimmed.is_empty() {
-                        return Ok(trimmed.to_string());
-                    }
-                }
-            }
-
-            if let Ok(chat) = serde_json::from_slice::<ChatCompletion>(&bytes) {
-                if let Some(primary) = chat.choices.get(0).and_then(|c| {
-                    c.message.content.clone().or_else(|| {
-                        c.message
-                            .function_call
-                            .as_ref()
-                            .map(|fc| fc.arguments.clone())
-                    })
-                }) {
-                    let trimmed = primary.trim();
-                    if !trimmed.is_empty() {
-                        return Ok(trimmed.to_string());
-                    }
-                }
-            }
-        }
+    } else {
+        let snippet: String = body_preview.chars().take(200).collect();
+        warn!(kind = ?endpoint_kind, "missing structured JSON content; snippet={snippet}");
+        Err(PromptError::Parse(JsonError::custom("missing content")))
     }
-
-    Err(PromptError::Parse(DeError::custom(format!(
-        "no content/function arguments in OpenAI response (first 200 chars): {}",
-        &body_preview[..body_preview.len().min(200)]
-    ))))
 }
 
 /* ======================= Fehler & DTOs ======================= */
@@ -795,7 +1022,7 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
         }
     }
 
-    Err(PromptError::Parse(DeError::custom("invalid JSON")))
+    Err(PromptError::Parse(JsonError::custom("invalid JSON")))
 }
 
 /* ======================= Scoring (Tri-State mit Function-Call) ======================= */
@@ -906,7 +1133,7 @@ pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, Prom
         }
     }
 
-    Err(PromptError::Parse(DeError::custom("invalid JSON")))
+    Err(PromptError::Parse(JsonError::custom("invalid JSON")))
 }
 
 /* ======================= Decision (STRICT, mit Guard) ======================= */
@@ -976,7 +1203,7 @@ pub async fn decide(
         }
     }
 
-    Err(PromptError::Parse(DeError::custom("invalid JSON")))
+    Err(PromptError::Parse(JsonError::custom("invalid JSON")))
 }
 
 /* ======================= Sonstiges ======================= */
@@ -1049,41 +1276,43 @@ fn extract_choice_content_from_raw_json(raw: &JsonValue) -> Option<String> {
         .pointer("/choices/0/message/content")
         .and_then(|v| v.as_array())
     {
-        let mut buf = String::new();
-        let mut json_candidate: Option<String> = None;
         for part in arr {
             if let Some(txt) = part.get("text").and_then(|x| x.as_str()) {
-                buf.push_str(txt);
-                continue;
+                let trimmed = txt.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
             }
 
             if let Some(json_val) = part.get("json") {
                 if let Ok(json_txt) = serde_json::to_string(json_val) {
-                    json_candidate.get_or_insert(json_txt);
+                    if !json_txt.is_empty() {
+                        return Some(json_txt);
+                    }
                 }
-                continue;
             }
 
             if let Some(s) = part.as_str() {
-                buf.push_str(s);
-                continue;
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
             }
 
             if let Some(obj) = part.as_object() {
                 if let Some(JsonValue::String(t)) = obj.get("text") {
-                    buf.push_str(t);
+                    let trimmed = t.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
                 } else if let Some(json_val) = obj.get("json") {
                     if let Ok(json_txt) = serde_json::to_string(json_val) {
-                        json_candidate.get_or_insert(json_txt);
+                        if !json_txt.is_empty() {
+                            return Some(json_txt);
+                        }
                     }
                 }
             }
-        }
-        if let Some(json) = json_candidate {
-            return Some(json);
-        }
-        if !buf.is_empty() {
-            return Some(buf);
         }
     }
 

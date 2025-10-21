@@ -1018,6 +1018,11 @@ async fn configure_openai_from_settings(pool: &PgPool) -> anyhow::Result<()> {
 
     let option = openai_settings::option_for(&selected);
     openai_client::configure_openai_defaults(option.model, option.endpoint);
+    if selected.to_ascii_lowercase().contains("responses") {
+        openai_client::prefer_responses_endpoint();
+    } else {
+        openai_client::prefer_chat_endpoint();
+    }
     info!(
         version = %selected,
         model = option.model,

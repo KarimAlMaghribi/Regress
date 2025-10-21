@@ -40,7 +40,14 @@ pub const OPENAI_VERSION_OPTIONS: &[OpenAiVersionOption] = &[
     OpenAiVersionOption {
         key: "responses",
         model: "gpt-4o-mini",
-        endpoint: "https://claims-manager.openai.azure.com/openai/responses?api-version=2025-04-01-preview",
+        endpoint:
+            "https://claims-manager.openai.azure.com/openai/v1/responses?api-version=2025-04-01-preview",
+    },
+    OpenAiVersionOption {
+        key: "gpt-5-chat-resp",
+        model: "gpt-5-chat",
+        endpoint:
+            "https://claims-manager.openai.azure.com/openai/v1/responses?api-version=2025-04-01-preview",
     },
 ];
 
