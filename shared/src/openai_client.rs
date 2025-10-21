@@ -6,10 +6,11 @@ use actix_web::http::header;
 use awc::Client;
 use once_cell::sync::Lazy;
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
-use serde::Serialize;
 use serde::de::Error as _; // for JsonError::custom(...)
+use serde::Serialize;
 use serde_json::{json, Error as JsonError, Value as JsonValue};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::RwLock;
 use std::time::Duration;
 use tokio::time;
@@ -27,6 +28,76 @@ enum EndpointKind {
 enum AuthStyle {
     BearerToken,
     ApiKey,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Public view of the resolved OpenAI endpoint kind.
+pub enum ResolvedEndpointKind {
+    ChatCompletions,
+    Responses,
+}
+
+impl ResolvedEndpointKind {
+    fn from_internal(kind: EndpointKind) -> Self {
+        match kind {
+            EndpointKind::ChatCompletions => ResolvedEndpointKind::ChatCompletions,
+            EndpointKind::Responses => ResolvedEndpointKind::Responses,
+        }
+    }
+
+    /// Returns a stable string representation for logging.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ResolvedEndpointKind::ChatCompletions => "chat_completions",
+            ResolvedEndpointKind::Responses => "responses",
+        }
+    }
+}
+
+impl fmt::Display for ResolvedEndpointKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Public view of the authentication style derived for the OpenAI endpoint.
+pub enum ResolvedAuthStyle {
+    BearerToken,
+    ApiKey,
+}
+
+impl ResolvedAuthStyle {
+    fn from_internal(style: AuthStyle) -> Self {
+        match style {
+            AuthStyle::BearerToken => ResolvedAuthStyle::BearerToken,
+            AuthStyle::ApiKey => ResolvedAuthStyle::ApiKey,
+        }
+    }
+
+    /// Returns a stable string representation for logging.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ResolvedAuthStyle::BearerToken => "bearer_token",
+            ResolvedAuthStyle::ApiKey => "api_key",
+        }
+    }
+}
+
+impl fmt::Display for ResolvedAuthStyle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Snapshot of the currently configured OpenAI defaults used for verification and logging.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OpenAiConfigSnapshot {
+    pub endpoint: String,
+    pub endpoint_kind: ResolvedEndpointKind,
+    pub auth_style: ResolvedAuthStyle,
+    pub is_azure_endpoint: bool,
+    pub default_model: String,
 }
 
 static DEFAULT_MODEL: Lazy<RwLock<Option<String>>> = Lazy::new(|| {
@@ -341,6 +412,18 @@ fn resolve_endpoint_details() -> (String, AuthStyle, EndpointKind) {
         AuthStyle::BearerToken
     };
     (endpoint, auth, preferred)
+}
+
+/// Returns the currently configured OpenAI endpoint, authentication style and default model.
+pub fn current_openai_config() -> OpenAiConfigSnapshot {
+    let (endpoint, auth, kind) = resolve_endpoint_details();
+    OpenAiConfigSnapshot {
+        is_azure_endpoint: requires_api_key_header(&endpoint),
+        endpoint: endpoint.clone(),
+        endpoint_kind: ResolvedEndpointKind::from_internal(kind),
+        auth_style: ResolvedAuthStyle::from_internal(auth),
+        default_model: resolve_default_model(),
+    }
 }
 
 /* ======================= Deutsch-Guard (globale Vorgabe) ======================= */

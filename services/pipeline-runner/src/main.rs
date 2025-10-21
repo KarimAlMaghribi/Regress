@@ -1023,10 +1023,15 @@ async fn configure_openai_from_settings(pool: &PgPool) -> anyhow::Result<()> {
     } else {
         openai_client::prefer_chat_endpoint();
     }
+    let snapshot = openai_client::current_openai_config();
     info!(
         version = %selected,
-        model = option.model,
-        endpoint = option.endpoint,
+        requested_model = option.model,
+        resolved_model = %snapshot.default_model,
+        endpoint = %snapshot.endpoint,
+        endpoint_kind = %snapshot.endpoint_kind.as_str(),
+        auth = %snapshot.auth_style.as_str(),
+        is_azure = snapshot.is_azure_endpoint,
         "configured OpenAI defaults"
     );
 
