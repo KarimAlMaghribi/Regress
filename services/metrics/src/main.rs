@@ -37,8 +37,9 @@ async fn metrics(
 
     info!("loading metrics");
 
-    let mut sql =
-        String::from("SELECT run_time, metrics->>'accuracy', metrics->>'cost' FROM classifications");
+    let mut sql = String::from(
+        "SELECT run_time, metrics->>'accuracy', metrics->>'cost' FROM classifications",
+    );
 
     let mut values: Vec<Box<dyn ToSql + Sync>> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
@@ -255,9 +256,9 @@ async fn main() -> std::io::Result<()> {
             .route("/metrics", web::get().to(metrics))
             .route("/health", web::get().to(health))
     })
-        .bind(("0.0.0.0", 8085))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8085))?
+    .run()
+    .await
 }
 
 #[cfg(test)]

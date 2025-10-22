@@ -220,4 +220,3 @@ pub struct UploadDto {
     pub status: String,
     pub tenant_id: Uuid,
 }
-

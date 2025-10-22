@@ -2,16 +2,16 @@
 
 use awc::Client;
 use axum::{
-    extract::{Path, State, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post, put},
     Json, Router,
 };
+use sea_orm::prelude::Decimal;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
     QueryFilter, Set, Statement,
 };
-use sea_orm::prelude::Decimal;
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use shared::dto::PromptType;
@@ -26,10 +26,10 @@ use uuid::Uuid;
 mod model;
 mod review;
 use model::{
-    group::{Entity as GroupEntity, ActiveModel as GroupActiveModel},
-    group_prompt::{Entity as GroupPromptEntity, ActiveModel as GroupPromptActiveModel},
-    pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel},
-    prompt::{Entity as Prompt, ActiveModel as PromptActiveModel},
+    group::{ActiveModel as GroupActiveModel, Entity as GroupEntity},
+    group_prompt::{ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity},
+    pipeline::{ActiveModel as PipelineActiveModel, Entity as PipelineEntity},
+    prompt::{ActiveModel as PromptActiveModel, Entity as Prompt},
 };
 use review::{PromptReview, ReviewError};
 
@@ -57,7 +57,9 @@ fn ensure_sslmode_disable(url: &str) -> String {
 }
 
 /// Simple liveness endpoint for orchestration.
-async fn health() -> &'static str { "OK" }
+async fn health() -> &'static str {
+    "OK"
+}
 
 /* ---------------- DTOs ---------------- */
 
@@ -120,9 +122,13 @@ struct PipelineInput {
 }
 
 #[derive(Serialize, Debug)]
-struct ErrorResponse { error: String }
+struct ErrorResponse {
+    error: String,
+}
 
-fn default_prompt_type() -> PromptType { PromptType::ExtractionPrompt }
+fn default_prompt_type() -> PromptType {
+    PromptType::ExtractionPrompt
+}
 
 #[derive(Deserialize)]
 struct ListParams {
@@ -158,7 +164,10 @@ async fn list_prompts(
         .map(|p| PromptData {
             id: p.id,
             text: p.text,
-            prompt_type: p.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
+            prompt_type: p
+                .prompt_type
+                .parse()
+                .unwrap_or(PromptType::ExtractionPrompt),
             weight: decimal_to_f64_opt(p.weight),
             json_key: p.json_key,
             favorite: p.favorite,
@@ -226,11 +235,11 @@ async fn create_prompt(
     };
 
     let mut model: PromptActiveModel = Default::default();
-    model.text        = Set(input.text);
+    model.text = Set(input.text);
     model.prompt_type = Set(input.prompt_type.to_string());
-    model.weight      = Set(weight_dec);
-    model.json_key    = Set(json_key);
-    model.favorite    = Set(input.favorite);
+    model.weight = Set(weight_dec);
+    model.json_key = Set(json_key);
+    model.favorite = Set(input.favorite);
 
     let res = model.insert(&*db).await.map_err(int_err)?;
 
@@ -245,7 +254,10 @@ async fn create_prompt(
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
-        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
+        prompt_type: res
+            .prompt_type
+            .parse()
+            .unwrap_or(PromptType::ExtractionPrompt),
         weight: decimal_to_f64_opt(res.weight),
         json_key: res.json_key,
         favorite: res.favorite,
@@ -280,18 +292,20 @@ async fn update_prompt(
     };
 
     let mut active: PromptActiveModel = model.into();
-    active.text        = Set(input.text);
+    active.text = Set(input.text);
     active.prompt_type = Set(input.prompt_type.to_string());
-    active.weight      = Set(weight_dec);
-    active.json_key    = Set(json_key);
-    active.favorite    = Set(input.favorite);
+    active.weight = Set(weight_dec);
+    active.json_key = Set(json_key);
+    active.favorite = Set(input.favorite);
 
     let res = active.update(&*db).await.map_err(int_err)?;
 
     // Gruppenbeziehungen ersetzen
     GroupPromptEntity::delete_many()
         .filter(model::group_prompt::Column::PromptId.eq(id))
-        .exec(&*db).await.map_err(int_err)?;
+        .exec(&*db)
+        .await
+        .map_err(int_err)?;
     for gid in input.group_ids {
         let mut gp: GroupPromptActiveModel = Default::default();
         gp.group_id = Set(gid);
@@ -302,7 +316,10 @@ async fn update_prompt(
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
-        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
+        prompt_type: res
+            .prompt_type
+            .parse()
+            .unwrap_or(PromptType::ExtractionPrompt),
         weight: decimal_to_f64_opt(res.weight),
         json_key: res.json_key,
         favorite: res.favorite,
@@ -322,7 +339,9 @@ async fn delete_prompt(
 }
 
 #[derive(Deserialize)]
-struct FavoriteInput { favorite: bool }
+struct FavoriteInput {
+    favorite: bool,
+}
 
 async fn set_favorite(
     Path(id): Path<i32>,
@@ -338,7 +357,10 @@ async fn set_favorite(
     Ok(Json(PromptData {
         id: res.id,
         text: res.text,
-        prompt_type: res.prompt_type.parse().unwrap_or(PromptType::ExtractionPrompt),
+        prompt_type: res
+            .prompt_type
+            .parse()
+            .unwrap_or(PromptType::ExtractionPrompt),
         weight: decimal_to_f64_opt(res.weight),
         json_key: res.json_key,
         favorite: res.favorite,
@@ -355,7 +377,9 @@ async fn list_groups(
     for g in groups {
         let members = GroupPromptEntity::find()
             .filter(model::group_prompt::Column::GroupId.eq(g.id))
-            .all(&*db).await.map_err(int_err)?;
+            .all(&*db)
+            .await
+            .map_err(int_err)?;
         result.push(GroupData {
             id: g.id,
             name: g.name,
@@ -393,7 +417,11 @@ async fn update_group(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<GroupInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+    let Some(mut group) = GroupEntity::find_by_id(id)
+        .one(&*db)
+        .await
+        .map_err(int_err)?
+    else {
         return Err(not_found());
     };
     group.name = input.name;
@@ -403,7 +431,9 @@ async fn update_group(
 
     GroupPromptEntity::delete_many()
         .filter(model::group_prompt::Column::GroupId.eq(id))
-        .exec(&*db).await.map_err(int_err)?;
+        .exec(&*db)
+        .await
+        .map_err(int_err)?;
 
     let ids = input.prompt_ids.clone();
     for pid in &ids {
@@ -426,7 +456,11 @@ async fn set_group_favorite(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<FavoriteInput>,
 ) -> Result<Json<GroupData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(mut group) = GroupEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+    let Some(mut group) = GroupEntity::find_by_id(id)
+        .one(&*db)
+        .await
+        .map_err(int_err)?
+    else {
         return Err(not_found());
     };
     group.favorite = input.favorite;
@@ -434,7 +468,9 @@ async fn set_group_favorite(
     let g = active.update(&*db).await.map_err(int_err)?;
     let members = GroupPromptEntity::find()
         .filter(model::group_prompt::Column::GroupId.eq(g.id))
-        .all(&*db).await.map_err(int_err)?;
+        .all(&*db)
+        .await
+        .map_err(int_err)?;
     Ok(Json(GroupData {
         id: g.id,
         name: g.name,
@@ -449,11 +485,16 @@ async fn list_pipelines(
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<Json<Vec<PipelineData>>, (StatusCode, Json<ErrorResponse>)> {
     let items = PipelineEntity::find().all(&*db).await.map_err(int_err)?;
-    Ok(Json(items.into_iter().map(|p| PipelineData {
-        id: p.id,
-        name: p.name,
-        data: p.config_json, // wichtig: DB-Feld heißt config_json
-    }).collect()))
+    Ok(Json(
+        items
+            .into_iter()
+            .map(|p| PipelineData {
+                id: p.id,
+                name: p.name,
+                data: p.config_json, // wichtig: DB-Feld heißt config_json
+            })
+            .collect(),
+    ))
 }
 
 async fn create_pipeline(
@@ -464,7 +505,11 @@ async fn create_pipeline(
     model.name = Set(input.name);
     model.config_json = Set(input.data);
     let res = model.insert(&*db).await.map_err(int_err)?;
-    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.config_json }))
+    Ok(Json(PipelineData {
+        id: res.id,
+        name: res.name,
+        data: res.config_json,
+    }))
 }
 
 async fn update_pipeline(
@@ -472,21 +517,33 @@ async fn update_pipeline(
     State(db): State<Arc<DatabaseConnection>>,
     Json(input): Json<PipelineInput>,
 ) -> Result<Json<PipelineData>, (StatusCode, Json<ErrorResponse>)> {
-    let Some(mut model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+    let Some(mut model) = PipelineEntity::find_by_id(id)
+        .one(&*db)
+        .await
+        .map_err(int_err)?
+    else {
         return Err(not_found());
     };
     model.name = input.name;
     model.config_json = input.data;
     let active: PipelineActiveModel = model.into();
     let res = active.update(&*db).await.map_err(int_err)?;
-    Ok(Json(PipelineData { id: res.id, name: res.name, data: res.config_json }))
+    Ok(Json(PipelineData {
+        id: res.id,
+        name: res.name,
+        data: res.config_json,
+    }))
 }
 
 async fn delete_pipeline(
     Path(id): Path<Uuid>,
     State(db): State<Arc<DatabaseConnection>>,
 ) -> Result<(), (StatusCode, Json<ErrorResponse>)> {
-    let Some(model) = PipelineEntity::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+    let Some(model) = PipelineEntity::find_by_id(id)
+        .one(&*db)
+        .await
+        .map_err(int_err)?
+    else {
         return Err(not_found());
     };
     let active: PipelineActiveModel = model.into();
@@ -498,13 +555,26 @@ async fn delete_pipeline(
 
 fn int_err<E: std::fmt::Display>(e: E) -> (StatusCode, Json<ErrorResponse>) {
     error!("db error: {}", e);
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: e.to_string() }))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: e.to_string(),
+        }),
+    )
 }
 fn bad_request(msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-    (StatusCode::BAD_REQUEST, Json(ErrorResponse { error: msg.into() }))
+    (
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse { error: msg.into() }),
+    )
 }
 fn not_found() -> (StatusCode, Json<ErrorResponse>) {
-    (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() }))
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorResponse {
+            error: "Not found".into(),
+        }),
+    )
 }
 
 fn map_review_err(err: ReviewError) -> (StatusCode, Json<ErrorResponse>) {
@@ -513,7 +583,9 @@ fn map_review_err(err: ReviewError) -> (StatusCode, Json<ErrorResponse>) {
             error!("prompt review parse error: {}", e);
             (
                 StatusCode::BAD_GATEWAY,
-                Json(ErrorResponse { error: "Ungültige Antwort vom Bewertungsmodell".into() }),
+                Json(ErrorResponse {
+                    error: "Ungültige Antwort vom Bewertungsmodell".into(),
+                }),
             )
         }
         ReviewError::OpenAi(source) => match source {
@@ -521,28 +593,36 @@ fn map_review_err(err: ReviewError) -> (StatusCode, Json<ErrorResponse>) {
                 error!("prompt review network error: {}", msg);
                 (
                     StatusCode::BAD_GATEWAY,
-                    Json(ErrorResponse { error: format!("Bewertung nicht erreichbar: {}", msg) }),
+                    Json(ErrorResponse {
+                        error: format!("Bewertung nicht erreichbar: {}", msg),
+                    }),
                 )
             }
             PromptError::Http(code) => {
                 error!("prompt review http error: {}", code);
                 (
                     StatusCode::BAD_GATEWAY,
-                    Json(ErrorResponse { error: format!("Bewertung antwortete mit HTTP {}", code) }),
+                    Json(ErrorResponse {
+                        error: format!("Bewertung antwortete mit HTTP {}", code),
+                    }),
                 )
             }
             PromptError::Parse(e) => {
                 error!("prompt review invalid payload: {}", e);
                 (
                     StatusCode::BAD_GATEWAY,
-                    Json(ErrorResponse { error: "Bewertungsantwort konnte nicht interpretiert werden".into() }),
+                    Json(ErrorResponse {
+                        error: "Bewertungsantwort konnte nicht interpretiert werden".into(),
+                    }),
                 )
             }
             other => {
                 error!("prompt review failed: {}", other);
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(ErrorResponse { error: format!("Bewertung fehlgeschlagen: {}", other) }),
+                    Json(ErrorResponse {
+                        error: format!("Bewertung fehlgeschlagen: {}", other),
+                    }),
                 )
             }
         },
@@ -572,7 +652,8 @@ mod tests {
 
     #[test]
     fn map_review_err_maps_network_to_bad_gateway() {
-        let (status, Json(body)) = map_review_err(ReviewError::OpenAi(PromptError::Network("timeout".into())));
+        let (status, Json(body)) =
+            map_review_err(ReviewError::OpenAi(PromptError::Network("timeout".into())));
 
         assert_eq!(status, StatusCode::BAD_GATEWAY);
         assert!(body.error.contains("Bewertung nicht erreichbar"));
@@ -613,22 +694,32 @@ async fn ensure_prompt_schema(db: &DatabaseConnection) -> Result<(), sea_orm::Db
     "#.to_string())).await?;
 
     // prompt_groups
-    db.execute(Statement::from_string(be, r#"
+    db.execute(Statement::from_string(
+        be,
+        r#"
         CREATE TABLE IF NOT EXISTS prompt_groups (
           id        SERIAL PRIMARY KEY,
           name      TEXT NOT NULL UNIQUE,
           favorite  BOOLEAN NOT NULL DEFAULT FALSE
         )
-    "#.to_string())).await?;
+    "#
+        .to_string(),
+    ))
+    .await?;
 
     // group_prompts
-    db.execute(Statement::from_string(be, r#"
+    db.execute(Statement::from_string(
+        be,
+        r#"
         CREATE TABLE IF NOT EXISTS group_prompts (
           group_id   INTEGER NOT NULL REFERENCES prompt_groups(id) ON DELETE CASCADE,
           prompt_id  INTEGER NOT NULL REFERENCES prompts(id) ON DELETE CASCADE,
           PRIMARY KEY (group_id, prompt_id)
         )
-    "#.to_string())).await?;
+    "#
+        .to_string(),
+    ))
+    .await?;
 
     Ok(())
 }
@@ -657,14 +748,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/health", get(health))
         .route("/prompts", get(list_prompts).post(create_prompt))
-        .route("/prompts/:id", get(get_prompt).put(update_prompt).delete(delete_prompt))
+        .route(
+            "/prompts/:id",
+            get(get_prompt).put(update_prompt).delete(delete_prompt),
+        )
         .route("/prompts/:id/evaluate", post(evaluate_prompt_handler))
         .route("/prompts/:id/favorite", put(set_favorite))
         .route("/prompt-groups", get(list_groups).post(create_group))
         .route("/prompt-groups/:id", put(update_group))
         .route("/prompt-groups/:id/favorite", put(set_group_favorite))
         .route("/pipelines", get(list_pipelines).post(create_pipeline))
-        .route("/pipelines/:id", put(update_pipeline).delete(delete_pipeline))
+        .route(
+            "/pipelines/:id",
+            put(update_pipeline).delete(delete_pipeline),
+        )
         .with_state(db.clone())
         .layer(CorsLayer::permissive());
 

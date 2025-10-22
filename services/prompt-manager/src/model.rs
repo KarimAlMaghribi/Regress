@@ -88,9 +88,11 @@ pub mod pipeline {
 
 /* ---------- Re-exports ---------- */
 
-pub use prompt::{ActiveModel, Entity, Model};
 pub use group::{ActiveModel as GroupActiveModel, Entity as GroupEntity, Model as GroupModel};
 pub use group_prompt::{
     ActiveModel as GroupPromptActiveModel, Entity as GroupPromptEntity, Model as GroupPromptModel,
 };
-pub use pipeline::{ActiveModel as PipelineActiveModel, Entity as PipelineEntity, Model as PipelineModel};
+pub use pipeline::{
+    ActiveModel as PipelineActiveModel, Entity as PipelineEntity, Model as PipelineModel,
+};
+pub use prompt::{ActiveModel, Entity, Model};

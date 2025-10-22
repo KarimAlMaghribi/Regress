@@ -23,8 +23,8 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 /* ============================================================================================
-   DB-Manager: NoTLS, Auto-Reconnect bei "connection closed" + Heartbeat (SELECT 1)
-   ============================================================================================ */
+DB-Manager: NoTLS, Auto-Reconnect bei "connection closed" + Heartbeat (SELECT 1)
+============================================================================================ */
 
 /// Manages a connection to Postgres and provides automatic reconnection with a
 /// lightweight heartbeat loop.
@@ -70,7 +70,15 @@ impl Db {
 
     /// Establishes a new client and returns it along with the connection task
     /// that must be polled to drive the protocol.
-    async fn connect_once(&self) -> Result<(Arc<Client>, impl std::future::Future<Output = Result<(), tokio_postgres::Error>> + Send + 'static), tokio_postgres::Error> {
+    async fn connect_once(
+        &self,
+    ) -> Result<
+        (
+            Arc<Client>,
+            impl std::future::Future<Output = Result<(), tokio_postgres::Error>> + Send + 'static,
+        ),
+        tokio_postgres::Error,
+    > {
         let (client, connection) = tokio_postgres::connect(&self.dsn, NoTls).await?;
         let client = Arc::new(client);
         let fut = async move {
@@ -120,7 +128,11 @@ impl Db {
 
     /// Executes a query with a single reconnect retry if the connection was
     /// dropped.
-    async fn query(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Row>, tokio_postgres::Error> {
+    async fn query(
+        &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Vec<Row>, tokio_postgres::Error> {
         let c1 = self.current().await?;
         match c1.query(sql, params).await {
             Ok(rows) => Ok(rows),
@@ -136,7 +148,11 @@ impl Db {
 
     /// Executes a statement with a single reconnect retry if the connection was
     /// dropped.
-    async fn execute(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<u64, tokio_postgres::Error> {
+    async fn execute(
+        &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<u64, tokio_postgres::Error> {
         let c1 = self.current().await?;
         match c1.execute(sql, params).await {
             Ok(n) => Ok(n),
@@ -152,15 +168,19 @@ impl Db {
 
     /// Executes a query returning at most one row with a reconnect retry if
     /// needed.
-    async fn query_opt(&self, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Option<Row>, tokio_postgres::Error> {
+    async fn query_opt(
+        &self,
+        sql: &str,
+        params: &[&(dyn ToSql + Sync)],
+    ) -> Result<Option<Row>, tokio_postgres::Error> {
         let mut rows = self.query(sql, params).await?;
         Ok(rows.pop()) // erste Zeile (oder None)
     }
 }
 
 /* ============================================================================================
-   Types & AppState
-   ============================================================================================ */
+Types & AppState
+============================================================================================ */
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct HistoryEntry {
@@ -186,13 +206,14 @@ struct AppState {
 }
 
 /* ============================================================================================
-   DB-Helfer (ohne gecachte Prepared Statements → reconnection-safe)
-   ============================================================================================ */
+DB-Helfer (ohne gecachte Prepared Statements → reconnection-safe)
+============================================================================================ */
 
 /// Ensures the expected database schema exists, creating tables if necessary.
 async fn ensure_schema_db(db: &Db) {
-    let _ = db.execute(
-        "CREATE TABLE IF NOT EXISTS analysis_history ( \
+    let _ = db
+        .execute(
+            "CREATE TABLE IF NOT EXISTS analysis_history ( \
             id SERIAL PRIMARY KEY, \
             pdf_id INTEGER NOT NULL, \
             pipeline_id UUID NOT NULL, \
@@ -203,32 +224,41 @@ async fn ensure_schema_db(db: &Db) {
             score DOUBLE PRECISION, \
             label TEXT \
         )",
-        &[],
-    ).await;
+            &[],
+        )
+        .await;
 
-    let _ = db.execute(
-        "ALTER TABLE analysis_history \
+    let _ = db
+        .execute(
+            "ALTER TABLE analysis_history \
          ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'running'",
-        &[],
-    ).await;
+            &[],
+        )
+        .await;
 
     // NEU: Start/Ende-Spalten hinzufügen
-    let _ = db.execute(
-        "ALTER TABLE analysis_history \
+    let _ = db
+        .execute(
+            "ALTER TABLE analysis_history \
          ADD COLUMN IF NOT EXISTS started_at TIMESTAMPTZ",
-        &[],
-    ).await;
-    let _ = db.execute(
-        "ALTER TABLE analysis_history \
+            &[],
+        )
+        .await;
+    let _ = db
+        .execute(
+            "ALTER TABLE analysis_history \
          ADD COLUMN IF NOT EXISTS finished_at TIMESTAMPTZ",
-        &[],
-    ).await;
+            &[],
+        )
+        .await;
 
     // Backfill: started_at := timestamp; finished_at := timestamp wenn completed
-    let _ = db.execute(
-        "UPDATE analysis_history SET started_at = COALESCE(started_at, timestamp)",
-        &[],
-    ).await;
+    let _ = db
+        .execute(
+            "UPDATE analysis_history SET started_at = COALESCE(started_at, timestamp)",
+            &[],
+        )
+        .await;
     let _ = db.execute(
         "UPDATE analysis_history \
          SET finished_at = CASE WHEN status='completed' THEN COALESCE(finished_at, timestamp) ELSE finished_at END",
@@ -289,15 +319,18 @@ async fn all_entries_db(db: &Db) -> Vec<HistoryEntry> {
 /// Returns the newest runs filtered by the provided optional status.
 async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntry> {
     if let Some(s) = status {
-        match db.query(
-            "SELECT * FROM ( \
+        match db
+            .query(
+                "SELECT * FROM ( \
                SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, \
                       pdf_url, timestamp, status, score, label AS result_label, tenant_name \
                FROM v_analysis_history_with_tenant WHERE status = $1 \
                ORDER BY pdf_id, timestamp DESC \
              ) AS t ORDER BY timestamp DESC",
-            &[&s],
-        ).await {
+                &[&s],
+            )
+            .await
+        {
             Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
             Err(e) => {
                 error!(%e, "latest_by_status_db(status): query failed");
@@ -305,15 +338,18 @@ async fn latest_by_status_db(db: &Db, status: Option<String>) -> Vec<HistoryEntr
             }
         }
     } else {
-        match db.query(
-            "SELECT * FROM ( \
+        match db
+            .query(
+                "SELECT * FROM ( \
                SELECT DISTINCT ON (pdf_id) id, pdf_id, pipeline_id, state AS result, \
                       pdf_url, timestamp, status, score, label AS result_label, tenant_name \
                FROM v_analysis_history_with_tenant \
                ORDER BY pdf_id, timestamp DESC \
              ) AS t ORDER BY timestamp DESC",
-            &[],
-        ).await {
+                &[],
+            )
+            .await
+        {
             Ok(rows) => rows.into_iter().map(row_to_entry_with_tenant).collect(),
             Err(e) => {
                 error!(%e, "latest_by_status_db(all): query failed");
@@ -474,11 +510,14 @@ async fn insert_result_db(
     let finished_ts = finished_at.unwrap_or(entry.timestamp);
     let started_override = started_at.clone();
     let started_ts = started_at.unwrap_or(entry.timestamp);
-    match db.query_opt(
-        "SELECT id FROM analysis_history WHERE pdf_id=$1 AND status='running' \
+    match db
+        .query_opt(
+            "SELECT id FROM analysis_history WHERE pdf_id=$1 AND status='running' \
          ORDER BY timestamp DESC LIMIT 1",
-        &[&entry.pdf_id],
-    ).await {
+            &[&entry.pdf_id],
+        )
+        .await
+    {
         Ok(Some(row)) => {
             let id: i32 = row.get(0);
             if let Err(e) = db.execute(
@@ -539,15 +578,18 @@ async fn insert_result_db(
 }
 
 /* ============================================================================================
-   HTTP-Handler
-   ============================================================================================ */
+HTTP-Handler
+============================================================================================ */
 
 /// Returns the most recent classification results.
 async fn classifications(
     state: web::Data<AppState>,
     query: web::Query<HashMap<String, String>>,
 ) -> impl Responder {
-    let limit = query.get("limit").and_then(|v| v.parse::<i64>().ok()).unwrap_or(50);
+    let limit = query
+        .get("limit")
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(50);
     let items = latest_db(&state.db, limit).await;
     HttpResponse::Ok().json(items)
 }
@@ -583,14 +625,18 @@ async fn analyses(
 /// Returns the stored result for the provided identifier.
 async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Responder {
     let pdf_id = path.into_inner();
-    match state.db.query_opt(
-        // Meta-Felder mit selektieren
-        "SELECT state, started_at, finished_at, status, pipeline_id, pdf_id \
+    match state
+        .db
+        .query_opt(
+            // Meta-Felder mit selektieren
+            "SELECT state, started_at, finished_at, status, pipeline_id, pdf_id \
          FROM analysis_history \
          WHERE pdf_id=$1 AND status='completed' \
          ORDER BY timestamp DESC LIMIT 1",
-        &[&pdf_id],
-    ).await {
+            &[&pdf_id],
+        )
+        .await
+    {
         Ok(Some(r)) => {
             let mut value: serde_json::Value = r.get(0);
             let started_at: Option<DateTime<Utc>> = r.get(1);
@@ -605,13 +651,22 @@ async fn result(state: web::Data<AppState>, path: web::Path<i32>) -> impl Respon
             }
             if let Some(map) = value.as_object_mut() {
                 if let Some(dt) = started_at {
-                    map.insert("started_at".into(), serde_json::to_value(dt).unwrap_or_default());
+                    map.insert(
+                        "started_at".into(),
+                        serde_json::to_value(dt).unwrap_or_default(),
+                    );
                 }
                 if let Some(dt) = finished_at {
-                    map.insert("finished_at".into(), serde_json::to_value(dt).unwrap_or_default());
+                    map.insert(
+                        "finished_at".into(),
+                        serde_json::to_value(dt).unwrap_or_default(),
+                    );
                 }
                 map.insert("status".into(), serde_json::Value::String(status));
-                map.insert("pipeline_id".into(), serde_json::Value::String(pipeline_id.to_string()));
+                map.insert(
+                    "pipeline_id".into(),
+                    serde_json::Value::String(pipeline_id.to_string()),
+                );
                 map.insert("pdf_id".into(), serde_json::Value::from(pdf_id_val));
             }
 
@@ -636,9 +691,14 @@ async fn health(state: web::Data<AppState>) -> impl Responder {
 // NEU: Tenants auflisten
 /// Lists the tenants known to the history service.
 async fn tenants_list(state: web::Data<AppState>) -> impl Responder {
-    match state.db.query("SELECT id, name FROM tenants ORDER BY name ASC", &[]).await {
+    match state
+        .db
+        .query("SELECT id, name FROM tenants ORDER BY name ASC", &[])
+        .await
+    {
         Ok(rows) => {
-            let out: Vec<_> = rows.into_iter()
+            let out: Vec<_> = rows
+                .into_iter()
                 .map(|r| json!({"id": r.get::<_, Uuid>(0), "name": r.get::<_, String>(1)}))
                 .collect();
             HttpResponse::Ok().json(out)
@@ -652,20 +712,29 @@ async fn tenants_list(state: web::Data<AppState>) -> impl Responder {
 
 // NEU: Tenant anlegen (idempotent per UNIQUE name)
 #[derive(Deserialize)]
-struct CreateTenantBody { name: String }
+struct CreateTenantBody {
+    name: String,
+}
 
 /// Creates a new tenant and persists its configuration metadata.
-async fn tenants_create(state: web::Data<AppState>, body: web::Json<CreateTenantBody>) -> impl Responder {
+async fn tenants_create(
+    state: web::Data<AppState>,
+    body: web::Json<CreateTenantBody>,
+) -> impl Responder {
     let nm = body.name.trim();
     if nm.is_empty() {
         return HttpResponse::BadRequest().body("name must not be empty");
     }
-    match state.db.query_opt(
-        "INSERT INTO tenants (name) VALUES ($1)
+    match state
+        .db
+        .query_opt(
+            "INSERT INTO tenants (name) VALUES ($1)
          ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
          RETURNING id, name",
-        &[&nm],
-    ).await {
+            &[&nm],
+        )
+        .await
+    {
         Ok(Some(row)) => {
             let id: Uuid = row.get(0);
             let name: String = row.get(1);
@@ -680,8 +749,8 @@ async fn tenants_create(state: web::Data<AppState>, body: web::Json<CreateTenant
 }
 
 /* ============================================================================================
-   WebSocket
-   ============================================================================================ */
+WebSocket
+============================================================================================ */
 
 struct WsConn {
     db: Arc<Db>,
@@ -698,9 +767,9 @@ impl actix::Actor for WsConn {
         async move { all_entries_db(&dbwrap).await }
             .into_actor(self)
             .map(|entries, _act, ctx| {
-                if let Ok(text) = serde_json::to_string(
-                    &serde_json::json!({"type":"history","data":entries})
-                ) {
+                if let Ok(text) =
+                    serde_json::to_string(&serde_json::json!({"type":"history","data":entries}))
+                {
                     ctx.text(text);
                 }
             })
@@ -712,11 +781,15 @@ impl actix::Actor for WsConn {
 
 impl actix::StreamHandler<Result<HistoryEntry, BroadcastStreamRecvError>> for WsConn {
     /// Pushes history updates from the broadcast channel to the socket.
-    fn handle(&mut self, item: Result<HistoryEntry, BroadcastStreamRecvError>, ctx: &mut Self::Context) {
+    fn handle(
+        &mut self,
+        item: Result<HistoryEntry, BroadcastStreamRecvError>,
+        ctx: &mut Self::Context,
+    ) {
         if let Ok(entry) = item {
-            if let Ok(text) = serde_json::to_string(
-                &serde_json::json!({"type":"update","data":entry})
-            ) {
+            if let Ok(text) =
+                serde_json::to_string(&serde_json::json!({"type":"update","data":entry}))
+            {
                 ctx.text(text);
             }
         }
@@ -736,14 +809,21 @@ impl actix::StreamHandler<Result<ws::Message, ws::ProtocolError>> for WsConn {
 }
 
 /// Upgrades a HTTP request to a WebSocket session for history streaming.
-async fn ws_index(req: HttpRequest, stream: Payload, state: web::Data<AppState>) -> Result<HttpResponse, Error> {
-    let ws = WsConn { db: state.db.clone(), rx: state.tx.subscribe() };
+async fn ws_index(
+    req: HttpRequest,
+    stream: Payload,
+    state: web::Data<AppState>,
+) -> Result<HttpResponse, Error> {
+    let ws = WsConn {
+        db: state.db.clone(),
+        rx: state.tx.subscribe(),
+    };
     ws::start(ws, &req, stream)
 }
 
 /* ============================================================================================
-   Kafka-Consumer
-   ============================================================================================ */
+Kafka-Consumer
+============================================================================================ */
 
 /// Starts a Kafka consumer that forwards run updates to the broadcast channel.
 async fn start_kafka(
@@ -760,7 +840,8 @@ async fn start_kafka(
     let consumer: StreamConsumer = match ClientConfig::new()
         .set("group.id", "history-service")
         .set("bootstrap.servers", &message_broker_url)
-        .create() {
+        .create()
+    {
         Ok(c) => c,
         Err(e) => {
             error!(%e, "failed to create kafka consumer");
@@ -786,7 +867,14 @@ async fn start_kafka(
                                     let ts = Utc::now();
                                     let pdf_url = format!("{}/pdf/{}", pdf_base, data.pdf_id);
 
-                                    let id = mark_pending_db(&db, data.pdf_id, data.pipeline_id, &pdf_url, ts).await;
+                                    let id = mark_pending_db(
+                                        &db,
+                                        data.pdf_id,
+                                        data.pipeline_id,
+                                        &pdf_url,
+                                        ts,
+                                    )
+                                    .await;
                                     if id > 0 {
                                         if let Some(entry) = fetch_entry_by_id(&db, id).await {
                                             let _ = tx.send(entry);
@@ -841,7 +929,13 @@ async fn start_kafka(
                                         tenant_name: None,
                                     };
 
-                                    let id = insert_result_db(&db, &entry, started_at_ts, finished_at_ts).await;
+                                    let id = insert_result_db(
+                                        &db,
+                                        &entry,
+                                        started_at_ts,
+                                        finished_at_ts,
+                                    )
+                                    .await;
                                     entry.id = id;
                                     if id > 0 {
                                         if let Some(updated) = fetch_entry_by_id(&db, id).await {
@@ -865,8 +959,8 @@ async fn start_kafka(
 }
 
 /* ============================================================================================
-   main
-   ============================================================================================ */
+main
+============================================================================================ */
 
 #[actix_web::main]
 /// Boots the history service HTTP server and supporting background tasks.
@@ -889,8 +983,13 @@ async fn main() -> std::io::Result<()> {
     ensure_schema_db(&db).await;
 
     let (tx, _) = tokio::sync::broadcast::channel(100);
-    let pdf_base = std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
-    let state = web::Data::new(AppState { db: db.clone(), tx: tx.clone(), pdf_base: pdf_base.clone() });
+    let pdf_base =
+        std::env::var("PDF_INGEST_URL").unwrap_or_else(|_| "http://localhost:8081".into());
+    let state = web::Data::new(AppState {
+        db: db.clone(),
+        tx: tx.clone(),
+        pdf_base: pdf_base.clone(),
+    });
 
     // Kafka-Consumer
     {
@@ -898,10 +997,18 @@ async fn main() -> std::io::Result<()> {
         let tx_for_kafka = tx.clone();
         let pdf_base_for_kafka = pdf_base.clone();
         let broker_url = settings.message_broker_url.clone();
-        actix_web::rt::spawn(start_kafka(db_for_kafka, tx_for_kafka, broker_url, pdf_base_for_kafka));
+        actix_web::rt::spawn(start_kafka(
+            db_for_kafka,
+            tx_for_kafka,
+            broker_url,
+            pdf_base_for_kafka,
+        ));
     }
 
-    let port: u16 = std::env::var("SERVER_PORT").ok().and_then(|s| s.parse().ok()).unwrap_or(8090);
+    let port: u16 = std::env::var("SERVER_PORT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(8090);
     HttpServer::new(move || {
         App::new()
             .wrap(Cors::permissive())
@@ -916,7 +1023,7 @@ async fn main() -> std::io::Result<()> {
             .route("/tenants", web::get().to(tenants_list))
             .route("/tenants", web::post().to(tenants_create))
     })
-        .bind(("0.0.0.0", port))?
-        .run()
-        .await
+    .bind(("0.0.0.0", port))?
+    .run()
+    .await
 }

@@ -4,10 +4,12 @@ mod config;
 mod job;
 mod msgraph;
 mod pdfops;
+mod pipeline_adapter;
 mod scan;
 mod upload_adapter;
 
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use actix_cors::Cors;
@@ -16,17 +18,32 @@ use actix_web::{
     HttpServer, Responder,
 };
 use anyhow::anyhow;
-use job::{job_summary, JobOrder, JobRegistry, JobStatus, ManagedJob};
+use chrono::{DateTime, Utc};
+use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
+use job::{job_summary, JobOrder, JobPersistence, JobRegistry, JobStatus, JobStore, ManagedJob};
 use msgraph::{GraphFile, GraphFolder, MsGraphClient};
 use pdfops::merge_pdfs;
+use pipeline_adapter::PipelineAdapter;
 use scan::{assert_pdf, scan_with_clamd, ScanConfig};
 use serde_json::json;
 use tokio::sync::{watch, Semaphore};
+use tokio_postgres::NoTls;
 use tracing::{error, info, warn};
 use upload_adapter::UploadAdapter;
 use uuid::Uuid;
 
 use crate::config::Config;
+
+fn ensure_sslmode_disable(url: &str) -> String {
+    if url.to_ascii_lowercase().contains("sslmode=") {
+        return url.to_string();
+    }
+    if url.contains('?') {
+        format!("{url}&sslmode=disable")
+    } else {
+        format!("{url}?sslmode=disable")
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -35,6 +52,9 @@ struct AppState {
     uploader: Arc<UploadAdapter>,
     jobs: JobRegistry,
     semaphore: Arc<Semaphore>,
+    db_pool: Pool,
+    job_store: Arc<JobStore>,
+    pipeline: Arc<PipelineAdapter>,
 }
 
 #[derive(serde::Serialize)]
@@ -74,6 +94,84 @@ struct JobsResponse {
     jobs: Vec<job::JobSummary>,
 }
 
+#[derive(serde::Serialize)]
+struct ProcessedFoldersResponse {
+    items: Vec<ProcessedFolderItem>,
+}
+
+#[derive(serde::Serialize)]
+struct ProcessedFolderItem {
+    job_id: Uuid,
+    folder_id: String,
+    folder_name: String,
+    status: JobStatus,
+    progress: f32,
+    message: Option<String>,
+    tenant_id: Option<Uuid>,
+    pipeline_id: Option<Uuid>,
+    pipeline_run_id: Option<Uuid>,
+    upload_id: Option<i32>,
+    pdf_id: Option<i32>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(serde::Deserialize)]
+struct ProcessedFoldersRunRequest {
+    job_ids: Vec<Uuid>,
+    pipeline_id: Uuid,
+}
+
+#[derive(serde::Serialize)]
+struct ProcessedRunResponse {
+    started: Vec<ProcessedRunStarted>,
+    skipped: Vec<ProcessedRunSkipped>,
+}
+
+#[derive(serde::Serialize)]
+struct ProcessedRunStarted {
+    job_id: Uuid,
+    upload_id: i32,
+    pdf_id: Option<i32>,
+    pipeline_id: Uuid,
+}
+
+#[derive(serde::Serialize)]
+struct ProcessedRunSkipped {
+    job_id: Uuid,
+    reason: String,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AggregatedJobSource {
+    Sharepoint,
+    Pipeline,
+}
+
+#[derive(serde::Serialize)]
+struct AggregatedJobEntry {
+    id: String,
+    source: AggregatedJobSource,
+    status: String,
+    status_category: JobStatus,
+    progress: f32,
+    message: Option<String>,
+    folder_name: Option<String>,
+    pipeline_name: Option<String>,
+    sharepoint_job_id: Option<Uuid>,
+    pipeline_id: Option<Uuid>,
+    pdf_id: Option<i32>,
+    upload_id: Option<i32>,
+    created_at: DateTime<Utc>,
+    updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(serde::Serialize)]
+struct AggregatedJobsResponse {
+    jobs: Vec<AggregatedJobEntry>,
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     tracing_subscriber::fmt()
@@ -81,7 +179,52 @@ async fn main() -> std::io::Result<()> {
         .json()
         .init();
 
-    let config = Config::from_env().expect("configuration error");
+    let raw_config = Config::from_env().expect("configuration error");
+    let db_url = ensure_sslmode_disable(&raw_config.database_url);
+    let pg_config = tokio_postgres::Config::from_str(&db_url).map_err(|err| {
+        error!(error = %err, "failed to parse DATABASE_URL");
+        std::io::Error::new(std::io::ErrorKind::Other, "invalid database url")
+    })?;
+    let manager = Manager::from_config(
+        pg_config,
+        NoTls,
+        ManagerConfig {
+            recycling_method: RecyclingMethod::Fast,
+        },
+    );
+    let pool = Pool::builder(manager).max_size(16).build().map_err(|err| {
+        error!(error = %err, "failed to build postgres pool");
+        std::io::Error::new(std::io::ErrorKind::Other, "db-pool")
+    })?;
+    info!("created postgres pool");
+
+    let job_store = Arc::new(JobStore::new(pool.clone()));
+    let jobs = JobRegistry::new(Some(JobPersistence::new(job_store.clone())));
+
+    match job_store.load_all().await {
+        Ok(records) => {
+            let mut restored = 0usize;
+            for mut state in records {
+                if matches!(state.status, JobStatus::Running | JobStatus::Queued) {
+                    state.set_status(JobStatus::Failed);
+                    state.set_message("Verarbeitung beim Neustart unterbrochen");
+                    if let Err(err) = job_store.persist_state(&state).await {
+                        warn!(job_id = %state.id, error = %err, "failed to persist interrupted state");
+                    }
+                }
+                jobs.restore_job(state);
+                restored += 1;
+            }
+            if restored > 0 {
+                info!(count = restored, "restored persisted SharePoint jobs");
+            }
+        }
+        Err(err) => {
+            warn!(error = %err, "failed to load persisted SharePoint jobs");
+        }
+    }
+
+    let config = Arc::new(raw_config);
     let max_concurrency = config.max_concurrency;
     let graph = Arc::new(MsGraphClient::new(&config).expect("graph client"));
     graph
@@ -96,13 +239,24 @@ async fn main() -> std::io::Result<()> {
         )
         .expect("upload adapter"),
     );
+    let pipeline = Arc::new(
+        PipelineAdapter::new(
+            config.pipeline_api_url.clone(),
+            config.pipeline_api_token.clone(),
+            config.upload_timeout,
+        )
+        .expect("pipeline adapter"),
+    );
 
     let state = AppState {
-        config: Arc::new(config),
+        config: config.clone(),
         graph,
         uploader,
-        jobs: JobRegistry::new(),
+        jobs,
         semaphore: Arc::new(Semaphore::new(max_concurrency)),
+        db_pool: pool.clone(),
+        job_store,
+        pipeline,
     };
 
     let bind_addr = format!("{}:{}", state.config.http_bind, state.config.http_port);
@@ -132,6 +286,12 @@ async fn main() -> std::io::Result<()> {
             .wrap(cors)
             .route("/healthz", web::get().to(healthz))
             .route("/folders", web::get().to(list_folders))
+            .route("/processed-folders", web::get().to(list_processed_folders))
+            .route(
+                "/processed-folders/run",
+                web::post().to(run_processed_folders),
+            )
+            .route("/jobs/all", web::get().to(list_all_jobs))
             .service(
                 web::scope("/jobs")
                     .route("", web::get().to(list_jobs))
@@ -249,6 +409,53 @@ async fn list_jobs(
     Ok(web::Json(JobsResponse { jobs }))
 }
 
+async fn list_processed_folders(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> actix_web::Result<impl Responder> {
+    ensure_authorized(&req, &state.config)?;
+    let client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let rows = client
+        .query(
+            "SELECT id, folder_id, folder_name, status, progress, message, tenant_id,
+                    pipeline_id, pipeline_run_id, upload_id, pdf_id, created_at, updated_at
+             FROM sharepoint_jobs
+             WHERE status = 'succeeded' AND upload_id IS NOT NULL
+             ORDER BY updated_at DESC",
+            &[],
+        )
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let mut items = Vec::with_capacity(rows.len());
+    for row in rows {
+        let status_text: String = row.get("status");
+        let status = JobStatus::from_str(&status_text).unwrap_or(JobStatus::Succeeded);
+        let progress: f64 = row.get("progress");
+        items.push(ProcessedFolderItem {
+            job_id: row.get("id"),
+            folder_id: row.get("folder_id"),
+            folder_name: row.get("folder_name"),
+            status,
+            progress: progress as f32,
+            message: row.get("message"),
+            tenant_id: row.get("tenant_id"),
+            pipeline_id: row.get("pipeline_id"),
+            pipeline_run_id: row.get("pipeline_run_id"),
+            upload_id: row.get("upload_id"),
+            pdf_id: row.get("pdf_id"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+        });
+    }
+
+    Ok(web::Json(ProcessedFoldersResponse { items }))
+}
+
 async fn pause_job(
     req: HttpRequest,
     state: web::Data<AppState>,
@@ -265,6 +472,107 @@ async fn pause_job(
     } else {
         Ok(HttpResponse::NotFound().finish())
     }
+}
+
+async fn run_processed_folders(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    payload: web::Json<ProcessedFoldersRunRequest>,
+) -> actix_web::Result<impl Responder> {
+    ensure_authorized(&req, &state.config)?;
+    if payload.job_ids.is_empty() {
+        return Err(ErrorBadRequest("job_ids required"));
+    }
+
+    let mut client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let pipeline_name = client
+        .query_opt(
+            "SELECT name FROM pipelines WHERE id = $1",
+            &[&payload.pipeline_id],
+        )
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?
+        .and_then(|row| row.get::<_, Option<String>>(0));
+
+    let mut started = Vec::new();
+    let mut skipped = Vec::new();
+
+    for job_id in &payload.job_ids {
+        let row = client
+            .query_opt(
+                "SELECT status, upload_id, pdf_id, folder_name FROM sharepoint_jobs WHERE id = $1",
+                &[job_id],
+            )
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?;
+
+        let Some(row) = row else {
+            skipped.push(ProcessedRunSkipped {
+                job_id: *job_id,
+                reason: "job not found".to_string(),
+            });
+            continue;
+        };
+
+        let status_text: String = row.get("status");
+        let status = JobStatus::from_str(&status_text).unwrap_or(JobStatus::Failed);
+        if status != JobStatus::Succeeded {
+            skipped.push(ProcessedRunSkipped {
+                job_id: *job_id,
+                reason: format!("job status is {status_text}"),
+            });
+            continue;
+        }
+
+        let upload_id: Option<i32> = row.get("upload_id");
+        if upload_id.is_none() {
+            skipped.push(ProcessedRunSkipped {
+                job_id: *job_id,
+                reason: "upload id missing".to_string(),
+            });
+            continue;
+        }
+        let upload_id = upload_id.unwrap();
+        let pdf_id: Option<i32> = row.get("pdf_id");
+        let folder_name: String = row.get("folder_name");
+
+        match state
+            .pipeline
+            .start_run(payload.pipeline_id, upload_id)
+            .await
+        {
+            Ok(_resp) => {
+                let message = match pipeline_name.as_deref() {
+                    Some(name) => format!("Pipeline \"{name}\" gestartet"),
+                    None => format!("Pipeline {} gestartet", payload.pipeline_id),
+                };
+                state.jobs.update(job_id, |s| {
+                    s.pipeline_id = Some(payload.pipeline_id);
+                    s.set_message(message);
+                });
+                started.push(ProcessedRunStarted {
+                    job_id: *job_id,
+                    upload_id,
+                    pdf_id,
+                    pipeline_id: payload.pipeline_id,
+                });
+                info!(%job_id, %upload_id, folder = %folder_name, "pipeline run triggered");
+            }
+            Err(err) => {
+                warn!(%job_id, error = %err, "failed to start pipeline run");
+                skipped.push(ProcessedRunSkipped {
+                    job_id: *job_id,
+                    reason: format!("pipeline start failed: {err}"),
+                });
+            }
+        }
+    }
+
+    Ok(web::Json(ProcessedRunResponse { started, skipped }))
 }
 
 async fn resume_job(
@@ -331,6 +639,98 @@ async fn retry_job(
     Ok(HttpResponse::Ok().json(json!({ "job": summary })))
 }
 
+async fn list_all_jobs(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> actix_web::Result<impl Responder> {
+    ensure_authorized(&req, &state.config)?;
+    let client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let sharepoint_rows = client
+        .query(
+            "SELECT id, folder_name, status, progress, message, pipeline_id, pipeline_run_id,
+                    upload_id, pdf_id, created_at, updated_at
+             FROM sharepoint_jobs
+             ORDER BY created_at DESC
+             LIMIT 200",
+            &[],
+        )
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let mut jobs = Vec::with_capacity(sharepoint_rows.len());
+    for row in sharepoint_rows {
+        let status_text: String = row.get("status");
+        let status = JobStatus::from_str(&status_text).unwrap_or(JobStatus::Failed);
+        let progress: f64 = row.get("progress");
+        jobs.push(AggregatedJobEntry {
+            id: row.get::<_, Uuid>("id").to_string(),
+            source: AggregatedJobSource::Sharepoint,
+            status: status.as_str().to_string(),
+            status_category: status,
+            progress: progress as f32,
+            message: row.get("message"),
+            folder_name: Some(row.get("folder_name")),
+            pipeline_name: None,
+            sharepoint_job_id: Some(row.get("id")),
+            pipeline_id: row.get("pipeline_id"),
+            pdf_id: row.get("pdf_id"),
+            upload_id: row.get("upload_id"),
+            created_at: row.get("created_at"),
+            updated_at: Some(row.get("updated_at")),
+        });
+    }
+
+    let pipeline_rows = client
+        .query(
+            "SELECT pr.id, pr.status, pr.error, pr.created_at, pr.started_at, pr.finished_at,
+                    pr.pipeline_id, sp.id AS sharepoint_job_id, sp.folder_name, sp.upload_id,
+                    sp.pdf_id, p.name
+             FROM pipeline_runs pr
+             JOIN sharepoint_jobs sp ON sp.pdf_id = pr.pdf_id
+             LEFT JOIN pipelines p ON p.id = pr.pipeline_id
+             ORDER BY pr.created_at DESC
+             LIMIT 200",
+            &[],
+        )
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    for row in pipeline_rows {
+        let status_text: String = row.get("status");
+        let status_category = map_pipeline_status(&status_text);
+        let progress = map_pipeline_progress(&status_text);
+        let created_at: DateTime<Utc> = row.get("created_at");
+        let started_at: Option<DateTime<Utc>> = row.get("started_at");
+        let finished_at: Option<DateTime<Utc>> = row.get("finished_at");
+        let updated_at = finished_at.or(started_at).or(Some(created_at));
+        jobs.push(AggregatedJobEntry {
+            id: row.get::<_, Uuid>("id").to_string(),
+            source: AggregatedJobSource::Pipeline,
+            status: status_text,
+            status_category,
+            progress,
+            message: row.get::<_, Option<String>>("error"),
+            folder_name: Some(row.get("folder_name")),
+            pipeline_name: row.get::<_, Option<String>>("name"),
+            sharepoint_job_id: Some(row.get("sharepoint_job_id")),
+            pipeline_id: row.get("pipeline_id"),
+            pdf_id: row.get("pdf_id"),
+            upload_id: row.get("upload_id"),
+            created_at,
+            updated_at,
+        });
+    }
+
+    jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+    Ok(web::Json(AggregatedJobsResponse { jobs }))
+}
+
 fn spawn_job_worker(state: AppState, job: ManagedJob) {
     let job_id = job.state.lock().id;
     let jobs = state.jobs.clone();
@@ -395,16 +795,6 @@ fn spawn_job_worker(state: AppState, job: ManagedJob) {
                     s.set_status(JobStatus::Failed);
                     s.set_message(format!("job failed: {err}"));
                 });
-                if let Some(snapshot) = jobs.get(&job_id).map(|j| j.state.lock().clone()) {
-                    let dest_path = format!(
-                        "{}/{}",
-                        config.drive_failed_path(),
-                        sanitize_path_component(&snapshot.folder_name)
-                    );
-                    if let Err(move_err) = graph.move_item(&snapshot.folder_id, &dest_path).await {
-                        error!(%job_id, error = ?move_err, "failed to move to failed folder");
-                    }
-                }
             }
         }
     });
@@ -498,20 +888,9 @@ async fn run_job_inner(
         s.set_output(upload_result.clone());
     });
 
-    wait_until_running(&jobs, job_id, &mut control_rx).await?;
-    let dest_path = format!(
-        "{}/{}",
-        config.drive_processed_path(),
-        sanitize_path_component(&snapshot.folder_name)
-    );
-    graph
-        .move_item(&snapshot.folder_id, &dest_path)
-        .await
-        .map_err(JobRunError::Failure)?;
-
     jobs.update(&job_id, |s| {
         s.set_progress(download_weight + merge_weight + upload_weight);
-        s.set_message("folder moved to processed");
+        s.set_message("bereit für Pipeline-Verarbeitung");
     });
 
     Ok(())
@@ -583,16 +962,6 @@ async fn handle_control_error(
                 s.set_status(JobStatus::Failed);
                 s.set_message(format!("job failed: {error}"));
             });
-            if let Some(snapshot) = snapshot {
-                let dest_path = format!(
-                    "{}/{}",
-                    config.drive_failed_path(),
-                    sanitize_path_component(&snapshot.folder_name)
-                );
-                if let Err(move_err) = graph.move_item(&snapshot.folder_id, &dest_path).await {
-                    error!(%job_id, error = ?move_err, "failed to move job to failed folder");
-                }
-            }
         }
     }
 }
@@ -641,12 +1010,30 @@ fn sanitize_filename(name: &str) -> String {
     sanitized.trim_matches('_').to_string()
 }
 
-fn sanitize_path_component(name: &str) -> String {
-    let sanitized = sanitize_filename(name);
-    if sanitized.is_empty() {
-        "attachment".to_string()
-    } else {
-        sanitized
+fn map_pipeline_status(status: &str) -> JobStatus {
+    match status.to_ascii_lowercase().as_str() {
+        "queued" => JobStatus::Queued,
+        "running" => JobStatus::Running,
+        "completed" | "finished" | "finalized" => JobStatus::Succeeded,
+        "failed" | "timeout" | "error" => JobStatus::Failed,
+        "canceled" => JobStatus::Canceled,
+        other => {
+            warn!(
+                status = other,
+                "unknown pipeline status, defaulting to failed"
+            );
+            JobStatus::Failed
+        }
+    }
+}
+
+fn map_pipeline_progress(status: &str) -> f32 {
+    match status.to_ascii_lowercase().as_str() {
+        "queued" => 0.0,
+        "running" => 0.5,
+        "completed" | "finished" | "finalized" => 1.0,
+        "failed" | "timeout" | "error" | "canceled" => 1.0,
+        _ => 1.0,
     }
 }
 

@@ -16,6 +16,8 @@ pub struct Config {
     pub failed_folder: String,
     pub upload_url: String,
     pub upload_api_token: Option<String>,
+    pub pipeline_api_url: String,
+    pub pipeline_api_token: Option<String>,
     pub admin_token: Option<String>,
     pub cors_origins: Option<Vec<String>>,
     pub max_concurrency: usize,
@@ -23,6 +25,7 @@ pub struct Config {
     pub http_port: u16,
     pub graph_timeout: Duration,
     pub upload_timeout: Duration,
+    pub database_url: String,
 }
 
 impl Config {
@@ -42,6 +45,9 @@ impl Config {
         let failed_folder = env::var("FAILED_FOLDER").unwrap_or_else(|_| "Failed".to_string());
         let upload_url = env::var("UPLOAD_URL").context("UPLOAD_URL missing")?;
         let upload_api_token = env::var("UPLOAD_API_TOKEN").ok();
+        let pipeline_api_url =
+            env::var("PIPELINE_API_URL").unwrap_or_else(|_| "http://pipeline-api:8084".to_string());
+        let pipeline_api_token = env::var("PIPELINE_API_TOKEN").ok();
         let admin_token = env::var("ADMIN_TOKEN").ok();
         let cors_origins = env::var("CORS_ORIGINS").ok().map(|origins| {
             origins
@@ -73,6 +79,7 @@ impl Config {
                 .and_then(|v| v.parse().ok())
                 .unwrap_or(300),
         );
+        let database_url = env::var("DATABASE_URL").context("DATABASE_URL missing")?;
 
         Ok(Self {
             tenant_id,
@@ -85,6 +92,8 @@ impl Config {
             failed_folder,
             upload_url,
             upload_api_token,
+            pipeline_api_url,
+            pipeline_api_token,
             admin_token,
             cors_origins,
             max_concurrency,
@@ -92,6 +101,7 @@ impl Config {
             http_port,
             graph_timeout,
             upload_timeout,
+            database_url,
         })
     }
 

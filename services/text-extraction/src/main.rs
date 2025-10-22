@@ -76,7 +76,10 @@ async fn list_texts(db: web::Data<Pool>) -> actix_web::Result<HttpResponse> {
         .query(&stmt, &[])
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
-    let items: Vec<TextEntry> = rows.into_iter().map(|r| TextEntry { id: r.get(0) }).collect();
+    let items: Vec<TextEntry> = rows
+        .into_iter()
+        .map(|r| TextEntry { id: r.get(0) })
+        .collect();
     Ok(HttpResponse::Ok().json(items))
 }
 
@@ -130,8 +133,11 @@ async fn main() -> std::io::Result<()> {
     info!("starting text-extraction service");
 
     let settings = Settings::new().unwrap();
-    if let Err(e) =
-        kafka::ensure_topics(&settings.message_broker_url, &["pdf-merged", "text-extracted"]).await
+    if let Err(e) = kafka::ensure_topics(
+        &settings.message_broker_url,
+        &["pdf-merged", "text-extracted"],
+    )
+    .await
     {
         warn!(%e, "failed to ensure kafka topics");
     }
@@ -149,13 +155,10 @@ async fn main() -> std::io::Result<()> {
             recycling_method: RecyclingMethod::Fast,
         },
     );
-    let pool = Pool::builder(mgr)
-        .max_size(16)
-        .build()
-        .map_err(|e| {
-            error!(%e, "db pool build failed");
-            std::io::Error::new(std::io::ErrorKind::Other, "db-pool")
-        })?;
+    let pool = Pool::builder(mgr).max_size(16).build().map_err(|e| {
+        error!(%e, "db pool build failed");
+        std::io::Error::new(std::io::ErrorKind::Other, "db-pool")
+    })?;
     info!("created postgres pool");
 
     // Schema sicherstellen (idempotent)
@@ -359,7 +362,8 @@ async fn main() -> std::io::Result<()> {
                                         let char_count: i32 = normalized_text
                                             .chars()
                                             .filter(|c| !c.is_whitespace())
-                                            .count() as i32;
+                                            .count()
+                                            as i32;
                                         let lang: Option<&str> = None;
                                         let has_bbox = page
                                             .layout
@@ -473,7 +477,7 @@ async fn main() -> std::io::Result<()> {
             .route("/texts", web::get().to(list_texts))
             .route("/analyze", web::post().to(start_analysis))
     })
-        .bind(("0.0.0.0", 8083))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8083))?
+    .run()
+    .await
 }

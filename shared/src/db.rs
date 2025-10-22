@@ -22,12 +22,13 @@ pub async fn fetch_pdf(db: &Client, id: i32) -> Result<Vec<u8>> {
 
 /// Create or upsert a tenant by name and return (id, name).
 pub async fn create_tenant(db: &Client, name: &str) -> Result<(Uuid, String)> {
-    let row = db.query_one(
-        "INSERT INTO tenants (name) VALUES ($1)
+    let row = db
+        .query_one(
+            "INSERT INTO tenants (name) VALUES ($1)
          ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name
          RETURNING id, name",
-        &[&name],
-    )
+            &[&name],
+        )
         .await
         .context("create_tenant")?;
     Ok((row.get(0), row.get(1)))
@@ -43,7 +44,11 @@ pub async fn list_tenants(db: &Client) -> Result<Vec<(Uuid, String)>> {
 }
 
 /// Executes the provided query and converts the first column to JSON values.
-async fn query_json_vec(db: &Client, sql: &str, params: &[&(dyn ToSql + Sync)]) -> Result<Vec<Value>> {
+async fn query_json_vec(
+    db: &Client,
+    sql: &str,
+    params: &[&(dyn ToSql + Sync)],
+) -> Result<Vec<Value>> {
     let rows = db.query(sql, params).await.context("db query_json_vec")?;
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
@@ -74,7 +79,7 @@ pub async fn list_analyses_with_tenant_json(
         "#,
         &[&tenant_like, &status, &limit, &offset],
     )
-        .await
+    .await
 }
 
 /// Query history from v_analysis_history_with_tenant with optional filters.
@@ -97,5 +102,5 @@ pub async fn list_history_with_tenant_json(
         "#,
         &[&tenant_like, &status, &limit, &offset],
     )
-        .await
+    .await
 }

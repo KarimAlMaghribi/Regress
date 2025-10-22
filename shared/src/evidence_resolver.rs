@@ -24,7 +24,11 @@ pub fn normalize(s: &str) -> String {
 
         // Remove hyphenation across line breaks so the underlying words remain
         // searchable.
-        if c == '-' && i + 2 < chars.len() && chars[i + 1].is_whitespace() && chars[i + 2].is_alphanumeric() {
+        if c == '-'
+            && i + 2 < chars.len()
+            && chars[i + 1].is_whitespace()
+            && chars[i + 2].is_alphanumeric()
+        {
             // überspringe '-' und alle folgenden Whitespaces
             i += 1;
             while i < chars.len() && chars[i].is_whitespace() {
@@ -87,7 +91,11 @@ pub fn resolve_page(
 ) -> Option<(u32, f32)> {
     let cand = {
         let q = normalize(quote);
-        if !q.is_empty() { q } else { normalize(value) }
+        if !q.is_empty() {
+            q
+        } else {
+            normalize(value)
+        }
     };
     if cand.len() < 4 {
         return None;
