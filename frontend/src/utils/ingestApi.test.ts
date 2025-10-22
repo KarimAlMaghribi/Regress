@@ -18,12 +18,12 @@ afterEach(() => {
 });
 
 describe('normalizeSharePointBase', () => {
-  it('appends /ingest to absolute URLs that have no path', () => {
+  it('does not append /ingest to absolute URLs that have no path', () => {
     expect(normalizeSharePointBase('https://sharepoint.example.com'))
-        .toBe('https://sharepoint.example.com/ingest');
+        .toBe('https://sharepoint.example.com');
   });
 
-  it('normalizes placeholder hosts to the current origin with /ingest', () => {
+  it('normalizes placeholder hosts to the current origin', () => {
     const mockWindow = {
       location: {
         hostname: 'tenant.sharepoint.local',
@@ -34,12 +34,16 @@ describe('normalizeSharePointBase', () => {
     globalThis.window = mockWindow;
 
     expect(normalizeSharePointBase('https://helium.adesso.claims'))
-        .toBe('https://tenant.sharepoint.local:8080/ingest');
+        .toBe('https://tenant.sharepoint.local:8080');
   });
 
   it('preserves explicit /ingest paths', () => {
     expect(normalizeSharePointBase('https://sharepoint.example.com/ingest/'))
         .toBe('https://sharepoint.example.com/ingest');
+  });
+
+  it('keeps http absolute URLs without a path unchanged', () => {
+    expect(normalizeSharePointBase('http://localhost:8080')).toBe('http://localhost:8080');
   });
 
   it('returns relative /ingest unchanged', () => {
