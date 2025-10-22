@@ -63,6 +63,14 @@ successful save (name, step or order change).
 Optional query parameter `type` filters the returned prompts by their stored `PromptType`.
 Each prompt item contains `text`, `type` and `weight` fields.
 
+### Evaluate a stored prompt
+`POST /prompts/:id/evaluate`
+
+Runs the configured prompt through the evaluation LLM and returns a JSON object with
+`score`, `strengths`, `issues`, `guardrails`, `suggested_prompt` and `notes`. This
+allows the frontend to surface automated improvement suggestions without persisting
+any changes automatically.
+
 ### Manage prompt groups
 `GET /prompt-groups` – list groups
 

@@ -16,6 +16,7 @@ strum.workspace = true
 strum_macros.workspace = true
 shared = { path = "../../shared" }
 url = "2"
+awc = { version = "3", features = ["rustls"] }
 
 [dependencies.sea-orm]
 version = "0.12"
