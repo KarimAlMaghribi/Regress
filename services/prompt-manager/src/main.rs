@@ -1,8 +1,8 @@
 //! REST API for managing prompts, groups and pipeline associations.
 
-use awc::Client;
+use reqwest::Client;
 use axum::{
-    extract::{Path, State, Query},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post, put},
     Json, Router,

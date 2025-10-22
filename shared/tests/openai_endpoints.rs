@@ -1,8 +1,9 @@
-use awc::Client;
+use reqwest::Client;
+use serial_test::serial;
+use tokio::runtime::Builder;
 use httpmock::prelude::*;
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
 use serde_json::json;
-use serial_test::serial;
 use shared::openai_client;
 
 fn base_messages() -> Vec<ChatCompletionMessage> {
@@ -21,13 +22,18 @@ fn base_messages() -> Vec<ChatCompletionMessage> {
 }
 
 #[serial]
-#[tokio::test]
-async fn responses_endpoint_parses_output_text() -> anyhow::Result<()> {
-    let server = MockServer::start_async().await;
-    let mock = server
-        .mock_async(|when, then| {
-            when.method(POST).path("/v1/responses");
-            then.status(200)
+#[test]
+fn responses_endpoint_parses_output_text() -> anyhow::Result<()> {
+    let rt = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(anyhow::Error::new)?;
+    rt.block_on(async {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/responses");
+                then.status(200)
                 .header("content-type", "application/json")
                 .body(
                     r#"{"output":[{"content":[{"type":"output_text","text":"{\"ok\":true}"}]}]}"#,
@@ -47,24 +53,30 @@ async fn responses_endpoint_parses_output_text() -> anyhow::Result<()> {
     openai_client::configure_openai_defaults("gpt-test", &endpoint);
     openai_client::prefer_responses_endpoint();
 
-    let client = Client::default();
+    let client = Client::new();
     let response =
         openai_client::call_openai_chat(&client, "gpt-test", base_messages(), None, None).await?;
     let parsed: serde_json::Value = serde_json::from_str(&response)?;
     assert_eq!(parsed, json!({"ok": true}));
 
     mock.assert_async().await;
-    Ok(())
+        Ok(())
+    })
 }
 
 #[serial]
-#[tokio::test]
-async fn chat_endpoint_returns_json_content() -> anyhow::Result<()> {
-    let server = MockServer::start_async().await;
-    let mock = server
-        .mock_async(|when, then| {
-            when.method(POST).path("/v1/chat/completions");
-            then.status(200)
+#[test]
+fn chat_endpoint_returns_json_content() -> anyhow::Result<()> {
+    let rt = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(anyhow::Error::new)?;
+    rt.block_on(async {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/chat/completions");
+                then.status(200)
                 .header("content-type", "application/json")
                 .body(
                     r#"{"choices":[{"message":{"role":"assistant","content":"{\"score\":1}"}}]}"#,
@@ -81,24 +93,30 @@ async fn chat_endpoint_returns_json_content() -> anyhow::Result<()> {
     openai_client::configure_openai_defaults("gpt-chat", &endpoint);
     openai_client::prefer_chat_endpoint();
 
-    let client = Client::default();
+    let client = Client::new();
     let response =
         openai_client::call_openai_chat(&client, "gpt-chat", base_messages(), None, None).await?;
     let parsed: serde_json::Value = serde_json::from_str(&response)?;
     assert_eq!(parsed, json!({"score": 1}));
 
     mock.assert_async().await;
-    Ok(())
+        Ok(())
+    })
 }
 
 #[serial]
-#[tokio::test]
-async fn chat_endpoint_extracts_json_from_prefixed_text() -> anyhow::Result<()> {
-    let server = MockServer::start_async().await;
-    let mock = server
-        .mock_async(|when, then| {
-            when.method(POST).path("/v1/chat/completions");
-            then.status(200)
+#[test]
+fn chat_endpoint_extracts_json_from_prefixed_text() -> anyhow::Result<()> {
+    let rt = Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(anyhow::Error::new)?;
+    rt.block_on(async {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/chat/completions");
+                then.status(200)
                 .header("content-type", "application/json")
                 .body(r#"{"choices":[{"message":{"role":"assistant","content":"Here is JSON:\n{\"foo\":1}"}}]}"#);
         })
@@ -113,12 +131,13 @@ async fn chat_endpoint_extracts_json_from_prefixed_text() -> anyhow::Result<()> 
     openai_client::configure_openai_defaults("gpt-chat", &endpoint);
     openai_client::prefer_chat_endpoint();
 
-    let client = Client::default();
+    let client = Client::new();
     let response =
         openai_client::call_openai_chat(&client, "gpt-chat", base_messages(), None, None).await?;
     let parsed: serde_json::Value = serde_json::from_str(&response)?;
     assert_eq!(parsed, json!({"foo": 1}));
 
     mock.assert_async().await;
-    Ok(())
+        Ok(())
+    })
 }

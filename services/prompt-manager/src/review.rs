@@ -1,4 +1,4 @@
-use awc::Client;
+use reqwest::Client;
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
 use serde::{Deserialize, Serialize};
 use shared::dto::PromptType;

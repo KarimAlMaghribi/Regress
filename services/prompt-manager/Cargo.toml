@@ -16,7 +16,9 @@ strum.workspace = true
 strum_macros.workspace = true
 shared = { path = "../../shared" }
 url = "2"
-awc = { version = "3", features = ["rustls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+openai.workspace = true
+thiserror.workspace = true
 
 [dependencies.sea-orm]
 version = "0.12"
