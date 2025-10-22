@@ -8,7 +8,7 @@ mod pipeline_adapter;
 mod scan;
 mod upload_adapter;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -126,6 +126,12 @@ struct ProcessedFoldersResponse {
     items: Vec<ProcessedFolderItem>,
 }
 
+#[derive(serde::Deserialize)]
+struct ProcessedFoldersQuery {
+    #[serde(default)]
+    stage: Option<String>,
+}
+
 #[derive(serde::Serialize)]
 struct ProcessedFolderItem {
     job_id: Uuid,
@@ -139,6 +145,20 @@ struct ProcessedFolderItem {
     pipeline_run_id: Option<Uuid>,
     upload_id: Option<i32>,
     pdf_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upload_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_status: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_status_category: Option<JobStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_progress: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_finished_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -370,8 +390,32 @@ async fn list_folders(
         .list_subfolders(&base)
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
+    let client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let rows = client
+        .query("SELECT folder_id, status FROM sharepoint_jobs", &[])
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut hidden_folders: HashSet<String> = HashSet::new();
+    for row in rows {
+        let folder_id: String = row.get("folder_id");
+        let status_text: String = row.get("status");
+        match JobStatus::from_str(&status_text) {
+            Ok(JobStatus::Failed) | Ok(JobStatus::Canceled) => {}
+            Ok(_) => {
+                hidden_folders.insert(folder_id);
+            }
+            Err(_) => {
+                hidden_folders.insert(folder_id);
+            }
+        }
+    }
     let items = folders
         .into_iter()
+        .filter(|folder| !hidden_folders.contains(&folder.id))
         .map(|folder| FolderItem {
             id: folder.id,
             name: folder.name,
@@ -456,6 +500,7 @@ async fn list_jobs(
 async fn list_processed_folders(
     req: HttpRequest,
     state: web::Data<AppState>,
+    query: web::Query<ProcessedFoldersQuery>,
 ) -> actix_web::Result<impl Responder> {
     ensure_authorized(&req, &state.config)?;
     let client = state
@@ -463,23 +508,69 @@ async fn list_processed_folders(
         .get()
         .await
         .map_err(actix_web::error::ErrorInternalServerError)?;
-    let rows = client
-        .query(
-            "SELECT id, folder_id, folder_name, status, progress, message, tenant_id,
-                    pipeline_id, pipeline_run_id, upload_id, pdf_id, created_at, updated_at
-             FROM sharepoint_jobs
-             WHERE status = 'succeeded' AND upload_id IS NOT NULL
-             ORDER BY updated_at DESC",
-            &[],
-        )
-        .await
-        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let stage = query
+        .stage
+        .as_deref()
+        .unwrap_or("pending")
+        .to_ascii_lowercase();
+    let include_pipeline = matches!(stage.as_str(), "completed" | "finished");
+    let rows = if include_pipeline {
+        client
+            .query(
+                "SELECT sp.id, sp.folder_id, sp.folder_name, sp.status, sp.progress, sp.message, sp.tenant_id,
+                        sp.pipeline_id, sp.pipeline_run_id, sp.upload_id, sp.pdf_id, sp.created_at, sp.updated_at,
+                        u.status AS upload_status, pr.status AS pipeline_status, pr.error AS pipeline_error,
+                        pr.started_at AS pipeline_started_at, pr.finished_at AS pipeline_finished_at
+                 FROM sharepoint_jobs sp
+                 JOIN uploads u ON u.id = sp.upload_id
+                 LEFT JOIN pipeline_runs pr ON pr.id = sp.pipeline_run_id
+                 WHERE sp.status = 'succeeded' AND sp.upload_id IS NOT NULL AND sp.pipeline_run_id IS NOT NULL
+                       AND lower(u.status) = 'ready'
+                 ORDER BY sp.updated_at DESC",
+                &[],
+            )
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?
+    } else {
+        client
+            .query(
+                "SELECT sp.id, sp.folder_id, sp.folder_name, sp.status, sp.progress, sp.message, sp.tenant_id,
+                        sp.pipeline_id, sp.pipeline_run_id, sp.upload_id, sp.pdf_id, sp.created_at, sp.updated_at,
+                        u.status AS upload_status
+                 FROM sharepoint_jobs sp
+                 JOIN uploads u ON u.id = sp.upload_id
+                 WHERE sp.status = 'succeeded' AND sp.upload_id IS NOT NULL AND lower(u.status) = 'ready'
+                       AND sp.pipeline_run_id IS NULL
+                 ORDER BY sp.updated_at DESC",
+                &[],
+            )
+            .await
+            .map_err(actix_web::error::ErrorInternalServerError)?
+    };
 
     let mut items = Vec::with_capacity(rows.len());
     for row in rows {
         let status_text: String = row.get("status");
         let status = JobStatus::from_str(&status_text).unwrap_or(JobStatus::Succeeded);
         let progress: f64 = row.get("progress");
+        let (
+            pipeline_status,
+            pipeline_status_category,
+            pipeline_progress,
+            pipeline_error,
+            pipeline_started_at,
+            pipeline_finished_at,
+        ) = if include_pipeline {
+            let status: Option<String> = row.get("pipeline_status");
+            let category = status.as_deref().map(|value| map_pipeline_status(value));
+            let progress = status.as_deref().map(|value| map_pipeline_progress(value));
+            let error = row.get::<_, Option<String>>("pipeline_error");
+            let started_at = row.get::<_, Option<DateTime<Utc>>>("pipeline_started_at");
+            let finished_at = row.get::<_, Option<DateTime<Utc>>>("pipeline_finished_at");
+            (status, category, progress, error, started_at, finished_at)
+        } else {
+            (None, None, None, None, None, None)
+        };
         items.push(ProcessedFolderItem {
             job_id: row.get("id"),
             folder_id: row.get("folder_id"),
@@ -492,6 +583,13 @@ async fn list_processed_folders(
             pipeline_run_id: row.get("pipeline_run_id"),
             upload_id: row.get("upload_id"),
             pdf_id: row.get("pdf_id"),
+            upload_status: Some(row.get("upload_status")),
+            pipeline_status,
+            pipeline_status_category,
+            pipeline_progress,
+            pipeline_error,
+            pipeline_started_at,
+            pipeline_finished_at,
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         });
@@ -548,7 +646,10 @@ async fn run_processed_folders(
     for job_id in &payload.job_ids {
         let row = client
             .query_opt(
-                "SELECT status, upload_id, pdf_id, folder_name FROM sharepoint_jobs WHERE id = $1",
+                "SELECT sp.status, sp.upload_id, sp.pdf_id, sp.folder_name, u.status AS upload_status
+                 FROM sharepoint_jobs sp
+                 LEFT JOIN uploads u ON u.id = sp.upload_id
+                 WHERE sp.id = $1",
                 &[job_id],
             )
             .await
@@ -581,6 +682,19 @@ async fn run_processed_folders(
             continue;
         }
         let upload_id = upload_id.unwrap();
+        let upload_status: Option<String> = row.get("upload_status");
+        let is_ready = upload_status
+            .as_deref()
+            .map(|status| status.eq_ignore_ascii_case("ready"))
+            .unwrap_or(false);
+        if !is_ready {
+            let status = upload_status.as_deref().unwrap_or("unknown");
+            skipped.push(ProcessedRunSkipped {
+                job_id: *job_id,
+                reason: format!("upload status is {status}"),
+            });
+            continue;
+        }
         let pdf_id: Option<i32> = row.get("pdf_id");
         let folder_name: String = row.get("folder_name");
 
