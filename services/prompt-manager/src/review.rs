@@ -1,15 +1,17 @@
-use reqwest::Client;
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
+use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use shared::dto::PromptType;
 use shared::openai_client::{self, PromptError};
 use shared::openai_settings;
 
-const SYSTEM_PROMPT: &str = r#"Du bist ein deutschsprachiger Senior Prompt Engineer für Schadenmanagementprozesse in der Versicherungsbranche. 
+const SYSTEM_PROMPT: &str = r#"Du bist ein deutschsprachiger Senior Prompt Engineer für Schadenmanagementprozesse in der Versicherungsbranche.
 Analysiere den gelieferten Prompt ausschließlich im Hinblick auf:
 - fachliche Zielerreichung für den angegebenen Prompt-Typ,
-- Robustheit gegenüber Halluzinationen,
-- klare Output-Spezifikation für Downstream-Services.
+- Konsistenz mit versicherungsfachlichen Richtlinien und Produktlogiken,
+- Auswirkungen auf Schadenbearbeitung und Kundenerlebnis.
+
+Ignoriere technische oder implementierungsbezogene Lücken (z. B. JSON-Strukturen, API-Parameter) und konzentriere dich ausschließlich auf fachliche Aspekte.
 
 Antworte zwingend mit exakt einem JSON-Objekt und folgenden Feldern:
 {
@@ -22,14 +24,15 @@ Antworte zwingend mit exakt einem JSON-Objekt und folgenden Feldern:
 }
 
 - "suggested_prompt" enthält einen vollständig überarbeiteten Prompt in der gleichen Sprache wie der Eingangstext.
+- Stelle sicher, dass Stärken, Issues, Guardrails, Notes und der "suggested_prompt" ausschließlich fachliche Empfehlungen enthalten.
 - Lasse keine Felder weg; verwende leere Arrays, wenn nichts gefunden wurde."#;
 
 const EXTRACTION_TEMPLATE: &str = r#"PROMPT_TYP: ExtractionPrompt
 JSON_KEY: {json_key}
 ANFORDERUNG:
-- Prüfe, ob der Prompt präzise beschreibt, welche strukturierten Informationen extrahiert werden sollen.
-- Bewerte, ob JSON-Ausgaben eindeutig definiert sind (Schlüssel, Datentypen, Nullbarkeit).
-- Achte auf Robustheit gegen fehlende Informationen und Mehrfachfundstellen.
+- Prüfe, ob der Prompt präzise beschreibt, welche fachlichen Informationen (z. B. Deckungsdetails, beteiligte Parteien, Schadenhöhe) extrahiert werden sollen.
+- Bewerte, ob alle relevanten Versicherungskonzepte, Fristen oder Policenmerkmale berücksichtigt werden.
+- Achte auf Robustheit gegen fehlende Angaben oder widersprüchliche Informationen in Schadenunterlagen.
 
 PROMPT_TEXT:
 <<<{prompt_text}>>>"#;
@@ -38,8 +41,8 @@ const SCORING_TEMPLATE: &str = r#"PROMPT_TYP: ScoringPrompt
 GEWICHT: {weight}
 ANFORDERUNG:
 - Prüfe, ob der Prompt eine eindeutige Ja/Nein-Entscheidung (oder Ternärlabel) inklusive Begründung verlangt.
-- Überprüfe, ob Evidenzstellen (z. B. Zitat + Position) gefordert werden.
-- Bewerte, ob das Regelwerk konsistent mit einer gewichteten Entscheidungslogik ist.
+- Überprüfe, ob die geforderten Begründungen auf relevante Vertrags- und Schadeninformationen Bezug nehmen.
+- Bewerte, ob das Regelwerk konsistent mit den fachlichen Bewertungsrichtlinien und Gewichtungen im Schadenmanagement ist.
 
 PROMPT_TEXT:
 <<<{prompt_text}>>>"#;
@@ -47,9 +50,9 @@ PROMPT_TEXT:
 const DECISION_TEMPLATE: &str = r#"PROMPT_TYP: DecisionPrompt
 GEWICHT: {weight}
 ANFORDERUNG:
-- Prüfe, ob der Prompt klar definiert, welche Eingaben (Scoring-Ergebnisse, Extraktionen) als Entscheidungsgrundlage dienen.
-- Stelle sicher, dass Ausgabekategorien, Schwellenwerte oder Routing-Anweisungen eindeutig beschrieben werden.
-- Bewerte, ob Fehlerfälle oder unvollständige Daten adressiert werden.
+- Prüfe, ob der Prompt klar definiert, welche fachlichen Eingaben (Scoring-Ergebnisse, Extraktionen) als Entscheidungsgrundlage dienen.
+- Stelle sicher, dass Ausgabekategorien, Schwellenwerte oder Routing-Anweisungen fachlich sinnvoll und nachvollziehbar beschrieben werden.
+- Bewerte, ob Sonder- und Fehlerfälle (z. B. Kulanz, Betrugsverdacht, regulatorische Vorgaben) angemessen adressiert werden.
 
 PROMPT_TEXT:
 <<<{prompt_text}>>>"#;

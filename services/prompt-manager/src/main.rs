@@ -1,12 +1,12 @@
 //! REST API for managing prompts, groups and pipeline associations.
 
-use reqwest::Client;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post, put},
     Json, Router,
 };
+use reqwest::Client;
 use sea_orm::prelude::Decimal;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, ConnectionTrait, Database, DatabaseConnection, EntityTrait,
