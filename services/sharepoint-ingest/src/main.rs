@@ -17,7 +17,7 @@ use actix_web::{
     error::ErrorBadRequest, http::header, middleware::Logger, web, App, HttpRequest, HttpResponse,
     HttpServer, Responder,
 };
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use chrono::{DateTime, Utc};
 use deadpool_postgres::{Manager, ManagerConfig, Pool, RecyclingMethod};
 use job::{job_summary, JobOrder, JobPersistence, JobRegistry, JobStatus, JobStore, ManagedJob};
@@ -31,6 +31,33 @@ use tokio_postgres::NoTls;
 use tracing::{error, info, warn};
 use upload_adapter::UploadAdapter;
 use uuid::Uuid;
+
+const SHAREPOINT_SCHEMA_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS sharepoint_jobs (
+    id UUID PRIMARY KEY,
+    folder_id TEXT NOT NULL,
+    folder_name TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('queued','running','paused','succeeded','failed','canceled')),
+    progress DOUBLE PRECISION NOT NULL DEFAULT 0,
+    message TEXT,
+    order_key TEXT NOT NULL,
+    filenames_override TEXT[],
+    upload_url TEXT,
+    tenant_id UUID,
+    pipeline_id UUID,
+    pipeline_run_id UUID REFERENCES pipeline_runs(id) ON DELETE SET NULL,
+    upload_id INTEGER,
+    pdf_id INTEGER,
+    output JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sharepoint_jobs_created_at ON sharepoint_jobs (created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_sharepoint_jobs_status ON sharepoint_jobs (status);
+CREATE INDEX IF NOT EXISTS idx_sharepoint_jobs_pdf_id ON sharepoint_jobs (pdf_id);
+CREATE INDEX IF NOT EXISTS idx_sharepoint_jobs_upload_id ON sharepoint_jobs (upload_id);
+"#;
 
 use crate::config::Config;
 
@@ -198,6 +225,11 @@ async fn main() -> std::io::Result<()> {
     })?;
     info!("created postgres pool");
 
+    ensure_sharepoint_schema(&pool).await.map_err(|err| {
+        error!(error = %err, "failed to ensure sharepoint schema");
+        std::io::Error::new(std::io::ErrorKind::Other, "db-migrate")
+    })?;
+
     let job_store = Arc::new(JobStore::new(pool.clone()));
     let jobs = JobRegistry::new(Some(JobPersistence::new(job_store.clone())));
 
@@ -305,6 +337,18 @@ async fn main() -> std::io::Result<()> {
     .bind(bind_addr)?
     .run()
     .await
+}
+
+async fn ensure_sharepoint_schema(pool: &Pool) -> anyhow::Result<()> {
+    let client = pool
+        .get()
+        .await
+        .context("get connection for sharepoint schema setup")?;
+    client
+        .batch_execute(SHAREPOINT_SCHEMA_SQL)
+        .await
+        .context("create sharepoint_jobs schema")?;
+    Ok(())
 }
 
 async fn healthz(
