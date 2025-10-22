@@ -24,10 +24,16 @@ use job::{job_summary, JobOrder, JobPersistence, JobRegistry, JobStatus, JobStor
 use msgraph::{GraphFile, GraphFolder, MsGraphClient};
 use pdfops::merge_pdfs;
 use pipeline_adapter::PipelineAdapter;
+use rdkafka::{
+    consumer::{Consumer, StreamConsumer},
+    ClientConfig, Message,
+};
 use scan::{assert_pdf, scan_with_clamd, ScanConfig};
 use serde_json::json;
+use shared::dto::PipelineRunResult;
 use tokio::sync::{watch, Semaphore};
-use tokio_postgres::NoTls;
+use tokio::time::sleep;
+use tokio_postgres::{NoTls, Row};
 use tracing::{error, info, warn};
 use upload_adapter::UploadAdapter;
 use uuid::Uuid;
@@ -57,6 +63,26 @@ CREATE INDEX IF NOT EXISTS idx_sharepoint_jobs_created_at ON sharepoint_jobs (cr
 CREATE INDEX IF NOT EXISTS idx_sharepoint_jobs_status ON sharepoint_jobs (status);
 CREATE INDEX IF NOT EXISTS idx_sharepoint_jobs_pdf_id ON sharepoint_jobs (pdf_id);
 CREATE INDEX IF NOT EXISTS idx_sharepoint_jobs_upload_id ON sharepoint_jobs (upload_id);
+
+CREATE TABLE IF NOT EXISTS sharepoint_automation (
+    folder_id TEXT PRIMARY KEY,
+    folder_name TEXT NOT NULL,
+    tenant_id UUID,
+    pipeline_id UUID,
+    auto_ingest BOOLEAN NOT NULL DEFAULT FALSE,
+    auto_pipeline BOOLEAN NOT NULL DEFAULT FALSE,
+    last_seen TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_sharepoint_automation_tenant ON sharepoint_automation (tenant_id);
+CREATE INDEX IF NOT EXISTS idx_sharepoint_automation_pipeline ON sharepoint_automation (pipeline_id);
+
+ALTER TABLE sharepoint_jobs
+    ADD COLUMN IF NOT EXISTS auto_managed BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE sharepoint_jobs
+    ADD COLUMN IF NOT EXISTS auto_last_seen_at TIMESTAMPTZ;
 "#;
 
 use crate::config::Config;
@@ -101,6 +127,94 @@ struct FolderItem {
     id: String,
     name: String,
     file_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    automation: Option<FolderAutomation>,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct FolderAutomation {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tenant_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_id: Option<Uuid>,
+    auto_ingest: bool,
+    auto_pipeline: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_seen: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    updated_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone)]
+struct AutomationRecord {
+    folder_id: String,
+    folder_name: String,
+    tenant_id: Option<Uuid>,
+    pipeline_id: Option<Uuid>,
+    auto_ingest: bool,
+    auto_pipeline: bool,
+    last_seen: Option<DateTime<Utc>>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(serde::Serialize)]
+struct AutomationRuleResponse {
+    folder_id: String,
+    folder_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tenant_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pipeline_id: Option<Uuid>,
+    auto_ingest: bool,
+    auto_pipeline: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_seen: Option<DateTime<Utc>>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(serde::Serialize)]
+struct AutomationListResponse {
+    items: Vec<AutomationRuleResponse>,
+}
+
+#[derive(serde::Deserialize)]
+struct AutomationUpsertRequest {
+    #[serde(default)]
+    folder_name: Option<String>,
+    #[serde(default)]
+    tenant_id: Option<Uuid>,
+    #[serde(default)]
+    pipeline_id: Option<Uuid>,
+    #[serde(default)]
+    auto_ingest: Option<bool>,
+    #[serde(default)]
+    auto_pipeline: Option<bool>,
+}
+
+impl AutomationRecord {
+    fn to_folder_automation(&self) -> FolderAutomation {
+        FolderAutomation {
+            tenant_id: self.tenant_id,
+            pipeline_id: self.pipeline_id,
+            auto_ingest: self.auto_ingest,
+            auto_pipeline: self.auto_pipeline,
+            last_seen: self.last_seen,
+            updated_at: Some(self.updated_at),
+        }
+    }
+
+    fn into_response(self) -> AutomationRuleResponse {
+        AutomationRuleResponse {
+            folder_id: self.folder_id,
+            folder_name: self.folder_name,
+            tenant_id: self.tenant_id,
+            pipeline_id: self.pipeline_id,
+            auto_ingest: self.auto_ingest,
+            auto_pipeline: self.auto_pipeline,
+            last_seen: self.last_seen,
+            updated_at: self.updated_at,
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -114,6 +228,8 @@ struct JobCreateRequest {
     upload_url: Option<String>,
     #[serde(default)]
     tenant_id: Option<Uuid>,
+    #[serde(default)]
+    pipeline_id: Option<Uuid>,
 }
 
 #[derive(serde::Serialize)]
@@ -311,6 +427,9 @@ async fn main() -> std::io::Result<()> {
         pipeline,
     };
 
+    spawn_folder_poller(state.clone());
+    spawn_pipeline_result_consumer(state.clone());
+
     let bind_addr = format!("{}:{}", state.config.http_bind, state.config.http_port);
     info!(%bind_addr, "starting server");
 
@@ -345,6 +464,11 @@ async fn main() -> std::io::Result<()> {
             )
             .route("/jobs/all", web::get().to(list_all_jobs))
             .service(
+                web::scope("/automation")
+                    .route("/folders", web::get().to(list_automation_rules))
+                    .route("/folders/{id}", web::put().to(upsert_automation_rule)),
+            )
+            .service(
                 web::scope("/jobs")
                     .route("", web::get().to(list_jobs))
                     .route("", web::post().to(create_jobs))
@@ -369,6 +493,49 @@ async fn ensure_sharepoint_schema(pool: &Pool) -> anyhow::Result<()> {
         .await
         .context("create sharepoint_jobs schema")?;
     Ok(())
+}
+
+fn automation_from_row(row: &Row) -> AutomationRecord {
+    AutomationRecord {
+        folder_id: row.get("folder_id"),
+        folder_name: row.get("folder_name"),
+        tenant_id: row.get("tenant_id"),
+        pipeline_id: row.get("pipeline_id"),
+        auto_ingest: row.get("auto_ingest"),
+        auto_pipeline: row.get("auto_pipeline"),
+        last_seen: row.get("last_seen"),
+        updated_at: row.get("updated_at"),
+    }
+}
+
+async fn load_automation_rules(
+    client: &tokio_postgres::Client,
+) -> anyhow::Result<Vec<AutomationRecord>> {
+    let rows = client
+        .query(
+            "SELECT folder_id, folder_name, tenant_id, pipeline_id, auto_ingest, auto_pipeline, last_seen, updated_at
+             FROM sharepoint_automation",
+            &[],
+        )
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| automation_from_row(&row))
+        .collect())
+}
+
+async fn load_automation_rule(
+    client: &tokio_postgres::Client,
+    folder_id: &str,
+) -> anyhow::Result<Option<AutomationRecord>> {
+    let row = client
+        .query_opt(
+            "SELECT folder_id, folder_name, tenant_id, pipeline_id, auto_ingest, auto_pipeline, last_seen, updated_at
+             FROM sharepoint_automation WHERE folder_id = $1",
+            &[&folder_id],
+        )
+        .await?;
+    Ok(row.map(|row| automation_from_row(&row)))
 }
 
 async fn healthz(
@@ -413,13 +580,27 @@ async fn list_folders(
             }
         }
     }
+    let automation_rules = load_automation_rules(&client)
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let mut automation_map: HashMap<String, AutomationRecord> = automation_rules
+        .into_iter()
+        .map(|record| (record.folder_id.clone(), record))
+        .collect();
     let items = folders
         .into_iter()
         .filter(|folder| !hidden_folders.contains(&folder.id))
-        .map(|folder| FolderItem {
-            id: folder.id,
-            name: folder.name,
-            file_count: folder.file_count,
+        .map(|folder| {
+            let folder_id = folder.id.clone();
+            let automation = automation_map
+                .remove(&folder_id)
+                .map(|record| record.to_folder_automation());
+            FolderItem {
+                id: folder_id,
+                name: folder.name,
+                file_count: folder.file_count,
+                automation,
+            }
         })
         .collect::<Vec<_>>();
     Ok(web::Json(FoldersResponse {
@@ -427,6 +608,87 @@ async fn list_folders(
         total: items.len(),
         items,
     }))
+}
+
+async fn list_automation_rules(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+) -> actix_web::Result<impl Responder> {
+    ensure_authorized(&req, &state.config)?;
+    let client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let records = load_automation_rules(&client)
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let items = records
+        .into_iter()
+        .map(AutomationRecord::into_response)
+        .collect();
+    Ok(web::Json(AutomationListResponse { items }))
+}
+
+async fn upsert_automation_rule(
+    req: HttpRequest,
+    state: web::Data<AppState>,
+    path: web::Path<String>,
+    payload: web::Json<AutomationUpsertRequest>,
+) -> actix_web::Result<impl Responder> {
+    ensure_authorized(&req, &state.config)?;
+    let folder_id = path.into_inner();
+    if folder_id.trim().is_empty() {
+        return Err(ErrorBadRequest("folder id required"));
+    }
+
+    let client = state
+        .db_pool
+        .get()
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let existing = load_automation_rule(&client, &folder_id)
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let fallback_name = existing
+        .as_ref()
+        .map(|record| record.folder_name.clone())
+        .unwrap_or_else(|| folder_id.clone());
+    let requested_name = payload
+        .folder_name
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string());
+    let folder_name = requested_name.unwrap_or(fallback_name);
+    let auto_ingest = payload.auto_ingest.unwrap_or(false);
+    let auto_pipeline = payload.auto_pipeline.unwrap_or(false);
+
+    client
+        .execute(
+            "INSERT INTO sharepoint_automation (folder_id, folder_name, tenant_id, pipeline_id, auto_ingest, auto_pipeline)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (folder_id) DO UPDATE SET
+                 folder_name = EXCLUDED.folder_name,
+                 tenant_id = EXCLUDED.tenant_id,
+                 pipeline_id = EXCLUDED.pipeline_id,
+                 auto_ingest = EXCLUDED.auto_ingest,
+                 auto_pipeline = EXCLUDED.auto_pipeline,
+                 updated_at = now()",
+            &[&folder_id, &folder_name, &payload.tenant_id, &payload.pipeline_id, &auto_ingest, &auto_pipeline],
+        )
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+
+    let updated = load_automation_rule(&client, &folder_id)
+        .await
+        .map_err(actix_web::error::ErrorInternalServerError)?;
+    let Some(rule) = updated else {
+        return Ok(HttpResponse::InternalServerError().finish());
+    };
+
+    Ok(HttpResponse::Ok().json(rule.into_response()))
 }
 
 async fn create_jobs(
@@ -458,6 +720,7 @@ async fn create_jobs(
         }
     });
     let tenant_override = payload.tenant_id;
+    let pipeline_override = payload.pipeline_id;
     let app_state = state.get_ref().clone();
     let mut created = Vec::new();
     for folder_id in &payload.folder_ids {
@@ -478,7 +741,8 @@ async fn create_jobs(
             filenames_override.clone(),
             upload_override.clone(),
             tenant_override,
-            None,
+            pipeline_override,
+            false,
         );
         let summary = job_summary(&job);
         spawn_job_worker(app_state.clone(), job);
@@ -790,6 +1054,7 @@ async fn retry_job(
         snapshot.upload_url,
         snapshot.tenant_id,
         snapshot.pipeline_id,
+        snapshot.auto_managed,
     );
     let summary = job_summary(&job);
     let app_state = state.get_ref().clone();
@@ -897,6 +1162,8 @@ fn spawn_job_worker(state: AppState, job: ManagedJob) {
     let config = state.config.clone();
     let semaphore = state.semaphore.clone();
     let mut control_rx = job.control_tx.subscribe();
+    let pipeline = state.pipeline.clone();
+    let db_pool = state.db_pool.clone();
 
     let handle = tokio::spawn(async move {
         jobs.update(&job_id, |s| {
@@ -924,6 +1191,8 @@ fn spawn_job_worker(state: AppState, job: ManagedJob) {
             config.clone(),
             graph.clone(),
             uploader.clone(),
+            pipeline.clone(),
+            db_pool.clone(),
             jobs.clone(),
             job_id,
             job,
@@ -960,10 +1229,221 @@ fn spawn_job_worker(state: AppState, job: ManagedJob) {
     state.jobs.insert_handle(job_id, handle);
 }
 
+fn spawn_folder_poller(state: AppState) {
+    let interval = state.config.automation_poll_interval;
+    if interval.is_zero() {
+        warn!("automation poll interval is zero; poller disabled");
+        return;
+    }
+    let poll_state = state.clone();
+    tokio::spawn(async move {
+        loop {
+            if let Err(err) = poll_automation_once(&poll_state).await {
+                warn!(error = %err, "automation poller iteration failed");
+            }
+            sleep(interval).await;
+        }
+    });
+}
+
+fn spawn_pipeline_result_consumer(state: AppState) {
+    let Some(broker) = state
+        .config
+        .message_broker_url
+        .as_ref()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        warn!("MESSAGE_BROKER_URL missing; pipeline consumer disabled");
+        return;
+    };
+    let topic = state.config.pipeline_result_topic.clone();
+    let group = state.config.pipeline_result_group.clone();
+    let consumer_state = state.clone();
+    tokio::spawn(async move {
+        if let Err(err) = run_pipeline_consumer(consumer_state, broker, topic, group).await {
+            error!(error = %err, "pipeline result consumer stopped");
+        }
+    });
+}
+
+async fn poll_automation_once(state: &AppState) -> anyhow::Result<()> {
+    let folders = state
+        .graph
+        .list_subfolders(&state.config.drive_input_path())
+        .await?;
+    if folders.is_empty() {
+        return Ok(());
+    }
+
+    let mut folder_map: HashMap<String, GraphFolder> = HashMap::new();
+    for folder in folders {
+        folder_map.insert(folder.id.clone(), folder);
+    }
+
+    let client = state.db_pool.get().await?;
+    let rules = load_automation_rules(&client).await?;
+    if rules.is_empty() {
+        return Ok(());
+    }
+
+    let now = Utc::now();
+    for folder in folder_map.values() {
+        let _ = client
+            .execute(
+                "UPDATE sharepoint_automation SET folder_name = $2, last_seen = $3, updated_at = now()
+                 WHERE folder_id = $1",
+                &[&folder.id, &folder.name, &now],
+            )
+            .await?;
+    }
+
+    for rule in rules {
+        if !rule.auto_ingest {
+            continue;
+        }
+        let Some(folder) = folder_map.get(&rule.folder_id) else {
+            continue;
+        };
+
+        let existing = client
+            .query_opt(
+                "SELECT id FROM sharepoint_jobs WHERE folder_id = $1",
+                &[&rule.folder_id],
+            )
+            .await?;
+        if existing.is_some() {
+            continue;
+        }
+
+        let pipeline_id = if rule.auto_pipeline {
+            rule.pipeline_id
+        } else {
+            None
+        };
+
+        let job = state.jobs.create_job(
+            folder.id.clone(),
+            folder.name.clone(),
+            JobOrder::Alpha,
+            None,
+            None,
+            rule.tenant_id,
+            pipeline_id,
+            true,
+        );
+        let job_id = job.state.lock().id;
+        state.jobs.update(&job_id, |s| {
+            s.set_message("Automatischer Import gestartet");
+        });
+        info!(%job_id, folder = %folder.name, auto_pipeline = rule.auto_pipeline, "automation job created");
+        spawn_job_worker(state.clone(), job);
+    }
+
+    Ok(())
+}
+
+async fn run_pipeline_consumer(
+    state: AppState,
+    broker: String,
+    topic: String,
+    group: String,
+) -> anyhow::Result<()> {
+    let consumer: StreamConsumer = ClientConfig::new()
+        .set("group.id", &group)
+        .set("bootstrap.servers", &broker)
+        .set("enable.auto.commit", "true")
+        .set("auto.offset.reset", "earliest")
+        .create()?;
+    consumer.subscribe(&[&topic])?;
+    info!(%topic, %group, "pipeline result consumer started");
+
+    loop {
+        match consumer.recv().await {
+            Err(err) => warn!(error = %err, "kafka receive error"),
+            Ok(message) => {
+                if let Some(Ok(payload)) = message.payload_view::<str>() {
+                    match serde_json::from_str::<PipelineRunResult>(payload) {
+                        Ok(event) => {
+                            if let Err(err) = handle_pipeline_result(&state, event).await {
+                                warn!(error = %err, "failed to apply pipeline result");
+                            }
+                        }
+                        Err(err) => {
+                            warn!(error = %err, "failed to parse pipeline result payload");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+async fn handle_pipeline_result(state: &AppState, result: PipelineRunResult) -> anyhow::Result<()> {
+    let client = state.db_pool.get().await?;
+    let row = client
+        .query_opt(
+            "SELECT id FROM sharepoint_jobs WHERE pdf_id = $1 ORDER BY created_at DESC LIMIT 1",
+            &[&result.pdf_id],
+        )
+        .await?;
+
+    let Some(row) = row else {
+        warn!(
+            pdf_id = result.pdf_id,
+            "no sharepoint job found for pipeline result"
+        );
+        return Ok(());
+    };
+
+    let job_id: Uuid = row.get("id");
+    client
+        .execute(
+            "UPDATE sharepoint_jobs
+             SET pipeline_id = COALESCE(pipeline_id, $1),
+                 pipeline_run_id = COALESCE($2, pipeline_run_id),
+                 updated_at = now()
+             WHERE id = $3",
+            &[&result.pipeline_id, &result.run_id, &job_id],
+        )
+        .await?;
+
+    let status_text = result
+        .status
+        .clone()
+        .unwrap_or_else(|| "finished".to_string());
+    let run_id = result.run_id;
+    state.jobs.update(&job_id, |state| {
+        if state.pipeline_id.is_none() {
+            state.pipeline_id = Some(result.pipeline_id);
+        }
+        if let Some(run_id) = run_id {
+            state.pipeline_run_id = Some(run_id);
+        }
+        let category = map_pipeline_status(&status_text);
+        let mut message = match category {
+            JobStatus::Succeeded => "Pipeline abgeschlossen".to_string(),
+            JobStatus::Failed => format!("Pipeline fehlgeschlagen ({status_text})"),
+            JobStatus::Running => "Pipeline gestartet".to_string(),
+            JobStatus::Queued => "Pipeline eingereiht".to_string(),
+            JobStatus::Canceled => "Pipeline abgebrochen".to_string(),
+            JobStatus::Paused => "Pipeline pausiert".to_string(),
+        };
+        if let Some(run_id) = run_id {
+            message.push_str(&format!(" – Run {run_id}"));
+        }
+        state.set_message(message);
+    });
+
+    Ok(())
+}
+
 async fn run_job_inner(
     config: Arc<Config>,
     graph: Arc<MsGraphClient>,
     uploader: Arc<UploadAdapter>,
+    pipeline: Arc<PipelineAdapter>,
+    db_pool: Pool,
     jobs: JobRegistry,
     job_id: Uuid,
     job: ManagedJob,
@@ -1029,14 +1509,13 @@ async fn run_job_inner(
     let upload_name = format!("{}-merged.pdf", sanitize_filename(&snapshot.folder_name));
     let upload_override = snapshot.upload_url.clone();
     let tenant_override = snapshot.tenant_id;
-    let pipeline_override = snapshot.pipeline_id;
     let upload_result = uploader
         .upload(
             &merged_path,
             &upload_name,
             upload_override.as_deref(),
             tenant_override,
-            pipeline_override,
+            snapshot.pipeline_id,
         )
         .await
         .map_err(JobRunError::Failure)?;
@@ -1046,9 +1525,64 @@ async fn run_job_inner(
         s.set_output(upload_result.clone());
     });
 
+    let pipeline_id = jobs
+        .get(&job_id)
+        .map(|managed| managed.state.lock().pipeline_id)
+        .unwrap_or(snapshot.pipeline_id);
+
+    let upload_ready = upload_result.upload_id;
+
+    if let Some(pipeline_id) = pipeline_id {
+        if let Some(upload_id) = upload_ready {
+            jobs.update(&job_id, |s| {
+                s.pipeline_id = Some(pipeline_id);
+                s.set_message("prüfe Upload-Status für Pipeline");
+            });
+            let ready = wait_for_upload_ready(
+                &db_pool,
+                upload_id,
+                config.upload_ready_poll_attempts,
+                config.upload_ready_poll_interval,
+            )
+            .await
+            .map_err(JobRunError::Failure)?;
+
+            if ready {
+                match pipeline.start_run(pipeline_id, upload_id).await {
+                    Ok(_) => {
+                        info!(%job_id, %upload_id, %pipeline_id, "pipeline run started automatically");
+                        jobs.update(&job_id, |s| {
+                            s.pipeline_id = Some(pipeline_id);
+                            s.set_message("Pipeline automatisch gestartet");
+                        });
+                    }
+                    Err(err) => {
+                        warn!(%job_id, %upload_id, error = %err, "automatic pipeline start failed");
+                        jobs.update(&job_id, |s| {
+                            s.set_message(format!("Pipeline-Start fehlgeschlagen: {err}"));
+                        });
+                    }
+                }
+            } else {
+                warn!(%job_id, %upload_id, "upload not ready for pipeline start");
+                jobs.update(&job_id, |s| {
+                    s.set_message("Upload noch nicht bereit für Pipeline");
+                });
+            }
+        } else {
+            warn!(%job_id, "upload id missing; cannot start pipeline automatically");
+            jobs.update(&job_id, |s| {
+                s.set_message("Upload-ID fehlt für Pipeline-Start");
+            });
+        }
+    } else {
+        jobs.update(&job_id, |s| {
+            s.set_message("bereit für Pipeline-Verarbeitung");
+        });
+    }
+
     jobs.update(&job_id, |s| {
         s.set_progress(download_weight + merge_weight + upload_weight);
-        s.set_message("bereit für Pipeline-Verarbeitung");
     });
 
     Ok(())
@@ -1115,6 +1649,32 @@ async fn handle_control_error(err: JobRunError, jobs: &JobRegistry, job_id: Uuid
             });
         }
     }
+}
+
+async fn wait_for_upload_ready(
+    pool: &Pool,
+    upload_id: i32,
+    max_attempts: u32,
+    interval: std::time::Duration,
+) -> anyhow::Result<bool> {
+    for attempt in 0..max_attempts {
+        let client = pool.get().await?;
+        let row = client
+            .query_opt("SELECT status FROM uploads WHERE id = $1", &[&upload_id])
+            .await?;
+        if let Some(row) = row {
+            let status: String = row.get("status");
+            if status.eq_ignore_ascii_case("ready") {
+                return Ok(true);
+            }
+        } else {
+            return Ok(false);
+        }
+        if attempt + 1 < max_attempts {
+            sleep(interval).await;
+        }
+    }
+    Ok(false)
 }
 
 fn order_files(

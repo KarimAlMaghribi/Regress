@@ -9,6 +9,9 @@ import {
   ProcessedFoldersResponse,
   ProcessedRunResponse,
   AggregatedJobsResponse,
+  AutomationListResponse,
+  AutomationRuleSummary,
+  AutomationUpsertRequest,
 } from '../types/ingest';
 
 type RuntimeEnv = {
@@ -182,6 +185,19 @@ export async function runProcessedFolders(payload: { job_ids: string[]; pipeline
 
 export async function fetchAggregatedJobs() {
   const { data } = await client.get<AggregatedJobsResponse>('jobs/all');
+  return data;
+}
+
+export async function fetchAutomationRules() {
+  const { data } = await client.get<AutomationListResponse>('automation/folders');
+  return data;
+}
+
+export async function upsertAutomationRule(folderId: string, payload: AutomationUpsertRequest) {
+  const { data } = await client.put<AutomationRuleSummary>(
+    `automation/folders/${encodeURIComponent(folderId)}`,
+    payload,
+  );
   return data;
 }
 
