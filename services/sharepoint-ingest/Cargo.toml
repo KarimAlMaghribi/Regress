@@ -24,3 +24,5 @@ chrono = { version = "0.4", features = ["serde", "clock"] }
 tempfile = "3"
 rand = "0.8"
 deadpool-postgres = "0.10"
+rdkafka = { workspace = true }
+shared = { path = "../../shared" }

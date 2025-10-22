@@ -26,6 +26,12 @@ pub struct Config {
     pub graph_timeout: Duration,
     pub upload_timeout: Duration,
     pub database_url: String,
+    pub automation_poll_interval: Duration,
+    pub message_broker_url: Option<String>,
+    pub pipeline_result_topic: String,
+    pub pipeline_result_group: String,
+    pub upload_ready_poll_interval: Duration,
+    pub upload_ready_poll_attempts: u32,
 }
 
 impl Config {
@@ -80,6 +86,30 @@ impl Config {
                 .unwrap_or(300),
         );
         let database_url = env::var("DATABASE_URL").context("DATABASE_URL missing")?;
+        let automation_poll_interval = Duration::from_secs(
+            env::var("AUTOMATION_POLL_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|v: &u64| *v > 0)
+                .unwrap_or(120),
+        );
+        let message_broker_url = env::var("MESSAGE_BROKER_URL").ok();
+        let pipeline_result_topic =
+            env::var("PIPELINE_RESULT_TOPIC").unwrap_or_else(|_| "pipeline-result".to_string());
+        let pipeline_result_group =
+            env::var("PIPELINE_RESULT_GROUP").unwrap_or_else(|_| "sharepoint-ingest".to_string());
+        let upload_ready_poll_interval = Duration::from_secs(
+            env::var("UPLOAD_READY_POLL_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|v: &u64| *v > 0)
+                .unwrap_or(5),
+        );
+        let upload_ready_poll_attempts = env::var("UPLOAD_READY_POLL_ATTEMPTS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .filter(|v: &u32| *v > 0)
+            .unwrap_or(12);
 
         Ok(Self {
             tenant_id,
@@ -102,6 +132,12 @@ impl Config {
             graph_timeout,
             upload_timeout,
             database_url,
+            automation_poll_interval,
+            message_broker_url,
+            pipeline_result_topic,
+            pipeline_result_group,
+            upload_ready_poll_interval,
+            upload_ready_poll_attempts,
         })
     }
 

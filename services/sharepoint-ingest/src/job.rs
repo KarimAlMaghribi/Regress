@@ -117,6 +117,8 @@ pub struct JobState {
     pub pipeline_run_id: Option<Uuid>,
     pub upload_id: Option<i32>,
     pub pdf_id: Option<i32>,
+    pub auto_managed: bool,
+    pub auto_last_seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -181,6 +183,8 @@ pub struct JobSummary {
     pub pipeline_run_id: Option<Uuid>,
     pub upload_id: Option<i32>,
     pub pdf_id: Option<i32>,
+    pub auto_managed: bool,
+    pub auto_last_seen_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -205,6 +209,7 @@ impl JobRegistry {
         upload_url: Option<String>,
         tenant_id: Option<Uuid>,
         pipeline_id: Option<Uuid>,
+        auto_managed: bool,
     ) -> ManagedJob {
         let id = Uuid::new_v4();
         let (tx, _rx) = watch::channel(JobCommand::Run);
@@ -225,6 +230,8 @@ impl JobRegistry {
             pipeline_run_id: None,
             upload_id: None,
             pdf_id: None,
+            auto_managed,
+            auto_last_seen_at: auto_managed.then_some(now),
             created_at: now,
             updated_at: now,
         };
@@ -329,6 +336,8 @@ pub fn job_summary(job: &ManagedJob) -> JobSummary {
         pipeline_run_id: state.pipeline_run_id,
         upload_id: state.upload_id,
         pdf_id: state.pdf_id,
+        auto_managed: state.auto_managed,
+        auto_last_seen_at: state.auto_last_seen_at,
         created_at: state.created_at,
         updated_at: state.updated_at,
     }
@@ -380,11 +389,11 @@ impl JobStore {
                 "INSERT INTO sharepoint_jobs (
                     id, folder_id, folder_name, status, progress, message, order_key,
                     filenames_override, upload_url, tenant_id, pipeline_id, pipeline_run_id,
-                    upload_id, pdf_id, output, created_at, updated_at
+                    upload_id, pdf_id, output, auto_managed, auto_last_seen_at, created_at, updated_at
                  ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7,
                     $8, $9, $10, $11, $12,
-                    $13, $14, $15, $16, $17
+                    $13, $14, $15, $16, $17, $18, $19
                  )
                  ON CONFLICT (id) DO UPDATE SET
                     folder_id = EXCLUDED.folder_id,
@@ -401,6 +410,8 @@ impl JobStore {
                     upload_id = EXCLUDED.upload_id,
                     pdf_id = EXCLUDED.pdf_id,
                     output = EXCLUDED.output,
+                    auto_managed = EXCLUDED.auto_managed,
+                    auto_last_seen_at = EXCLUDED.auto_last_seen_at,
                     updated_at = EXCLUDED.updated_at",
                 &[
                     &state.id,
@@ -418,6 +429,8 @@ impl JobStore {
                     &state.upload_id,
                     &state.pdf_id,
                     &output_json,
+                    &state.auto_managed,
+                    &state.auto_last_seen_at,
                     &state.created_at,
                     &state.updated_at,
                 ],
@@ -432,7 +445,7 @@ impl JobStore {
             .query(
                 "SELECT id, folder_id, folder_name, status, progress, message, order_key,
                         filenames_override, upload_url, tenant_id, pipeline_id, pipeline_run_id,
-                        upload_id, pdf_id, output, created_at, updated_at
+                        upload_id, pdf_id, output, auto_managed, auto_last_seen_at, created_at, updated_at
                  FROM sharepoint_jobs
                  ORDER BY created_at ASC",
                 &[],
@@ -459,6 +472,8 @@ impl JobStore {
             let pipeline_run_id: Option<Uuid> = row.get("pipeline_run_id");
             let upload_id: Option<i32> = row.get("upload_id");
             let pdf_id: Option<i32> = row.get("pdf_id");
+            let auto_managed: bool = row.get("auto_managed");
+            let auto_last_seen_at: Option<DateTime<Utc>> = row.get("auto_last_seen_at");
             let output_value: Option<Value> = row.get("output");
             let output = match output_value {
                 Some(value) => match serde_json::from_value::<UploadResult>(value) {
@@ -490,6 +505,8 @@ impl JobStore {
                 pipeline_run_id,
                 upload_id,
                 pdf_id,
+                auto_managed,
+                auto_last_seen_at,
                 created_at,
                 updated_at,
             });

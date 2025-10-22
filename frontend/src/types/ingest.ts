@@ -6,10 +6,20 @@ export type JobStatus =
   | 'failed'
   | 'canceled';
 
+export interface FolderAutomationSummary {
+  tenant_id?: string | null;
+  pipeline_id?: string | null;
+  auto_ingest: boolean;
+  auto_pipeline: boolean;
+  last_seen?: string | null;
+  updated_at?: string | null;
+}
+
 export interface FolderSummary {
   id: string;
   name: string;
   file_count: number;
+  automation?: FolderAutomationSummary;
 }
 
 export interface FolderListResponse {
@@ -42,6 +52,8 @@ export interface JobSummary {
   pipeline_run_id?: string | null;
   upload_id?: number | null;
   pdf_id?: number | null;
+  auto_managed: boolean;
+  auto_last_seen_at?: string | null;
 }
 
 export interface JobsResponse {
@@ -121,6 +133,30 @@ export interface CreateJobsRequest {
   filenames?: Record<string, string[]>;
   tenant_id?: string;
   upload_url?: string;
+  pipeline_id?: string;
+}
+
+export interface AutomationRuleSummary {
+  folder_id: string;
+  folder_name: string;
+  tenant_id?: string | null;
+  pipeline_id?: string | null;
+  auto_ingest: boolean;
+  auto_pipeline: boolean;
+  last_seen?: string | null;
+  updated_at: string;
+}
+
+export interface AutomationListResponse {
+  items: AutomationRuleSummary[];
+}
+
+export interface AutomationUpsertRequest {
+  folder_name?: string;
+  tenant_id?: string | null;
+  pipeline_id?: string | null;
+  auto_ingest?: boolean;
+  auto_pipeline?: boolean;
 }
 
 export interface UploadListEntry {
