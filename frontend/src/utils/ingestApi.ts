@@ -6,6 +6,9 @@ import {
   FolderListResponse,
   JobActionResponse,
   JobsResponse,
+  ProcessedFoldersResponse,
+  ProcessedRunResponse,
+  AggregatedJobsResponse,
 } from '../types/ingest';
 
 type RuntimeEnv = {
@@ -164,6 +167,21 @@ export async function fetchJobs() {
 
 export async function triggerJobAction(jobId: string, action: 'pause' | 'resume' | 'cancel' | 'retry') {
   const { data } = await client.post<JobActionResponse>(`jobs/${jobId}/${action}`);
+  return data;
+}
+
+export async function fetchProcessedFolders() {
+  const { data } = await client.get<ProcessedFoldersResponse>('processed-folders');
+  return data;
+}
+
+export async function runProcessedFolders(payload: { job_ids: string[]; pipeline_id: string }) {
+  const { data } = await client.post<ProcessedRunResponse>('processed-folders/run', payload);
+  return data;
+}
+
+export async function fetchAggregatedJobs() {
+  const { data } = await client.get<AggregatedJobsResponse>('jobs/all');
   return data;
 }
 

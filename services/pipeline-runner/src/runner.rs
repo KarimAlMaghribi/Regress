@@ -54,10 +54,8 @@ pub async fn execute_with_pages(
     );
 
     // Map für Evidence-Resolver: echte Seiten (1-basiert) → Text
-    let page_map: HashMap<u32, String> = pages
-        .iter()
-        .map(|(p, t)| (*p as u32, t.clone()))
-        .collect();
+    let page_map: HashMap<u32, String> =
+        pages.iter().map(|(p, t)| (*p as u32, t.clone())).collect();
 
     let mut extraction_all: Vec<PromptResult> = Vec::new();
     let mut scoring_all: Vec<ScoringResult> = Vec::new();
@@ -102,20 +100,20 @@ pub async fn execute_with_pages(
                             &cfg_clone,
                             &prompt_text_for_log,
                         )
-                            .await
-                            .unwrap_or_else(|e| PromptResult {
-                                prompt_id,
-                                prompt_type: PromptType::ExtractionPrompt,
-                                prompt_text: prompt_text_for_log.clone(),
-                                value: None,
-                                boolean: None,
-                                route: None,
-                                weight: None,
-                                source: None,
-                                openai_raw: String::new(),
-                                json_key: None,
-                                error: Some(format!("extract failed: {e}")),
-                            })
+                        .await
+                        .unwrap_or_else(|e| PromptResult {
+                            prompt_id,
+                            prompt_type: PromptType::ExtractionPrompt,
+                            prompt_text: prompt_text_for_log.clone(),
+                            value: None,
+                            boolean: None,
+                            route: None,
+                            weight: None,
+                            source: None,
+                            openai_raw: String::new(),
+                            json_key: None,
+                            error: Some(format!("extract failed: {e}")),
+                        })
                     }
                 });
 
@@ -128,8 +126,14 @@ pub async fn execute_with_pages(
                 for r in results.iter_mut() {
                     if let Some(src) = r.source.as_mut() {
                         let quote = src.quote.clone().unwrap_or_default();
-                        let val = r.value.as_ref().and_then(|v| v.as_str()).unwrap_or_default();
-                        if let Some((page, _)) = ai::resolve_page_for_quote_value(&quote, val, &page_map) {
+                        let val = r
+                            .value
+                            .as_ref()
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default();
+                        if let Some((page, _)) =
+                            ai::resolve_page_for_quote_value(&quote, val, &page_map)
+                        {
                             src.page = page;
                         }
                     }
@@ -275,20 +279,20 @@ pub async fn execute_with_pages(
                             &no_key,
                             &prompt_text_for_log,
                         )
-                            .await
-                            .unwrap_or_else(|e| PromptResult {
-                                prompt_id,
-                                prompt_type: PromptType::DecisionPrompt,
-                                prompt_text: prompt_text_for_log.clone(),
-                                value: None,
-                                boolean: None,
-                                route: Some(no_key.clone()),
-                                weight: None,
-                                source: None,
-                                openai_raw: String::new(),
-                                json_key: None,
-                                error: Some(format!("decision failed: {e}")),
-                            })
+                        .await
+                        .unwrap_or_else(|e| PromptResult {
+                            prompt_id,
+                            prompt_type: PromptType::DecisionPrompt,
+                            prompt_text: prompt_text_for_log.clone(),
+                            value: None,
+                            boolean: None,
+                            route: Some(no_key.clone()),
+                            weight: None,
+                            source: None,
+                            openai_raw: String::new(),
+                            json_key: None,
+                            error: Some(format!("decision failed: {e}")),
+                        })
                     }
                 });
 
@@ -301,7 +305,8 @@ pub async fn execute_with_pages(
                 for r in decisions.iter_mut() {
                     if let Some(src) = r.source.as_mut() {
                         let q = src.quote.clone().unwrap_or_default();
-                        if let Some((page, _)) = ai::resolve_page_for_quote_value(&q, "", &page_map) {
+                        if let Some((page, _)) = ai::resolve_page_for_quote_value(&q, "", &page_map)
+                        {
                             src.page = page;
                         }
                     }
@@ -510,7 +515,7 @@ async fn call_extract_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::extract(prompt_id, text),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -564,7 +569,7 @@ async fn call_score_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::score(prompt_id, text),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(ans)) => {
@@ -610,7 +615,7 @@ async fn call_decide_with_retries(
             Duration::from_millis(cfg.openai_timeout_ms),
             ai::decide(prompt_id, text, &state),
         )
-            .await;
+        .await;
 
         match res {
             Ok(Ok(ans)) => {

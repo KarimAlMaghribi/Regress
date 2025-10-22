@@ -115,12 +115,10 @@ impl MsGraphClient {
         })
     }
 
-    /// Ensures the required folders exist inside the SharePoint drive.
+    /// Ensures the required base folder exists inside the SharePoint drive.
     pub async fn bootstrap(&self, config: &Config) -> Result<()> {
         self.ensure_site_and_drive().await?;
         self.ensure_folder(&config.drive_input_path()).await?;
-        self.ensure_folder(&config.drive_processed_path()).await?;
-        self.ensure_folder(&config.drive_failed_path()).await?;
         Ok(())
     }
 
@@ -199,42 +197,6 @@ impl MsGraphClient {
             file.write_all(&chunk).await?;
         }
         file.flush().await?;
-        Ok(())
-    }
-
-    /// Moves the SharePoint item to the destination path, creating folders when
-    /// needed.
-    pub async fn move_item(&self, item_id: &str, dest_path: &str) -> Result<()> {
-        let drive_id = self.ensure_site_and_drive().await?;
-        let encoded = format!("/drive/root:/{}", dest_path);
-        let url = format!("{GRAPH_BASE}/drives/{drive_id}/items/{item_id}");
-        let body = serde_json::json!({
-            "parentReference": { "path": encoded }
-        });
-        let mut resp = self
-            .send_with_retry(
-                self.authorized_request(Method::PATCH, url.clone())
-                    .await?
-                    .json(&body),
-            )
-            .await?;
-
-        if resp.status() == StatusCode::NOT_FOUND {
-            warn!(
-                item_id,
-                dest_path, "move target not found, ensuring folder and retrying"
-            );
-            self.ensure_folder(dest_path).await?;
-            resp = self
-                .send_with_retry(
-                    self.authorized_request(Method::PATCH, url)
-                        .await?
-                        .json(&body),
-                )
-                .await?;
-        }
-
-        resp.error_for_status()?;
         Ok(())
     }
 

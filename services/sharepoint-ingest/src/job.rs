@@ -1,16 +1,23 @@
 //! Background job definitions that coordinate SharePoint downloads and uploads.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, str::FromStr, sync::Arc};
 
+use anyhow::anyhow;
 use chrono::{DateTime, Utc};
+use deadpool_postgres::Pool;
 use parking_lot::{Mutex, RwLock};
 use serde::{Deserialize, Serialize};
-use tokio::{sync::watch, task::JoinHandle};
+use serde_json::Value;
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
+use tracing::warn;
 use uuid::Uuid;
 
 use crate::upload_adapter::UploadResult;
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
     Queued,
@@ -21,12 +28,64 @@ pub enum JobStatus {
     Canceled,
 }
 
+impl JobStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            JobStatus::Queued => "queued",
+            JobStatus::Running => "running",
+            JobStatus::Paused => "paused",
+            JobStatus::Succeeded => "succeeded",
+            JobStatus::Failed => "failed",
+            JobStatus::Canceled => "canceled",
+        }
+    }
+}
+
+impl FromStr for JobStatus {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "queued" => Ok(JobStatus::Queued),
+            "running" => Ok(JobStatus::Running),
+            "paused" => Ok(JobStatus::Paused),
+            "succeeded" => Ok(JobStatus::Succeeded),
+            "failed" => Ok(JobStatus::Failed),
+            "canceled" => Ok(JobStatus::Canceled),
+            other => Err(anyhow!("unknown job status '{other}'")),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum JobOrder {
     Alpha,
     NameAsc,
     NameDesc,
+}
+
+impl JobOrder {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            JobOrder::Alpha => "alpha",
+            JobOrder::NameAsc => "name_asc",
+            JobOrder::NameDesc => "name_desc",
+        }
+    }
+}
+
+impl FromStr for JobOrder {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "alpha" => Ok(JobOrder::Alpha),
+            "name_asc" => Ok(JobOrder::NameAsc),
+            "name_desc" => Ok(JobOrder::NameDesc),
+            other => Err(anyhow!("unknown job order '{other}'")),
+        }
+    }
 }
 
 impl Default for JobOrder {
@@ -55,6 +114,7 @@ pub struct JobState {
     pub upload_url: Option<String>,
     pub tenant_id: Option<Uuid>,
     pub pipeline_id: Option<Uuid>,
+    pub pipeline_run_id: Option<Uuid>,
     pub upload_id: Option<i32>,
     pub pdf_id: Option<i32>,
     pub created_at: DateTime<Utc>,
@@ -62,25 +122,21 @@ pub struct JobState {
 }
 
 impl JobState {
-    /// Updates the job status and refreshes the modification timestamp.
     pub fn set_status(&mut self, status: JobStatus) {
         self.status = status;
         self.updated_at = Utc::now();
     }
 
-    /// Stores progress information as a value between 0 and 1.
     pub fn set_progress(&mut self, progress: f32) {
         self.progress = progress.clamp(0.0, 1.0);
         self.updated_at = Utc::now();
     }
 
-    /// Sets a human readable status message.
     pub fn set_message<T: Into<String>>(&mut self, message: T) {
         self.message = Some(message.into());
         self.updated_at = Utc::now();
     }
 
-    /// Records the outcome produced by the upload adapter.
     pub fn set_output(&mut self, output: UploadResult) {
         self.upload_id = output.upload_id;
         self.pdf_id = output.pdf_id;
@@ -92,6 +148,7 @@ impl JobState {
 #[derive(Debug, Clone)]
 pub struct JobRegistry {
     inner: Arc<JobRegistryInner>,
+    persistence: Option<JobPersistence>,
 }
 
 #[derive(Debug)]
@@ -121,6 +178,7 @@ pub struct JobSummary {
     pub upload_url: Option<String>,
     pub tenant_id: Option<Uuid>,
     pub pipeline_id: Option<Uuid>,
+    pub pipeline_run_id: Option<Uuid>,
     pub upload_id: Option<i32>,
     pub pdf_id: Option<i32>,
     pub created_at: DateTime<Utc>,
@@ -128,17 +186,16 @@ pub struct JobSummary {
 }
 
 impl JobRegistry {
-    /// Constructs an empty registry that can track SharePoint ingestion jobs.
-    pub fn new() -> Self {
+    pub fn new(persistence: Option<JobPersistence>) -> Self {
         Self {
             inner: Arc::new(JobRegistryInner {
                 jobs: RwLock::new(HashMap::new()),
                 handles: Mutex::new(HashMap::new()),
             }),
+            persistence,
         }
     }
 
-    /// Creates and registers a new managed job instance.
     pub fn create_job(
         &self,
         folder_id: String,
@@ -165,6 +222,7 @@ impl JobRegistry {
             upload_url,
             tenant_id,
             pipeline_id,
+            pipeline_run_id: None,
             upload_id: None,
             pdf_id: None,
             created_at: now,
@@ -174,59 +232,51 @@ impl JobRegistry {
             state: Arc::new(Mutex::new(state)),
             control_tx: tx,
         };
+        let snapshot = managed.state.lock().clone();
+        self.inner.jobs.write().insert(id, managed.clone());
+        self.notify(snapshot);
+        managed
+    }
+
+    pub fn restore_job(&self, state: JobState) -> ManagedJob {
+        let id = state.id;
+        let (tx, _rx) = watch::channel(JobCommand::Run);
+        let managed = ManagedJob {
+            state: Arc::new(Mutex::new(state)),
+            control_tx: tx,
+        };
         self.inner.jobs.write().insert(id, managed.clone());
         managed
     }
 
-    /// Associates a spawned worker handle with the job identifier.
     pub fn insert_handle(&self, job_id: Uuid, handle: JoinHandle<()>) {
         self.inner.handles.lock().insert(job_id, handle);
     }
 
-    /// Returns a snapshot summary for every tracked job.
     pub fn list(&self) -> Vec<JobSummary> {
         self.inner
             .jobs
             .read()
             .values()
-            .map(|job| {
-                let state = job.state.lock();
-                JobSummary {
-                    id: state.id,
-                    folder_id: state.folder_id.clone(),
-                    folder_name: state.folder_name.clone(),
-                    status: state.status.clone(),
-                    progress: state.progress,
-                    message: state.message.clone(),
-                    output: state.output.clone(),
-                    order: state.order.clone(),
-                    filenames_override: state.filenames_override.clone(),
-                    upload_url: state.upload_url.clone(),
-                    tenant_id: state.tenant_id,
-                    pipeline_id: state.pipeline_id,
-                    upload_id: state.upload_id,
-                    pdf_id: state.pdf_id,
-                    created_at: state.created_at,
-                    updated_at: state.updated_at,
-                }
-            })
+            .map(|job| job_summary(job))
             .collect()
     }
 
-    /// Retrieves a managed job by identifier if it exists.
     pub fn get(&self, id: &Uuid) -> Option<ManagedJob> {
         self.inner.jobs.read().get(id).cloned()
     }
 
-    /// Applies an in-place update to the job state using the provided closure.
     pub fn update<F: FnOnce(&mut JobState)>(&self, id: &Uuid, updater: F) {
         if let Some(job) = self.inner.jobs.read().get(id) {
-            let mut state = job.state.lock();
-            updater(&mut state);
+            let snapshot = {
+                let mut state = job.state.lock();
+                updater(&mut state);
+                state.clone()
+            };
+            self.notify(snapshot);
         }
     }
 
-    /// Sends a cancel command to the job, returning whether it existed.
     pub fn cancel(&self, id: &Uuid) -> bool {
         if let Some(job) = self.get(id) {
             let _ = job.control_tx.send(JobCommand::Cancel);
@@ -236,7 +286,6 @@ impl JobRegistry {
         }
     }
 
-    /// Sends a pause command to the job, returning whether it existed.
     pub fn pause(&self, id: &Uuid) -> bool {
         if let Some(job) = self.get(id) {
             let _ = job.control_tx.send(JobCommand::Pause);
@@ -246,7 +295,6 @@ impl JobRegistry {
         }
     }
 
-    /// Sends a resume command to the job, returning whether it existed.
     pub fn resume(&self, id: &Uuid) -> bool {
         if let Some(job) = self.get(id) {
             let _ = job.control_tx.send(JobCommand::Run);
@@ -255,9 +303,14 @@ impl JobRegistry {
             false
         }
     }
+
+    fn notify(&self, state: JobState) {
+        if let Some(persistence) = &self.persistence {
+            persistence.send(state);
+        }
+    }
 }
 
-/// Produces a serialisable summary for the given managed job.
 pub fn job_summary(job: &ManagedJob) -> JobSummary {
     let state = job.state.lock();
     JobSummary {
@@ -273,9 +326,175 @@ pub fn job_summary(job: &ManagedJob) -> JobSummary {
         upload_url: state.upload_url.clone(),
         tenant_id: state.tenant_id,
         pipeline_id: state.pipeline_id,
+        pipeline_run_id: state.pipeline_run_id,
         upload_id: state.upload_id,
         pdf_id: state.pdf_id,
         created_at: state.created_at,
         updated_at: state.updated_at,
+    }
+}
+
+#[derive(Clone)]
+pub struct JobPersistence {
+    tx: mpsc::UnboundedSender<JobState>,
+}
+
+impl JobPersistence {
+    pub fn new(store: Arc<JobStore>) -> Self {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(state) = rx.recv().await {
+                if let Err(err) = store.persist_state(&state).await {
+                    warn!(job_id = %state.id, error = %err, "failed to persist job state");
+                }
+            }
+        });
+        Self { tx }
+    }
+
+    pub fn send(&self, state: JobState) {
+        let _ = self.tx.send(state);
+    }
+}
+
+#[derive(Clone)]
+pub struct JobStore {
+    pool: Pool,
+}
+
+impl JobStore {
+    pub fn new(pool: Pool) -> Self {
+        Self { pool }
+    }
+
+    pub async fn persist_state(&self, state: &JobState) -> anyhow::Result<()> {
+        let client = self.pool.get().await?;
+        let output_json: Option<Value> = match state.output.as_ref() {
+            Some(result) => Some(serde_json::to_value(result)?),
+            None => None,
+        };
+        let filenames = state.filenames_override.as_ref();
+        let message = state.message.as_deref();
+        client
+            .execute(
+                "INSERT INTO sharepoint_jobs (
+                    id, folder_id, folder_name, status, progress, message, order_key,
+                    filenames_override, upload_url, tenant_id, pipeline_id, pipeline_run_id,
+                    upload_id, pdf_id, output, created_at, updated_at
+                 ) VALUES (
+                    $1, $2, $3, $4, $5, $6, $7,
+                    $8, $9, $10, $11, $12,
+                    $13, $14, $15, $16, $17
+                 )
+                 ON CONFLICT (id) DO UPDATE SET
+                    folder_id = EXCLUDED.folder_id,
+                    folder_name = EXCLUDED.folder_name,
+                    status = EXCLUDED.status,
+                    progress = EXCLUDED.progress,
+                    message = EXCLUDED.message,
+                    order_key = EXCLUDED.order_key,
+                    filenames_override = EXCLUDED.filenames_override,
+                    upload_url = EXCLUDED.upload_url,
+                    tenant_id = EXCLUDED.tenant_id,
+                    pipeline_id = EXCLUDED.pipeline_id,
+                    pipeline_run_id = EXCLUDED.pipeline_run_id,
+                    upload_id = EXCLUDED.upload_id,
+                    pdf_id = EXCLUDED.pdf_id,
+                    output = EXCLUDED.output,
+                    updated_at = EXCLUDED.updated_at",
+                &[
+                    &state.id,
+                    &state.folder_id,
+                    &state.folder_name,
+                    &state.status.as_str(),
+                    &(state.progress as f64),
+                    &message,
+                    &state.order.as_str(),
+                    &filenames,
+                    &state.upload_url,
+                    &state.tenant_id,
+                    &state.pipeline_id,
+                    &state.pipeline_run_id,
+                    &state.upload_id,
+                    &state.pdf_id,
+                    &output_json,
+                    &state.created_at,
+                    &state.updated_at,
+                ],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn load_all(&self) -> anyhow::Result<Vec<JobState>> {
+        let client = self.pool.get().await?;
+        let rows = client
+            .query(
+                "SELECT id, folder_id, folder_name, status, progress, message, order_key,
+                        filenames_override, upload_url, tenant_id, pipeline_id, pipeline_run_id,
+                        upload_id, pdf_id, output, created_at, updated_at
+                 FROM sharepoint_jobs
+                 ORDER BY created_at ASC",
+                &[],
+            )
+            .await?;
+
+        let mut jobs = Vec::with_capacity(rows.len());
+        for row in rows {
+            let status_text: String = row.get("status");
+            let status = JobStatus::from_str(&status_text).unwrap_or_else(|err| {
+                warn!(error = %err, status = %status_text, "unknown job status in sharepoint_jobs; defaulting to failed");
+                JobStatus::Failed
+            });
+            let order_text: String = row.get("order_key");
+            let order = JobOrder::from_str(&order_text).unwrap_or_else(|err| {
+                warn!(error = %err, order = %order_text, "unknown job order in sharepoint_jobs; defaulting to alpha");
+                JobOrder::Alpha
+            });
+            let message: Option<String> = row.get("message");
+            let filenames: Option<Vec<String>> = row.get("filenames_override");
+            let upload_url: Option<String> = row.get("upload_url");
+            let tenant_id: Option<Uuid> = row.get("tenant_id");
+            let pipeline_id: Option<Uuid> = row.get("pipeline_id");
+            let pipeline_run_id: Option<Uuid> = row.get("pipeline_run_id");
+            let upload_id: Option<i32> = row.get("upload_id");
+            let pdf_id: Option<i32> = row.get("pdf_id");
+            let output_value: Option<Value> = row.get("output");
+            let output = match output_value {
+                Some(value) => match serde_json::from_value::<UploadResult>(value) {
+                    Ok(parsed) => Some(parsed),
+                    Err(err) => {
+                        warn!(%err, "failed to parse upload_result from sharepoint_jobs");
+                        None
+                    }
+                },
+                None => None,
+            };
+            let progress: f64 = row.get("progress");
+            let created_at: DateTime<Utc> = row.get("created_at");
+            let updated_at: DateTime<Utc> = row.get("updated_at");
+
+            jobs.push(JobState {
+                id: row.get("id"),
+                folder_id: row.get("folder_id"),
+                folder_name: row.get("folder_name"),
+                status,
+                progress: progress as f32,
+                message,
+                order,
+                filenames_override: filenames,
+                output,
+                upload_url,
+                tenant_id,
+                pipeline_id,
+                pipeline_run_id,
+                upload_id,
+                pdf_id,
+                created_at,
+                updated_at,
+            });
+        }
+
+        Ok(jobs)
     }
 }

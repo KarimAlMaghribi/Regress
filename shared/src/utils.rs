@@ -3,7 +3,10 @@
 use rhai::{Engine, Scope};
 
 /// Evaluates a Rhai expression and returns a boolean result.
-pub fn rhai_eval_bool(expr: &str, vars: &std::collections::HashMap<String, rhai::Dynamic>) -> anyhow::Result<bool> {
+pub fn rhai_eval_bool(
+    expr: &str,
+    vars: &std::collections::HashMap<String, rhai::Dynamic>,
+) -> anyhow::Result<bool> {
     let engine = Engine::new();
     let mut scope = Scope::new();
     for (k, v) in vars {
@@ -16,7 +19,10 @@ pub fn rhai_eval_bool(expr: &str, vars: &std::collections::HashMap<String, rhai:
 }
 
 /// Evaluates a Rhai expression returning the resulting dynamic value.
-pub fn eval_formula(expr: &str, vars: &std::collections::HashMap<String, rhai::Dynamic>) -> anyhow::Result<rhai::Dynamic> {
+pub fn eval_formula(
+    expr: &str,
+    vars: &std::collections::HashMap<String, rhai::Dynamic>,
+) -> anyhow::Result<rhai::Dynamic> {
     let engine = Engine::new();
     let mut scope = Scope::new();
     for (k, v) in vars {

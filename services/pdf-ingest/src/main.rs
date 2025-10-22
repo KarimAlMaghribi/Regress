@@ -21,7 +21,7 @@ use std::str::FromStr;
 use tokio_postgres::NoTls;
 
 use lopdf::{Bookmark, Document, Object, ObjectId};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use zip::ZipArchive;
 
 /// Liveness endpoint used for container health checks.
@@ -413,7 +413,7 @@ async fn upload(
         pdf_id: id,
         pipeline_id: pid,
     })
-        .unwrap();
+    .unwrap();
 
     let _ = producer
         .send(
@@ -608,7 +608,10 @@ async fn main() -> std::io::Result<()> {
             .await;
         // NEU: tenant_id-Spalte sicherstellen (falls Migration in frischer DB noch nicht lief)
         let _ = client
-            .execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS tenant_id UUID", &[])
+            .execute(
+                "ALTER TABLE uploads ADD COLUMN IF NOT EXISTS tenant_id UUID",
+                &[],
+            )
             .await;
     }
 
@@ -640,9 +643,9 @@ async fn main() -> std::io::Result<()> {
             .route("/pdf/{id}", web::delete().to(delete_pdf))
             .route("/health", web::get().to(health))
     })
-        .bind(("0.0.0.0", 8081))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8081))?
+    .run()
+    .await
 }
 
 #[cfg(test)]
@@ -710,7 +713,7 @@ mod tests {
                             .route("/pdf/{id}", web::get().to(super::get_pdf))
                             .route("/pdf/{id}", web::delete().to(super::delete_pdf)),
                     )
-                        .await;
+                    .await;
 
                     let req = test::TestRequest::get().uri("/pdf/1").to_request();
                     let resp = test::call_and_read_body(&app, req).await;
@@ -767,7 +770,7 @@ mod tests {
                             .app_data(web::Data::new(pool.clone()))
                             .route("/uploads/1/extract", web::get().to(super::get_extract)),
                     )
-                        .await;
+                    .await;
 
                     let req = test::TestRequest::get()
                         .uri("/uploads/1/extract")

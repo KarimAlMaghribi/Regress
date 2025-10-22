@@ -82,8 +82,8 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         END$$;
         "#,
     )
-        .execute(pool)
-        .await?;
+    .execute(pool)
+    .await?;
 
     // Tabelle mit Defaults (idempotent)
     sqlx::query(
@@ -98,8 +98,8 @@ async fn ensure_schema(pool: &PgPool) -> Result<(), sqlx::Error> {
         );
         "#,
     )
-        .execute(pool)
-        .await?;
+    .execute(pool)
+    .await?;
 
     Ok(())
 }
@@ -287,7 +287,7 @@ async fn main() -> std::io::Result<()> {
             .route("/uploads", web::get().to(list_uploads))
             .route("/uploads/stream", web::get().to(sse_stream))
     })
-        .bind(("0.0.0.0", 8095))?
-        .run()
-        .await
+    .bind(("0.0.0.0", 8095))?
+    .run()
+    .await
 }

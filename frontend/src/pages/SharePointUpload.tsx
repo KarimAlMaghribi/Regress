@@ -1,4 +1,5 @@
 import React from 'react';
+import axios from 'axios';
 import {
   Alert,
   Box,
@@ -35,26 +36,46 @@ import {
   fetchFolders,
   fetchJobs,
   triggerJobAction,
+  fetchProcessedFolders,
+  runProcessedFolders,
+  fetchAggregatedJobs,
 } from '../utils/ingestApi';
 import type {
   FolderSummary,
   JobOrder,
   JobStatus,
   JobSummary,
-  UploadListEntry,
+  ProcessedFolderSummary,
+  AggregatedJobEntry,
+  AggregatedJobSource,
 } from '../types/ingest';
-import axios from 'axios';
 import {useTenants} from '../hooks/useTenants';
 import {usePipelineList} from '../hooks/usePipelineList';
-import {API_BASE, INGEST_API} from '../utils/api';
+import {INGEST_API} from '../utils/api';
 
-const statusChipColor: Record<JobStatus, 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'> = {
+const statusChipColor: Record<
+  JobStatus,
+  'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'
+> = {
   queued: 'info',
   running: 'primary',
   paused: 'warning',
   succeeded: 'success',
   failed: 'error',
   canceled: 'default',
+};
+
+const aggregatedSourceColor: Record<
+  AggregatedJobSource,
+  'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning'
+> = {
+  sharepoint: 'primary',
+  pipeline: 'secondary',
+};
+
+const aggregatedSourceLabel: Record<AggregatedJobSource, string> = {
+  sharepoint: 'SharePoint',
+  pipeline: 'Pipeline',
 };
 
 const jobActionMessages: Record<'pause' | 'resume' | 'cancel' | 'retry', string> = {
@@ -70,7 +91,7 @@ function getErrorMessage(error: unknown) {
     if (status === 401 || status === 403) {
       return 'Kein Zugriff';
     }
-    const data = error.response?.data as { message?: string } | string | undefined;
+    const data = error.response?.data as {message?: string} | string | undefined;
     if (typeof data === 'string' && data.trim().length > 0) {
       return data;
     }
@@ -85,93 +106,50 @@ function getErrorMessage(error: unknown) {
   return 'Unbekannter Fehler';
 }
 
-function parseNumericId(value: unknown): number | null {
-  if (value === null || value === undefined) {
-    return null;
-  }
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.trunc(value);
-  }
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const parsed = Number.parseInt(trimmed, 10);
-    return Number.isNaN(parsed) ? null : parsed;
-  }
-  return null;
-}
-
-function extractPdfId(job: JobSummary): number | null {
-  const direct = parseNumericId(job.pdf_id);
-  if (direct != null) {
-    return direct;
-  }
-  const output = job.output;
-  if (output) {
-    const nested = parseNumericId(output.pdf_id);
-    if (nested != null) {
-      return nested;
-    }
-    const response = output.response as Record<string, unknown> | undefined;
-    if (response && typeof response === 'object') {
-      const candidate =
-        (response as { [key: string]: unknown }).pdf_id ??
-        (response as { [key: string]: unknown }).pdfId ??
-        (response as { [key: string]: unknown }).id;
-      const parsed = parseNumericId(candidate);
-      if (parsed != null) {
-        return parsed;
-      }
-    }
-  }
-  return null;
-}
-
-function extractUploadId(job: JobSummary): number | null {
-  const direct = parseNumericId(job.upload_id);
-  if (direct != null) {
-    return direct;
-  }
-  const output = job.output;
-  if (output) {
-    const nested = parseNumericId(output.upload_id);
-    if (nested != null) {
-      return nested;
-    }
-    const response = output.response as Record<string, unknown> | undefined;
-    if (response && typeof response === 'object') {
-      const candidate =
-        (response as { [key: string]: unknown }).upload_id ??
-        (response as { [key: string]: unknown }).uploadId;
-      const parsed = parseNumericId(candidate);
-      if (parsed != null) {
-        return parsed;
-      }
-    }
-  }
-  return null;
-}
-
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
   value: number;
 }
 
-function TabPanel({ children, value, index }: TabPanelProps) {
+function TabPanel({children, value, index}: TabPanelProps) {
   return (
     <div role="tabpanel" hidden={value !== index}>
-      {value === index && <Box sx={{ pt: 3 }}>{children}</Box>}
+      {value === index && <Box sx={{pt: 3}}>{children}</Box>}
     </div>
   );
 }
 
+const clampProgress = (value?: number | null): number => {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return 0;
+  }
+  if (value < 0) {
+    return 0;
+  }
+  if (value > 1) {
+    return 1;
+  }
+  return value;
+};
+
+const toPercent = (value?: number | null): number => Math.round(clampProgress(value) * 100);
+
+const formatDateTime = (value?: string | null): string => {
+  if (!value) {
+    return '—';
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+};
+
 export default function SharePointUpload() {
   const [tab, setTab] = React.useState(0);
   const [folders, setFolders] = React.useState<FolderSummary[]>([]);
-  const [folderMeta, setFolderMeta] = React.useState<{ base: string; total: number } | null>(null);
+  const [folderMeta, setFolderMeta] = React.useState<{base: string; total: number} | null>(null);
   const [selectedFolders, setSelectedFolders] = React.useState<string[]>([]);
   const [folderError, setFolderError] = React.useState<string | null>(null);
   const [foldersLoading, setFoldersLoading] = React.useState(false);
@@ -182,20 +160,20 @@ export default function SharePointUpload() {
   const [jobError, setJobError] = React.useState<string | null>(null);
   const [actioningJobId, setActioningJobId] = React.useState<string | null>(null);
   const [successMessage, setSuccessMessage] = React.useState<string | null>(null);
-  const { items: tenants, loading: tenantsLoading, error: tenantsError } = useTenants();
+  const {items: tenants, loading: tenantsLoading, error: tenantsError} = useTenants();
   const [tenantId, setTenantId] = React.useState<string>('');
-  const { pipelines } = usePipelineList();
+  const {pipelines, loading: pipelinesLoading, error: pipelinesError} = usePipelineList();
   const uploadBase = React.useMemo(() => INGEST_API.replace(/\/$/, ''), []);
-  const pipelineApiBase = React.useMemo(() => API_BASE.replace(/\/$/, ''), []);
-  const [uploadsByPdfId, setUploadsByPdfId] = React.useState<Map<number, UploadListEntry>>(
-    () => new Map(),
-  );
-  const [uploadsById, setUploadsById] = React.useState<Map<number, UploadListEntry>>(
-    () => new Map(),
-  );
-  const [pipelineSelections, setPipelineSelections] = React.useState<Record<string, string>>({});
-  const [pipelineError, setPipelineError] = React.useState<string | null>(null);
-  const [pipelineRunningJobId, setPipelineRunningJobId] = React.useState<string | null>(null);
+  const [processedFolders, setProcessedFolders] = React.useState<ProcessedFolderSummary[]>([]);
+  const [processedLoading, setProcessedLoading] = React.useState(false);
+  const [processedError, setProcessedError] = React.useState<string | null>(null);
+  const [selectedProcessed, setSelectedProcessed] = React.useState<string[]>([]);
+  const [processingPipelineId, setProcessingPipelineId] = React.useState<string>('');
+  const [processing, setProcessing] = React.useState(false);
+  const [aggregatedJobs, setAggregatedJobs] = React.useState<AggregatedJobEntry[]>([]);
+  const [aggregatedLoading, setAggregatedLoading] = React.useState(false);
+  const [aggregatedError, setAggregatedError] = React.useState<string | null>(null);
+
   const tenantNameMap = React.useMemo(() => {
     const map = new Map<string, string>();
     tenants.forEach((tenant) => map.set(tenant.id, tenant.name));
@@ -210,13 +188,29 @@ export default function SharePointUpload() {
     }
   }, [tenantId, tenants]);
 
+  React.useEffect(() => {
+    if (pipelines.length === 0) {
+      if (processingPipelineId) {
+        setProcessingPipelineId('');
+      }
+      return;
+    }
+    if (pipelines.length === 1 && !processingPipelineId) {
+      setProcessingPipelineId(pipelines[0].id);
+      return;
+    }
+    if (processingPipelineId && pipelines.every((pipeline) => pipeline.id !== processingPipelineId)) {
+      setProcessingPipelineId('');
+    }
+  }, [pipelines, processingPipelineId]);
+
   const loadFolders = React.useCallback(async () => {
     setFoldersLoading(true);
     setFolderError(null);
     try {
       const data = await fetchFolders();
       setFolders(data.items);
-      setFolderMeta({ base: data.base, total: data.total });
+      setFolderMeta({base: data.base, total: data.total});
     } catch (error) {
       setFolderError(getErrorMessage(error));
       setFolders([]);
@@ -226,53 +220,8 @@ export default function SharePointUpload() {
     }
   }, []);
 
-  const refreshUploads = React.useCallback(
-    async (jobList: JobSummary[]) => {
-      const pdfIds = new Set<number>();
-      const uploadIds = new Set<number>();
-      jobList.forEach((job) => {
-        const pdfId = extractPdfId(job);
-        if (pdfId != null) {
-          pdfIds.add(pdfId);
-        }
-        const uploadId = extractUploadId(job);
-        if (uploadId != null) {
-          uploadIds.add(uploadId);
-        }
-      });
-      if (pdfIds.size === 0 && uploadIds.size === 0) {
-        setUploadsByPdfId(new Map());
-        setUploadsById(new Map());
-        setPipelineError(null);
-        return;
-      }
-      try {
-        const { data } = await axios.get<UploadListEntry[]>(`${uploadBase}/uploads`);
-        const byPdf = new Map<number, UploadListEntry>();
-        const byId = new Map<number, UploadListEntry>();
-        data.forEach((entry) => {
-          const matchesPdf = entry.pdf_id != null && pdfIds.has(entry.pdf_id);
-          const matchesUpload = uploadIds.has(entry.id);
-          if (!matchesPdf && !matchesUpload) {
-            return;
-          }
-          if (entry.pdf_id != null) {
-            byPdf.set(entry.pdf_id, entry);
-          }
-          byId.set(entry.id, entry);
-        });
-        setUploadsByPdfId(byPdf);
-        setUploadsById(byId);
-        setPipelineError(null);
-      } catch (error) {
-        setPipelineError(getErrorMessage(error));
-      }
-    },
-    [uploadBase],
-  );
-
   const loadJobs = React.useCallback(
-    async (options?: { silent?: boolean }) => {
+    async (options?: {silent?: boolean}) => {
       const silent = options?.silent ?? false;
       if (!silent) {
         setJobsLoading(true);
@@ -281,19 +230,62 @@ export default function SharePointUpload() {
         const data = await fetchJobs();
         setJobs(data.jobs);
         setJobError(null);
-        await refreshUploads(data.jobs);
       } catch (error) {
         setJobError(getErrorMessage(error));
         setJobs([]);
-        setUploadsByPdfId(new Map());
-        setUploadsById(new Map());
       } finally {
         if (!silent) {
           setJobsLoading(false);
         }
       }
     },
-    [refreshUploads],
+    [],
+  );
+
+  const loadProcessedFolders = React.useCallback(
+    async (options?: {silent?: boolean}) => {
+      const silent = options?.silent ?? false;
+      if (!silent) {
+        setProcessedLoading(true);
+      }
+      try {
+        const data = await fetchProcessedFolders();
+        setProcessedFolders(data.items);
+        setProcessedError(null);
+        setSelectedProcessed((prev) => prev.filter((id) => data.items.some((item) => item.job_id === id)));
+      } catch (error) {
+        setProcessedError(getErrorMessage(error));
+        setProcessedFolders([]);
+        setSelectedProcessed([]);
+      } finally {
+        if (!silent) {
+          setProcessedLoading(false);
+        }
+      }
+    },
+    [],
+  );
+
+  const loadAggregatedJobs = React.useCallback(
+    async (options?: {silent?: boolean}) => {
+      const silent = options?.silent ?? false;
+      if (!silent) {
+        setAggregatedLoading(true);
+      }
+      try {
+        const data = await fetchAggregatedJobs();
+        setAggregatedJobs(data.jobs);
+        setAggregatedError(null);
+      } catch (error) {
+        setAggregatedError(getErrorMessage(error));
+        setAggregatedJobs([]);
+      } finally {
+        if (!silent) {
+          setAggregatedLoading(false);
+        }
+      }
+    },
+    [],
   );
 
   React.useEffect(() => {
@@ -308,14 +300,14 @@ export default function SharePointUpload() {
     let cancelled = false;
 
     const loadInitial = async () => {
-      await loadJobs();
+      await loadProcessedFolders();
     };
 
     loadInitial();
 
     const intervalId = window.setInterval(() => {
       if (!cancelled) {
-        loadJobs({ silent: true });
+        loadProcessedFolders({silent: true});
       }
     }, INGEST_POLL_INTERVAL);
 
@@ -323,27 +315,40 @@ export default function SharePointUpload() {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [tab, loadJobs]);
+  }, [tab, loadProcessedFolders]);
 
   React.useEffect(() => {
-    setPipelineSelections((prev) => {
-      const next: Record<string, string> = {};
-      jobs.forEach((job) => {
-        if (Object.prototype.hasOwnProperty.call(prev, job.id)) {
-          next[job.id] = prev[job.id];
-        }
-      });
-      return Object.keys(next).length === Object.keys(prev).length ? prev : next;
-    });
-  }, [jobs]);
+    if (tab !== 2) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    const loadInitial = async () => {
+      await loadJobs();
+      await loadAggregatedJobs();
+    };
+
+    loadInitial();
+
+    const intervalId = window.setInterval(() => {
+      if (!cancelled) {
+        loadJobs({silent: true});
+        loadAggregatedJobs({silent: true});
+      }
+    }, INGEST_POLL_INTERVAL);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [tab, loadJobs, loadAggregatedJobs]);
 
   const allSelected = folders.length > 0 && selectedFolders.length === folders.length;
   const isIndeterminate = selectedFolders.length > 0 && !allSelected;
 
   const handleToggleFolder = (id: string) => {
-    setSelectedFolders((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
-    );
+    setSelectedFolders((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
   };
 
   const handleSelectAll = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -358,14 +363,80 @@ export default function SharePointUpload() {
     setOrder(event.target.value as JobOrder);
   };
 
+  const allProcessedSelected = processedFolders.length > 0 && selectedProcessed.length === processedFolders.length;
+  const processedIndeterminate = selectedProcessed.length > 0 && !allProcessedSelected;
+
+  const handleToggleProcessed = (id: string) => {
+    setSelectedProcessed((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+
+  const handleSelectAllProcessed = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (event.target.checked) {
+      setSelectedProcessed(processedFolders.map((item) => item.job_id));
+    } else {
+      setSelectedProcessed([]);
+    }
+  };
+
+  const startProcessing = async () => {
+    const pipelineId = processingPipelineId || (pipelines.length === 1 ? pipelines[0].id : '');
+    if (!pipelineId) {
+      setProcessedError('Bitte wähle eine Pipeline aus.');
+      return;
+    }
+    if (selectedProcessed.length === 0) {
+      setProcessedError('Bitte wähle mindestens einen Ordner zur Verarbeitung aus.');
+      return;
+    }
+    setProcessing(true);
+    setSuccessMessage(null);
+    setProcessedError(null);
+    try {
+      const response = await runProcessedFolders({
+        job_ids: selectedProcessed,
+        pipeline_id: pipelineId,
+      });
+      const startedCount = response.started.length;
+      const skippedCount = response.skipped.length;
+      const parts: string[] = [];
+      if (startedCount > 0) {
+        parts.push(`${startedCount} gestartet`);
+      }
+      if (skippedCount > 0) {
+        parts.push(`${skippedCount} übersprungen`);
+      }
+      if (parts.length > 0) {
+        setSuccessMessage(`Pipeline-Ausführung: ${parts.join(', ')}.`);
+      } else {
+        setSuccessMessage('Keine Aufträge gestartet.');
+      }
+      if (response.skipped.length > 0) {
+        setProcessedError(
+          response.skipped.map((item) => `${item.job_id.substring(0, 8)}: ${item.reason}`).join(' • '),
+        );
+      }
+      setSelectedProcessed((prev) => prev.filter((id) => response.started.some((item) => item.job_id === id)));
+      await loadProcessedFolders();
+      await loadJobs({silent: true});
+      await loadAggregatedJobs({silent: true});
+    } catch (error) {
+      setProcessedError(getErrorMessage(error));
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const startJobs = async () => {
     if (!tenantId) {
       setFolderError('Bitte wähle einen Mandanten aus, bevor Jobs gestartet werden.');
       return;
     }
+    if (selectedFolders.length === 0) {
+      setFolderError('Bitte wähle mindestens einen Ordner aus.');
+      return;
+    }
     setCreatingJobs(true);
     setSuccessMessage(null);
-    setPipelineError(null);
     try {
       setFolderError(null);
       const uploadUrl = `${uploadBase}/upload?tenant_id=${encodeURIComponent(tenantId)}`;
@@ -377,8 +448,9 @@ export default function SharePointUpload() {
       });
       setSuccessMessage('Jobs erfolgreich gestartet.');
       setSelectedFolders([]);
-      setTab(1);
+      setTab(2);
       await loadJobs();
+      await loadAggregatedJobs({silent: true});
     } catch (error) {
       setFolderError(getErrorMessage(error));
     } finally {
@@ -393,6 +465,7 @@ export default function SharePointUpload() {
       await triggerJobAction(jobId, action);
       setSuccessMessage(jobActionMessages[action]);
       await loadJobs();
+      await loadAggregatedJobs({silent: true});
     } catch (error) {
       setJobError(getErrorMessage(error));
     } finally {
@@ -400,59 +473,15 @@ export default function SharePointUpload() {
     }
   };
 
-  const handlePipelineSelectionChange = React.useCallback((jobId: string, value: string) => {
-    setPipelineSelections((prev) => ({ ...prev, [jobId]: value }));
-  }, []);
-
-  const handleRunPipeline = React.useCallback(
-    async (job: JobSummary) => {
-      if (pipelines.length === 0) {
-        setPipelineError('Keine Pipeline konfiguriert.');
-        return;
-      }
-      if (job.status !== 'succeeded') {
-        setPipelineError('Der Job ist noch nicht abgeschlossen.');
-        return;
-      }
-      const defaultPipelineId = pipelines.length === 1 ? pipelines[0].id : '';
-      const selection = pipelineSelections[job.id] ?? defaultPipelineId;
-      if (!selection) {
-        setPipelineError('Bitte wähle eine Pipeline für diesen Job.');
-        return;
-      }
-      const pdfId = extractPdfId(job);
-      const uploadIdFromJob = extractUploadId(job);
-      const uploadFromPdf = pdfId != null ? uploadsByPdfId.get(pdfId) : undefined;
-      const uploadFromId = uploadIdFromJob != null ? uploadsById.get(uploadIdFromJob) : undefined;
-      const resolvedUploadId =
-        uploadIdFromJob ?? uploadFromPdf?.id ?? uploadFromId?.id ?? null;
-      if (resolvedUploadId == null) {
-        setPipelineError('Upload-ID für diesen Job wurde noch nicht ermittelt.');
-        return;
-      }
-      setPipelineRunningJobId(job.id);
-      setSuccessMessage(null);
-      setPipelineError(null);
-      try {
-        await axios.post(`${pipelineApiBase}/pipelines/${selection}/run`, {
-          file_id: resolvedUploadId,
-        });
-        const pipelineName = pipelines.find((pipeline) => pipeline.id === selection)?.name ?? selection;
-        setSuccessMessage(`Pipeline „${pipelineName}“ für Upload ${resolvedUploadId} gestartet.`);
-        await loadJobs({ silent: true });
-      } catch (error) {
-        setPipelineError(getErrorMessage(error));
-      } finally {
-        setPipelineRunningJobId(null);
-      }
-    },
-    [pipelineSelections, pipelines, uploadsByPdfId, uploadsById, pipelineApiBase, loadJobs],
-  );
+  const refreshAggregatedAndJobs = React.useCallback(async () => {
+    await loadJobs();
+    await loadAggregatedJobs();
+  }, [loadJobs, loadAggregatedJobs]);
 
   const renderFoldersTable = () => {
     if (foldersLoading) {
       return (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+        <Box sx={{display: 'flex', justifyContent: 'center', py: 6}}>
           <CircularProgress />
         </Box>
       );
@@ -460,7 +489,7 @@ export default function SharePointUpload() {
 
     if (folders.length === 0) {
       return (
-        <Box sx={{ py: 6, textAlign: 'center' }}>
+        <Box sx={{py: 6, textAlign: 'center'}}>
           <Typography variant="body2" color="text.secondary">
             Keine Einträge
           </Typography>
@@ -477,7 +506,7 @@ export default function SharePointUpload() {
                 indeterminate={isIndeterminate}
                 checked={allSelected}
                 onChange={handleSelectAll}
-                inputProps={{ 'aria-label': 'alle Anlagen auswählen' }}
+                inputProps={{'aria-label': 'alle Anlagen auswählen'}}
               />
             </TableCell>
             <TableCell>Ordnername</TableCell>
@@ -493,7 +522,7 @@ export default function SharePointUpload() {
                   <Checkbox
                     checked={checked}
                     onChange={() => handleToggleFolder(folder.id)}
-                    inputProps={{ 'aria-label': `${folder.name} auswählen` }}
+                    inputProps={{'aria-label': `${folder.name} auswählen`}}
                   />
                 </TableCell>
                 <TableCell>{folder.name}</TableCell>
@@ -506,10 +535,128 @@ export default function SharePointUpload() {
     );
   };
 
+  const renderProcessedTable = () => {
+    if (processedLoading && processedFolders.length === 0) {
+      return (
+        <Box sx={{display: 'flex', justifyContent: 'center', py: 6}}>
+          <CircularProgress />
+        </Box>
+      );
+    }
+
+    if (!processedLoading && processedFolders.length === 0) {
+      return (
+        <Box sx={{py: 6, textAlign: 'center'}}>
+          <Typography variant="body2" color="text.secondary">
+            Keine Einträge
+          </Typography>
+        </Box>
+      );
+    }
+
+    return (
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell padding="checkbox">
+              <Checkbox
+                indeterminate={processedIndeterminate}
+                checked={allProcessedSelected}
+                onChange={handleSelectAllProcessed}
+                inputProps={{'aria-label': 'alle verarbeiteten Ordner auswählen'}}
+              />
+            </TableCell>
+            <TableCell>Ordner</TableCell>
+            <TableCell>Mandant</TableCell>
+            <TableCell>Status</TableCell>
+            <TableCell>Fortschritt</TableCell>
+            <TableCell>Pipeline</TableCell>
+            <TableCell>Upload</TableCell>
+            <TableCell>Aktualisiert</TableCell>
+            <TableCell>Nachricht</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {processedFolders.map((item) => {
+            const checked = selectedProcessed.includes(item.job_id);
+            const percent = toPercent(item.progress);
+            const tenantLabel = item.tenant_id ? tenantNameMap.get(item.tenant_id) ?? item.tenant_id : null;
+            return (
+              <TableRow key={item.job_id} hover selected={checked}>
+                <TableCell padding="checkbox">
+                  <Checkbox
+                    checked={checked}
+                    onChange={() => handleToggleProcessed(item.job_id)}
+                    inputProps={{'aria-label': `${item.folder_name} auswählen`}}
+                  />
+                </TableCell>
+                <TableCell>{item.folder_name}</TableCell>
+                <TableCell>
+                  {tenantLabel ? (
+                    <Chip label={tenantLabel} size="small" />
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      —
+                    </Typography>
+                  )}
+                </TableCell>
+                <TableCell>
+                  <Chip label={item.status} size="small" color={statusChipColor[item.status]} />
+                </TableCell>
+                <TableCell>
+                  <Stack spacing={1} sx={{minWidth: 140}}>
+                    <LinearProgress variant="determinate" value={percent} />
+                    <Typography variant="caption" color="text.secondary">
+                      {percent}%
+                    </Typography>
+                  </Stack>
+                </TableCell>
+                <TableCell sx={{minWidth: 160}}>
+                  {item.pipeline_id ? (
+                    <Stack spacing={0.5}>
+                      <Typography variant="body2">Pipeline-ID: {item.pipeline_id}</Typography>
+                      {item.pipeline_run_id && (
+                        <Typography variant="caption" color="text.secondary">
+                          Lauf-ID: {item.pipeline_run_id}
+                        </Typography>
+                      )}
+                    </Stack>
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      —
+                    </Typography>
+                  )}
+                </TableCell>
+                <TableCell sx={{minWidth: 180}}>
+                  <Stack spacing={0.5}>
+                    {item.pdf_id != null && <Typography variant="body2">PDF #{item.pdf_id}</Typography>}
+                    {item.upload_id != null ? (
+                      <Typography variant="caption" color="text.secondary">
+                        Upload-ID {item.upload_id}
+                      </Typography>
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">—</Typography>
+                    )}
+                  </Stack>
+                </TableCell>
+                <TableCell>{formatDateTime(item.updated_at)}</TableCell>
+                <TableCell sx={{maxWidth: 260}}>
+                  <Typography variant="body2" noWrap title={item.message ?? ''}>
+                    {item.message ?? '—'}
+                  </Typography>
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    );
+  };
+
   const renderJobsTable = () => {
     if (jobsLoading && jobs.length === 0) {
       return (
-        <Box sx={{ display: 'flex', justifyContent: 'center', py: 6 }}>
+        <Box sx={{display: 'flex', justifyContent: 'center', py: 6}}>
           <CircularProgress />
         </Box>
       );
@@ -517,7 +664,7 @@ export default function SharePointUpload() {
 
     if (!jobsLoading && jobs.length === 0) {
       return (
-        <Box sx={{ py: 6, textAlign: 'center' }}>
+        <Box sx={{py: 6, textAlign: 'center'}}>
           <Typography variant="body2" color="text.secondary">
             Keine Einträge
           </Typography>
@@ -531,8 +678,7 @@ export default function SharePointUpload() {
           <TableRow>
             <TableCell>Ordner</TableCell>
             <TableCell>Mandant</TableCell>
-            <TableCell>PDF</TableCell>
-            <TableCell>Pipeline-Lauf</TableCell>
+            <TableCell>Upload</TableCell>
             <TableCell>Status</TableCell>
             <TableCell>Fortschritt</TableCell>
             <TableCell>Nachricht</TableCell>
@@ -541,45 +687,13 @@ export default function SharePointUpload() {
         </TableHead>
         <TableBody>
           {jobs.map((job) => {
-            const percent = Math.round(Math.min(Math.max(job.progress ?? 0, 0), 1) * 100);
+            const percent = toPercent(job.progress);
             const isActioning = actioningJobId === job.id;
             const disableCancel = ['canceled', 'failed', 'succeeded'].includes(job.status);
-            const tenantLabel =
-              job.tenant_id && typeof job.tenant_id === 'string'
-                ? tenantNameMap.get(job.tenant_id) ?? job.tenant_id
-                : null;
-            const defaultPipelineId = pipelines.length === 1 ? pipelines[0].id : '';
-            const selection = pipelineSelections[job.id] ?? defaultPipelineId;
-            const pdfId = extractPdfId(job);
-            const uploadIdFromJob = extractUploadId(job);
-            const uploadFromPdf = pdfId != null ? uploadsByPdfId.get(pdfId) : undefined;
-            const uploadFromId = uploadIdFromJob != null ? uploadsById.get(uploadIdFromJob) : undefined;
-            const resolvedUploadId =
-              uploadIdFromJob ?? uploadFromPdf?.id ?? uploadFromId?.id ?? null;
-            const uploadStatus = uploadFromPdf?.status ?? uploadFromId?.status;
-            const isRunningPipeline = pipelineRunningJobId === job.id;
-            const pipelineSelectDisabled = pipelines.length === 0 || job.status !== 'succeeded';
-            const canRunPipeline =
-              job.status === 'succeeded' &&
-              !!selection &&
-              resolvedUploadId != null &&
-              pipelines.length > 0 &&
-              !isRunningPipeline;
-            let helperText: string | null = null;
-            if (pipelines.length === 0) {
-              helperText = 'Keine Pipelines konfiguriert.';
-            } else if (job.status !== 'succeeded') {
-              helperText = 'Pipeline-Lauf verfügbar nach Abschluss des Jobs.';
-            } else if (resolvedUploadId == null) {
-              helperText = 'Upload wird ermittelt…';
-            } else if (!selection) {
-              helperText = 'Bitte Pipeline wählen.';
-            } else if (uploadStatus) {
-              helperText = `Upload-Status: ${uploadStatus}`;
-            } else if (job.pipeline_id && typeof job.pipeline_id === 'string') {
-              const name = pipelines.find((pipeline) => pipeline.id === job.pipeline_id)?.name ?? job.pipeline_id;
-              helperText = `Zuletzt ausgewählt: ${name}`;
-            }
+            const tenantLabel = job.tenant_id ? tenantNameMap.get(job.tenant_id) ?? job.tenant_id : null;
+            const pdfId = job.pdf_id ?? job.output?.pdf_id ?? null;
+            const uploadId = job.upload_id ?? job.output?.upload_id ?? null;
+            const uploadStatus = job.output?.status ?? null;
             return (
               <TableRow key={job.id} hover>
                 <TableCell>{job.folder_name}</TableCell>
@@ -592,68 +706,17 @@ export default function SharePointUpload() {
                     </Typography>
                   )}
                 </TableCell>
-                <TableCell sx={{ minWidth: 180 }}>
-                  {pdfId != null || resolvedUploadId != null ? (
-                    <Stack spacing={0.5}>
-                      {pdfId != null && (
-                        <Typography variant="body2">PDF #{pdfId}</Typography>
-                      )}
-                      {resolvedUploadId != null ? (
-                        <Typography variant="caption" color="text.secondary">
-                          Upload-ID {resolvedUploadId}
-                          {uploadStatus ? ` • Status: ${uploadStatus}` : ''}
-                        </Typography>
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">
-                          {job.status === 'succeeded'
-                            ? 'Upload wird ermittelt…'
-                            : 'Upload in Vorbereitung…'}
-                        </Typography>
-                      )}
-                    </Stack>
-                  ) : (
-                    <Typography variant="body2" color="text.secondary">—</Typography>
-                  )}
-                </TableCell>
-                <TableCell sx={{ minWidth: 260 }}>
-                  <Stack spacing={1}>
-                    <FormControl size="small" fullWidth disabled={pipelineSelectDisabled}>
-                      <Select
-                        size="small"
-                        value={selection}
-                        onChange={(event) =>
-                          handlePipelineSelectionChange(job.id, event.target.value as string)
-                        }
-                        displayEmpty
-                      >
-                        <MenuItem value="">
-                          <em>Pipeline wählen</em>
-                        </MenuItem>
-                        {pipelines.map((pipeline) => (
-                          <MenuItem key={pipeline.id} value={pipeline.id}>
-                            {pipeline.name}
-                          </MenuItem>
-                        ))}
-                      </Select>
-                    </FormControl>
-                    <Button
-                      size="small"
-                      variant="contained"
-                      startIcon={
-                        isRunningPipeline ? (
-                          <CircularProgress size={16} color="inherit" />
-                        ) : (
-                          <PlayArrowIcon fontSize="small" />
-                        )
-                      }
-                      onClick={() => handleRunPipeline(job)}
-                      disabled={!canRunPipeline}
-                    >
-                      {isRunningPipeline ? 'Startet…' : 'Pipeline starten'}
-                    </Button>
-                    {helperText && (
+                <TableCell sx={{minWidth: 200}}>
+                  <Stack spacing={0.5}>
+                    {pdfId != null && <Typography variant="body2">PDF #{pdfId}</Typography>}
+                    {uploadId != null ? (
                       <Typography variant="caption" color="text.secondary">
-                        {helperText}
+                        Upload-ID {uploadId}
+                        {uploadStatus ? ` • Status: ${uploadStatus}` : ''}
+                      </Typography>
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">
+                        Upload wird vorbereitet…
                       </Typography>
                     )}
                   </Stack>
@@ -662,16 +725,16 @@ export default function SharePointUpload() {
                   <Chip label={job.status} size="small" color={statusChipColor[job.status]} />
                 </TableCell>
                 <TableCell>
-                  <Stack spacing={1}>
+                  <Stack spacing={1} sx={{minWidth: 140}}>
                     <LinearProgress variant="determinate" value={percent} />
                     <Typography variant="caption" color="text.secondary">
                       {percent}%
                     </Typography>
                   </Stack>
                 </TableCell>
-                <TableCell sx={{ maxWidth: 280 }}>
+                <TableCell sx={{maxWidth: 280}}>
                   <Typography variant="body2" noWrap title={job.message ?? ''}>
-                    {job.message || '—'}
+                    {job.message ?? '—'}
                   </Typography>
                 </TableCell>
                 <TableCell align="right">
@@ -723,26 +786,103 @@ export default function SharePointUpload() {
     );
   };
 
+  const renderAggregatedJobsTable = () => {
+    if (aggregatedLoading && aggregatedJobs.length === 0) {
+      return (
+        <Box sx={{display: 'flex', justifyContent: 'center', py: 6}}>
+          <CircularProgress />
+        </Box>
+      );
+    }
+
+    if (!aggregatedLoading && aggregatedJobs.length === 0) {
+      return (
+        <Box sx={{py: 6, textAlign: 'center'}}>
+          <Typography variant="body2" color="text.secondary">
+            Keine Einträge
+          </Typography>
+        </Box>
+      );
+    }
+
+    return (
+      <Table size="small">
+        <TableHead>
+          <TableRow>
+            <TableCell>Quelle</TableCell>
+            <TableCell>Bezeichnung</TableCell>
+            <TableCell>Status</TableCell>
+            <TableCell>Fortschritt</TableCell>
+            <TableCell>Upload</TableCell>
+            <TableCell>Nachricht</TableCell>
+            <TableCell>Erstellt</TableCell>
+            <TableCell>Aktualisiert</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {aggregatedJobs.map((entry) => {
+            const percent = toPercent(entry.progress);
+            const name = entry.source === 'pipeline' ? entry.pipeline_name ?? entry.folder_name ?? '—' : entry.folder_name ?? '—';
+            return (
+              <TableRow key={entry.id} hover>
+                <TableCell>
+                  <Chip label={aggregatedSourceLabel[entry.source]} size="small" color={aggregatedSourceColor[entry.source]} />
+                </TableCell>
+                <TableCell>{name}</TableCell>
+                <TableCell>
+                  <Chip label={entry.status} size="small" color={statusChipColor[entry.status_category]} />
+                </TableCell>
+                <TableCell>
+                  <Stack spacing={1} sx={{minWidth: 140}}>
+                    <LinearProgress variant="determinate" value={percent} />
+                    <Typography variant="caption" color="text.secondary">
+                      {percent}%
+                    </Typography>
+                  </Stack>
+                </TableCell>
+                <TableCell sx={{minWidth: 180}}>
+                  <Stack spacing={0.5}>
+                    {entry.pdf_id != null && <Typography variant="body2">PDF #{entry.pdf_id}</Typography>}
+                    {entry.upload_id != null ? (
+                      <Typography variant="caption" color="text.secondary">
+                        Upload-ID {entry.upload_id}
+                      </Typography>
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">—</Typography>
+                    )}
+                  </Stack>
+                </TableCell>
+                <TableCell sx={{maxWidth: 280}}>
+                  <Typography variant="body2" noWrap title={entry.message ?? ''}>
+                    {entry.message ?? '—'}
+                  </Typography>
+                </TableCell>
+                <TableCell>{formatDateTime(entry.created_at)}</TableCell>
+                <TableCell>{formatDateTime(entry.updated_at ?? null)}</TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    );
+  };
+
   return (
     <Box>
       <PageHeader
         title="SharePoint Upload"
         icon={<UploadFileIcon />}
-        breadcrumb={[{ label: 'SharePoint Upload' }]}
+        breadcrumb={[{label: 'SharePoint Upload'}]}
         subtitle="Anlagen zusammenführen und Upload-Jobs steuern"
       />
 
       {successMessage && (
-        <Alert
-          severity="success"
-          sx={{ mb: 2 }}
-          onClose={() => setSuccessMessage(null)}
-        >
+        <Alert severity="success" sx={{mb: 2}} onClose={() => setSuccessMessage(null)}>
           {successMessage}
         </Alert>
       )}
 
-      <Paper elevation={1} sx={{ width: '100%' }}>
+      <Paper elevation={1} sx={{width: '100%'}}>
         <Tabs
           value={tab}
           onChange={(_, newValue) => setTab(newValue)}
@@ -750,28 +890,32 @@ export default function SharePointUpload() {
           variant="fullWidth"
         >
           <Tab label="Anlagen" />
+          <Tab label="Verarbeitung" />
           <Tab label="Jobs" />
         </Tabs>
 
         <TabPanel value={tab} index={0}>
           {folderError && (
-            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setFolderError(null)}>
+            <Alert severity="error" sx={{mb: 2}} onClose={() => setFolderError(null)}>
               {folderError}
             </Alert>
           )}
           {tenantsError && (
-            <Alert severity="error" sx={{ mb: 2 }}>
+            <Alert severity="error" sx={{mb: 2}}>
               {tenantsError}
             </Alert>
           )}
-          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} alignItems={{ xs: 'stretch', sm: 'center' }} sx={{ mb: 2 }}>
-            <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
-              {folderMeta
-                ? `Basis: ${folderMeta.base} • Insgesamt: ${folderMeta.total}`
-                : 'Ordnerübersicht'}
+          <Stack
+            direction={{xs: 'column', sm: 'row'}}
+            spacing={2}
+            alignItems={{xs: 'stretch', sm: 'center'}}
+            sx={{mb: 2}}
+          >
+            <Typography variant="body2" color="text.secondary" sx={{flexGrow: 1}}>
+              {folderMeta ? `Basis: ${folderMeta.base} • Insgesamt: ${folderMeta.total}` : 'Ordnerübersicht'}
             </Typography>
             <Typography variant="body2">Ausgewählt: {selectedFolders.length}</Typography>
-            <FormControl size="small" sx={{ minWidth: 200 }}>
+            <FormControl size="small" sx={{minWidth: 200}}>
               <InputLabel id="tenant-select-label">Mandant</InputLabel>
               <Select
                 labelId="tenant-select-label"
@@ -787,63 +931,136 @@ export default function SharePointUpload() {
                 ))}
               </Select>
             </FormControl>
-            <FormControl size="small" sx={{ minWidth: 160 }}>
+            <FormControl size="small" sx={{minWidth: 160}}>
               <InputLabel id="order-label">Reihenfolge</InputLabel>
-              <Select
-                labelId="order-label"
-                value={order}
-                label="Reihenfolge"
-                onChange={handleChangeOrder}
-              >
+              <Select labelId="order-label" value={order} label="Reihenfolge" onChange={handleChangeOrder}>
                 <MenuItem value="alpha">Alphabetisch</MenuItem>
                 <MenuItem value="name_asc">Name aufsteigend</MenuItem>
                 <MenuItem value="name_desc">Name absteigend</MenuItem>
               </Select>
             </FormControl>
             <Stack direction="row" spacing={1}>
-              <Button
-                variant="outlined"
-                onClick={loadFolders}
-                disabled={foldersLoading}
-              >
+              <Button variant="outlined" onClick={loadFolders} disabled={foldersLoading}>
                 Aktualisieren
               </Button>
               <Button
                 variant="contained"
                 onClick={startJobs}
-                disabled={
-                  selectedFolders.length === 0 ||
-                  creatingJobs ||
-                  !tenantId
-                }
+                disabled={selectedFolders.length === 0 || creatingJobs || !tenantId}
               >
-                {creatingJobs ? 'Starte...' : 'Jobs starten'}
+                {creatingJobs ? 'Starte…' : 'Jobs starten'}
               </Button>
             </Stack>
           </Stack>
 
-          <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+          <Box sx={{border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden'}}>
             {renderFoldersTable()}
           </Box>
         </TabPanel>
 
         <TabPanel value={tab} index={1}>
+          {processedError && (
+            <Alert severity="error" sx={{mb: 2}} onClose={() => setProcessedError(null)}>
+              {processedError}
+            </Alert>
+          )}
+          {pipelinesError && (
+            <Alert severity="error" sx={{mb: 2}}>
+              {pipelinesError}
+            </Alert>
+          )}
+          {pipelines.length === 0 && !pipelinesLoading && (
+            <Alert severity="info" sx={{mb: 2}}>
+              Keine Pipelines verfügbar. Bitte lege im Pipeline-Manager einen Lauf an.
+            </Alert>
+          )}
+          <Stack
+            direction={{xs: 'column', md: 'row'}}
+            spacing={2}
+            alignItems={{xs: 'stretch', md: 'center'}}
+            sx={{mb: 2}}
+          >
+            <Typography variant="body2" color="text.secondary" sx={{flexGrow: 1}}>
+              Ausgewählt: {selectedProcessed.length} von {processedFolders.length}
+            </Typography>
+            <FormControl size="small" sx={{minWidth: 200}} disabled={pipelines.length === 0}>
+              <InputLabel id="pipeline-select-label">Pipeline</InputLabel>
+              <Select
+                labelId="pipeline-select-label"
+                value={processingPipelineId}
+                label="Pipeline"
+                onChange={(event: SelectChangeEvent<string>) => setProcessingPipelineId(event.target.value)}
+                displayEmpty
+              >
+                <MenuItem value="">
+                  <em>Pipeline wählen</em>
+                </MenuItem>
+                {pipelines.map((pipeline) => (
+                  <MenuItem key={pipeline.id} value={pipeline.id}>
+                    {pipeline.name}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Stack direction="row" spacing={1}>
+              <Button variant="outlined" onClick={() => loadProcessedFolders()} disabled={processedLoading}>
+                {processedLoading ? 'Lädt…' : 'Aktualisieren'}
+              </Button>
+              <Button
+                variant="contained"
+                onClick={startProcessing}
+                disabled={
+                  processing ||
+                  selectedProcessed.length === 0 ||
+                  pipelines.length === 0 ||
+                  pipelinesLoading
+                }
+                startIcon={
+                  processing ? <CircularProgress size={16} color="inherit" /> : <PlayArrowIcon fontSize="small" />
+                }
+              >
+                {processing ? 'Startet…' : 'Pipeline starten'}
+              </Button>
+            </Stack>
+          </Stack>
+
+          <Box sx={{border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden'}}>
+            {renderProcessedTable()}
+          </Box>
+        </TabPanel>
+
+        <TabPanel value={tab} index={2}>
+          {aggregatedError && (
+            <Alert severity="error" sx={{mb: 2}} onClose={() => setAggregatedError(null)}>
+              {aggregatedError}
+            </Alert>
+          )}
+          <Stack direction="row" justifyContent="flex-end" sx={{mb: 2}} spacing={1}>
+            <Button
+              variant="outlined"
+              onClick={refreshAggregatedAndJobs}
+              disabled={jobsLoading || aggregatedLoading}
+            >
+              {(jobsLoading || aggregatedLoading) ? 'Lädt…' : 'Aktualisieren'}
+            </Button>
+          </Stack>
+
+          <Typography variant="h6" sx={{mb: 1}}>
+            Aggregierte Jobs
+          </Typography>
+          <Box sx={{border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden', mb: 3}}>
+            {renderAggregatedJobsTable()}
+          </Box>
+
           {jobError && (
-            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setJobError(null)}>
+            <Alert severity="error" sx={{mb: 2}} onClose={() => setJobError(null)}>
               {jobError}
             </Alert>
           )}
-          {pipelineError && (
-            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setPipelineError(null)}>
-              {pipelineError}
-            </Alert>
-          )}
-          <Stack direction="row" justifyContent="flex-end" sx={{ mb: 2 }} spacing={1}>
-            <Button variant="outlined" onClick={() => loadJobs()} disabled={jobsLoading}>
-              {jobsLoading ? 'Lädt...' : 'Aktualisieren'}
-            </Button>
-          </Stack>
-          <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden' }}>
+          <Typography variant="h6" sx={{mb: 1}}>
+            SharePoint-Jobs
+          </Typography>
+          <Box sx={{border: 1, borderColor: 'divider', borderRadius: 1, overflow: 'hidden'}}>
             {renderJobsTable()}
           </Box>
         </TabPanel>

@@ -9,12 +9,7 @@ use quick_xml::events::Event;
 use quick_xml::Reader;
 use regex::Regex;
 use serde::Serialize;
-use tokio::{
-    process::Command,
-    sync::Semaphore,
-    task::JoinSet,
-    time::timeout,
-};
+use tokio::{process::Command, sync::Semaphore, task::JoinSet, time::timeout};
 use tracing::{info, warn};
 use uuid::Uuid;
 
@@ -168,8 +163,7 @@ async fn perform_ocr(
     options: &ExtractionOptions,
     capture_layout: bool,
 ) -> Result<OcrResult> {
-    let prefix = std::env::temp_dir()
-        .join(format!("ocr_page_{}_{}", page, Uuid::new_v4()));
+    let prefix = std::env::temp_dir().join(format!("ocr_page_{}_{}", page, Uuid::new_v4()));
     let prefix_str = prefix
         .to_str()
         .ok_or_else(|| anyhow!("prefix path invalid utf8"))?
@@ -269,7 +263,10 @@ pub async fn extract_text_pages(path: &str) -> Result<Vec<PageExtraction>> {
         let semaphore = semaphore.clone();
         let options = options.clone();
         join_set.spawn(async move {
-            let permit = semaphore.acquire_owned().await.context("acquire semaphore")?;
+            let permit = semaphore
+                .acquire_owned()
+                .await
+                .context("acquire semaphore")?;
             let res = process_page(&path, p, &options).await;
             drop(permit);
             res
@@ -300,7 +297,11 @@ pub async fn extract_text_pages(path: &str) -> Result<Vec<PageExtraction>> {
     Ok(collected)
 }
 
-async fn process_page(path: &str, page: i32, options: &ExtractionOptions) -> Result<PageExtraction> {
+async fn process_page(
+    path: &str,
+    page: i32,
+    options: &ExtractionOptions,
+) -> Result<PageExtraction> {
     let pdftotext = run_pdftotext_page(path, page, options.pdftext_layout).await?;
     let text = String::from_utf8(pdftotext.stdout).context("invalid utf8 from pdftotext")?;
     info!(page = page - 1, "pdftotext ok");
@@ -388,9 +389,7 @@ async fn detect_pages(path: &str) -> Result<i32> {
 
 async fn run_pdftotext_full(path: &str) -> Result<std::process::Output> {
     let mut cmd = Command::new("pdftotext");
-    let use_layout = env::var("PDFTEXT_LAYOUT")
-        .map(|v| v != "0")
-        .unwrap_or(true);
+    let use_layout = env::var("PDFTEXT_LAYOUT").map(|v| v != "0").unwrap_or(true);
     if use_layout {
         cmd.arg("-layout");
     }
@@ -404,7 +403,11 @@ async fn run_pdftotext_full(path: &str) -> Result<std::process::Output> {
     Ok(output)
 }
 
-async fn run_pdftotext_page(path: &str, page: i32, use_layout: bool) -> Result<std::process::Output> {
+async fn run_pdftotext_page(
+    path: &str,
+    page: i32,
+    use_layout: bool,
+) -> Result<std::process::Output> {
     let mut cmd = Command::new("pdftotext");
     if use_layout {
         cmd.arg("-layout");

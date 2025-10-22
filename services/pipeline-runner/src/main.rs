@@ -7,7 +7,7 @@ use rdkafka::{
 };
 use serde_json::{json, Value};
 use shared::dto::{
-    PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TextPosition, TernaryLabel,
+    PdfUploaded, PipelineConfig, PipelineRunResult, PromptResult, TernaryLabel, TextPosition,
 };
 use shared::openai_client;
 use shared::openai_settings;
@@ -127,8 +127,8 @@ async fn app_main() -> anyhow::Result<()> {
             final_decisions JSONB
         )",
     )
-        .execute(&pool)
-        .await;
+    .execute(&pool)
+    .await;
 
     let _ = sqlx::query(
         "CREATE TABLE IF NOT EXISTS pipeline_run_steps (
@@ -149,8 +149,8 @@ async fn app_main() -> anyhow::Result<()> {
             PRIMARY KEY (run_id, seq_no)
         )",
     )
-        .execute(&pool)
-        .await;
+    .execute(&pool)
+    .await;
 
     // neue Spalten nachziehen (idempotent)
     let _ = sqlx::query("ALTER TABLE pipeline_run_steps ADD COLUMN IF NOT EXISTS is_final  BOOLEAN NOT NULL DEFAULT FALSE").execute(&pool).await;
@@ -274,23 +274,34 @@ async fn app_main() -> anyhow::Result<()> {
                     for s in steps {
                         let t = s.get("type").and_then(|v| v.as_str()).unwrap_or_default();
                         if t == "ScoringPrompt" {
-                            let pid = s.get("promptId").and_then(|v| v.as_i64())
+                            let pid = s
+                                .get("promptId")
+                                .and_then(|v| v.as_i64())
                                 .or_else(|| s.get("prompt_id").and_then(|v| v.as_i64()));
                             if let Some(pid64) = pid {
                                 let cfgv = s.get("config");
                                 // min_signal oder (backcompat) max(min_weight_yes, min_weight_no)
                                 let min_signal = cfgv
-                                    .and_then(|c| c.get("min_signal")).and_then(|v| v.as_f64())
+                                    .and_then(|c| c.get("min_signal"))
+                                    .and_then(|v| v.as_f64())
                                     .or_else(|| {
-                                        let y = cfgv.and_then(|c| c.get("min_weight_yes")).and_then(|v| v.as_f64()).unwrap_or(0.0);
-                                        let n = cfgv.and_then(|c| c.get("min_weight_no")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+                                        let y = cfgv
+                                            .and_then(|c| c.get("min_weight_yes"))
+                                            .and_then(|v| v.as_f64())
+                                            .unwrap_or(0.0);
+                                        let n = cfgv
+                                            .and_then(|c| c.get("min_weight_no"))
+                                            .and_then(|v| v.as_f64())
+                                            .unwrap_or(0.0);
                                         Some(y.max(n))
                                     })
                                     .unwrap_or(0.0);
                                 scoring_cfg.insert(pid64 as i32, min_signal);
                             }
                         } else if t == "DecisionPrompt" {
-                            let pid = s.get("promptId").and_then(|v| v.as_i64())
+                            let pid = s
+                                .get("promptId")
+                                .and_then(|v| v.as_i64())
                                 .or_else(|| s.get("prompt_id").and_then(|v| v.as_i64()));
                             if let Some(pid64) = pid {
                                 let cfgv = s.get("config");
@@ -320,9 +331,9 @@ async fn app_main() -> anyhow::Result<()> {
                     ORDER BY page_no
                     "#,
                 )
-                    .bind(evt.pdf_id)
-                    .fetch_all(&pool)
-                    .await
+                .bind(evt.pdf_id)
+                .fetch_all(&pool)
+                .await
                 {
                     Ok(rows) => rows
                         .into_iter()
@@ -338,10 +349,7 @@ async fn app_main() -> anyhow::Result<()> {
                     }
                 };
 
-                let total_chars: usize = pages
-                    .iter()
-                    .map(|(_, t): &(i32, String)| t.len())
-                    .sum();
+                let total_chars: usize = pages.iter().map(|(_, t): &(i32, String)| t.len()).sum();
                 info!(
                     id = evt.pdf_id,
                     pages = pages.len(),
@@ -393,12 +401,16 @@ async fn app_main() -> anyhow::Result<()> {
 
                         use std::collections::BTreeMap;
                         let mut final_extraction_map = serde_json::Map::new();
-                        let mut final_scores_map     = serde_json::Map::new();
-                        let mut final_decisions_map  = serde_json::Map::new();
+                        let mut final_scores_map = serde_json::Map::new();
+                        let mut final_decisions_map = serde_json::Map::new();
 
                         // Zusätzlich: typisierte Maps fürs Event
-                        let mut final_scores_hm: std::collections::HashMap<String, f32> = std::collections::HashMap::new();
-                        let mut final_score_labels_hm: std::collections::HashMap<String, TernaryLabel> = std::collections::HashMap::new();
+                        let mut final_scores_hm: std::collections::HashMap<String, f32> =
+                            std::collections::HashMap::new();
+                        let mut final_score_labels_hm: std::collections::HashMap<
+                            String,
+                            TernaryLabel,
+                        > = std::collections::HashMap::new();
 
                         // 2) Final-Extraction je prompt_id
                         let mut by_pid: BTreeMap<i32, Vec<&PromptResult>> = BTreeMap::new();
@@ -458,7 +470,7 @@ async fn app_main() -> anyhow::Result<()> {
                         }
 
                         let mut overall_inputs_bool: Vec<(bool, f32)> = Vec::new();
-                        let mut overall_inputs_tri:  Vec<(f32, f32)> = Vec::new(); // (score -1..+1, weight 0..1)
+                        let mut overall_inputs_tri: Vec<(f32, f32)> = Vec::new(); // (score -1..+1, weight 0..1)
 
                         // 2b) Final-Scoring je prompt_id: NUR min_signal, UNSURE ignorieren
                         {
@@ -507,25 +519,58 @@ async fn app_main() -> anyhow::Result<()> {
                                         if label == "unsure" {
                                             continue;
                                         }
-                                        let res_bool = cons.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
-                                        let conf  = cons.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                                        let vnum = match label.as_str() { "yes" => 1.0, "no" => -1.0, _ => if res_bool { 1.0 } else { -1.0 } };
-                                        let signal = (0.6_f64*1.0 + 0.4_f64*conf).clamp(0.0, 1.0);
+                                        let res_bool = cons
+                                            .get("result")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false);
+                                        let conf = cons
+                                            .get("confidence")
+                                            .and_then(|v| v.as_f64())
+                                            .unwrap_or(0.5);
+                                        let vnum = match label.as_str() {
+                                            "yes" => 1.0,
+                                            "no" => -1.0,
+                                            _ => {
+                                                if res_bool {
+                                                    1.0
+                                                } else {
+                                                    -1.0
+                                                }
+                                            }
+                                        };
+                                        let signal =
+                                            (0.6_f64 * 1.0 + 0.4_f64 * conf).clamp(0.0, 1.0);
 
-                                        if signal < min_signal { continue; }
-
-                                        if res_bool { agg.votes_true += 1; } else { agg.votes_false += 1; }
-                                        if let Some(src) = cons.get("source") {
-                                            if res_bool { agg.support_true.push(src.clone()); } else { agg.support_false.push(src.clone()); }
+                                        if signal < min_signal {
+                                            continue;
                                         }
-                                        if let Some(expl) = cons.get("explanation").and_then(|v| v.as_str()) {
-                                            let trimmed = expl.trim();
-                                            if !trimmed.is_empty() {
-                                                if res_bool { agg.explanations_true.push(trimmed.to_string()); }
-                                                else        { agg.explanations_false.push(trimmed.to_string()); }
+
+                                        if res_bool {
+                                            agg.votes_true += 1;
+                                        } else {
+                                            agg.votes_false += 1;
+                                        }
+                                        if let Some(src) = cons.get("source") {
+                                            if res_bool {
+                                                agg.support_true.push(src.clone());
+                                            } else {
+                                                agg.support_false.push(src.clone());
                                             }
                                         }
-                                        agg.tri_sum  += vnum * signal;
+                                        if let Some(expl) =
+                                            cons.get("explanation").and_then(|v| v.as_str())
+                                        {
+                                            let trimmed = expl.trim();
+                                            if !trimmed.is_empty() {
+                                                if res_bool {
+                                                    agg.explanations_true.push(trimmed.to_string());
+                                                } else {
+                                                    agg.explanations_false
+                                                        .push(trimmed.to_string());
+                                                }
+                                            }
+                                        }
+                                        agg.tri_sum += vnum * signal;
                                         agg.tri_wsum += signal;
                                     }
                                     continue;
@@ -533,40 +578,77 @@ async fn app_main() -> anyhow::Result<()> {
 
                                 for score in scores {
                                     // Tri-State Vote
-                                    let vote = score.get("vote").and_then(|v| v.as_str()).unwrap_or("").to_ascii_lowercase();
-                                    if vote == "unsure" { continue; }
+                                    let vote = score
+                                        .get("vote")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("")
+                                        .to_ascii_lowercase();
+                                    if vote == "unsure" {
+                                        continue;
+                                    }
 
                                     // Boolean für Legacy-Zwecke (Mehrheit)
-                                    let res = score.get("result").and_then(|v| v.as_bool()).unwrap_or(false);
+                                    let res = score
+                                        .get("result")
+                                        .and_then(|v| v.as_bool())
+                                        .unwrap_or(false);
 
                                     let vnum = match vote.as_str() {
-                                        "yes" =>  1.0,
-                                        "no"  => -1.0,
-                                        _ => if res { 1.0 } else { -1.0 }
+                                        "yes" => 1.0,
+                                        "no" => -1.0,
+                                        _ => {
+                                            if res {
+                                                1.0
+                                            } else {
+                                                -1.0
+                                            }
+                                        }
                                     };
-                                    let strength = score.get("strength").and_then(|v| v.as_f64()).unwrap_or(1.0);
-                                    let conf     = score.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.5);
-                                    let signal = (0.6_f64*strength + 0.4_f64*conf).clamp(0.0, 1.0);
+                                    let strength = score
+                                        .get("strength")
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(1.0);
+                                    let conf = score
+                                        .get("confidence")
+                                        .and_then(|v| v.as_f64())
+                                        .unwrap_or(0.5);
+                                    let signal =
+                                        (0.6_f64 * strength + 0.4_f64 * conf).clamp(0.0, 1.0);
 
-                                    if signal < min_signal { continue; }
+                                    if signal < min_signal {
+                                        continue;
+                                    }
 
                                     // Mehrheitszähler (YES/NO)
-                                    if res { agg.votes_true += 1; } else { agg.votes_false += 1; }
+                                    if res {
+                                        agg.votes_true += 1;
+                                    } else {
+                                        agg.votes_false += 1;
+                                    }
 
                                     // Support/Erklärungen sammeln
                                     if let Some(src) = score.get("source") {
-                                        if res { agg.support_true.push(src.clone()); } else { agg.support_false.push(src.clone()); }
+                                        if res {
+                                            agg.support_true.push(src.clone());
+                                        } else {
+                                            agg.support_false.push(src.clone());
+                                        }
                                     }
-                                    if let Some(expl) = score.get("explanation").and_then(|v| v.as_str()) {
+                                    if let Some(expl) =
+                                        score.get("explanation").and_then(|v| v.as_str())
+                                    {
                                         let trimmed = expl.trim();
                                         if !trimmed.is_empty() {
-                                            if res { agg.explanations_true.push(trimmed.to_string()); }
-                                            else   { agg.explanations_false.push(trimmed.to_string()); }
+                                            if res {
+                                                agg.explanations_true.push(trimmed.to_string());
+                                            } else {
+                                                agg.explanations_false.push(trimmed.to_string());
+                                            }
                                         }
                                     }
 
                                     // Score-Aggregation (−1..+1)
-                                    agg.tri_sum  += vnum * signal;
+                                    agg.tri_sum += vnum * signal;
                                     agg.tri_wsum += signal;
                                 }
 
@@ -579,23 +661,42 @@ async fn app_main() -> anyhow::Result<()> {
                                 // Mehrheit entscheidet Label
                                 let result_bool = agg.votes_true >= agg.votes_false;
                                 let mut confidence = if total_votes > 0 {
-                                    (std::cmp::max(agg.votes_true, agg.votes_false) as f32) / (total_votes as f32)
-                                } else { 0.0 };
-                                if !confidence.is_finite() { confidence = 0.0; }
+                                    (std::cmp::max(agg.votes_true, agg.votes_false) as f32)
+                                        / (total_votes as f32)
+                                } else {
+                                    0.0
+                                };
+                                if !confidence.is_finite() {
+                                    confidence = 0.0;
+                                }
                                 let confidence = confidence.clamp(0.0, 1.0);
 
                                 let score_tri: f64 = if agg.tri_wsum > 0.0 {
                                     (agg.tri_sum / agg.tri_wsum).clamp(-1.0, 1.0)
-                                } else if result_bool { 1.0 } else { -1.0 };
+                                } else if result_bool {
+                                    1.0
+                                } else {
+                                    -1.0
+                                };
 
                                 let label = if result_bool { "yes" } else { "no" };
-                                let lbl_enum = if result_bool { TernaryLabel::Yes } else { TernaryLabel::No };
+                                let lbl_enum = if result_bool {
+                                    TernaryLabel::Yes
+                                } else {
+                                    TernaryLabel::No
+                                };
 
                                 // borrow-safe explanation & support
                                 let explanation: Option<String> = if result_bool {
-                                    agg.explanations_true.iter().find(|s| !s.trim().is_empty()).cloned()
+                                    agg.explanations_true
+                                        .iter()
+                                        .find(|s| !s.trim().is_empty())
+                                        .cloned()
                                 } else {
-                                    agg.explanations_false.iter().find(|s| !s.trim().is_empty()).cloned()
+                                    agg.explanations_false
+                                        .iter()
+                                        .find(|s| !s.trim().is_empty())
+                                        .cloned()
                                 };
                                 let support: Vec<serde_json::Value> = if result_bool {
                                     agg.support_true.iter().take(3).cloned().collect()
@@ -652,12 +753,18 @@ async fn app_main() -> anyhow::Result<()> {
                                 // Bool → vnum, signal = 0.5
                                 let vnum = if r.result { 1.0 } else { -1.0 };
                                 let signal = 0.5_f64;
-                                if signal < min_signal { continue; }
+                                if signal < min_signal {
+                                    continue;
+                                }
 
                                 let score_tri = vnum;
                                 let result_bool = r.result;
                                 let label = if result_bool { "yes" } else { "no" };
-                                let lbl_enum = if result_bool { TernaryLabel::Yes } else { TernaryLabel::No };
+                                let lbl_enum = if result_bool {
+                                    TernaryLabel::Yes
+                                } else {
+                                    TernaryLabel::No
+                                };
                                 let key = format!("score_{}", pid);
                                 let confidence = 0.5_f32;
 
@@ -745,41 +852,78 @@ async fn app_main() -> anyhow::Result<()> {
 
                                 if votes.is_empty() {
                                     if let Some(cons) = step.result.get("consolidated") {
-                                        let route = cons.get("route").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
+                                        let route = cons
+                                            .get("route")
+                                            .and_then(|v| v.as_str())
+                                            .unwrap_or("UNKNOWN");
                                         let norm = normalize_route(route);
                                         *agg.route_votes.entry(norm.clone()).or_default() += 1;
                                         if let Some(src) = cons.get("source") {
-                                            agg.support_by_route.entry(norm.clone()).or_default().push(src.clone());
+                                            agg.support_by_route
+                                                .entry(norm.clone())
+                                                .or_default()
+                                                .push(src.clone());
                                         }
-                                        if let Some(b) = cons.get("boolean").and_then(|v| v.as_bool()) {
-                                            if b { agg.yes_votes += 1; } else { agg.no_votes += 1; }
+                                        if let Some(b) =
+                                            cons.get("boolean").and_then(|v| v.as_bool())
+                                        {
+                                            if b {
+                                                agg.yes_votes += 1;
+                                            } else {
+                                                agg.no_votes += 1;
+                                            }
                                         } else if let Some(ans) = route_to_bool(&norm) {
-                                            if ans { agg.yes_votes += 1; } else { agg.no_votes += 1; }
+                                            if ans {
+                                                agg.yes_votes += 1;
+                                            } else {
+                                                agg.no_votes += 1;
+                                            }
                                         }
                                     }
                                     continue;
                                 }
 
                                 for vote in votes {
-                                    let route = vote.get("route").and_then(|v| v.as_str()).unwrap_or("UNKNOWN");
+                                    let route = vote
+                                        .get("route")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("UNKNOWN");
                                     let norm = normalize_route(route);
                                     *agg.route_votes.entry(norm.clone()).or_default() += 1;
 
                                     if let Some(src) = vote.get("source") {
-                                        agg.support_by_route.entry(norm.clone()).or_default().push(src.clone());
+                                        agg.support_by_route
+                                            .entry(norm.clone())
+                                            .or_default()
+                                            .push(src.clone());
                                     }
 
-                                    if let Some(val) = vote.get("value").and_then(|v| v.get("explanation")).and_then(|x| x.as_str()) {
+                                    if let Some(val) = vote
+                                        .get("value")
+                                        .and_then(|v| v.get("explanation"))
+                                        .and_then(|x| x.as_str())
+                                    {
                                         let trimmed = val.trim();
                                         if !trimmed.is_empty() {
-                                            agg.explanations_by_route.entry(norm.clone()).or_default().push(trimmed.to_string());
+                                            agg.explanations_by_route
+                                                .entry(norm.clone())
+                                                .or_default()
+                                                .push(trimmed.to_string());
                                         }
                                     }
 
                                     if let Some(b) = vote.get("boolean").and_then(|v| v.as_bool()) {
-                                        if b { agg.yes_votes += 1; } else { agg.no_votes += 1; }
+                                        if b {
+                                            agg.yes_votes += 1;
+                                        } else {
+                                            agg.no_votes += 1;
+                                        }
                                     } else if let Some(ans) = route_to_bool(&norm) {
-                                        if ans { agg.yes_votes += 1; } else { agg.no_votes += 1; }
+                                        if ans {
+                                            agg.yes_votes += 1;
+                                        } else {
+                                            agg.no_votes += 1;
+                                        }
                                     }
                                 }
                             }
@@ -795,21 +939,42 @@ async fn app_main() -> anyhow::Result<()> {
                                 let norm = normalize_route(&route);
                                 *agg.route_votes.entry(norm.clone()).or_default() += 1;
 
-                                if let Some(src) = r.source.as_ref().and_then(|s| serde_json::to_value(s).ok()) {
-                                    agg.support_by_route.entry(norm.clone()).or_default().push(src);
+                                if let Some(src) =
+                                    r.source.as_ref().and_then(|s| serde_json::to_value(s).ok())
+                                {
+                                    agg.support_by_route
+                                        .entry(norm.clone())
+                                        .or_default()
+                                        .push(src);
                                 }
 
-                                if let Some(val) = r.value.as_ref().and_then(|v| v.get("explanation")).and_then(|x| x.as_str()) {
+                                if let Some(val) = r
+                                    .value
+                                    .as_ref()
+                                    .and_then(|v| v.get("explanation"))
+                                    .and_then(|x| x.as_str())
+                                {
                                     let trimmed = val.trim();
                                     if !trimmed.is_empty() {
-                                        agg.explanations_by_route.entry(norm.clone()).or_default().push(trimmed.to_string());
+                                        agg.explanations_by_route
+                                            .entry(norm.clone())
+                                            .or_default()
+                                            .push(trimmed.to_string());
                                     }
                                 }
 
                                 if let Some(b) = r.boolean {
-                                    if b { agg.yes_votes += 1; } else { agg.no_votes += 1; }
+                                    if b {
+                                        agg.yes_votes += 1;
+                                    } else {
+                                        agg.no_votes += 1;
+                                    }
                                 } else if let Some(ans) = route_to_bool(&norm) {
-                                    if ans { agg.yes_votes += 1; } else { agg.no_votes += 1; }
+                                    if ans {
+                                        agg.yes_votes += 1;
+                                    } else {
+                                        agg.no_votes += 1;
+                                    }
                                 }
                             }
 
@@ -834,10 +999,13 @@ async fn app_main() -> anyhow::Result<()> {
                                     .unwrap_or_else(|| (String::from("UNKNOWN"), 0));
 
                                 let mut confidence = (best_cnt as f32) / (total_votes as f32);
-                                if !confidence.is_finite() { confidence = 0.0; }
+                                if !confidence.is_finite() {
+                                    confidence = 0.0;
+                                }
                                 let confidence = confidence.clamp(0.0, 1.0);
 
-                                let min_conf = decision_cfg.get(&pid).copied().unwrap_or(0.0) as f32;
+                                let min_conf =
+                                    decision_cfg.get(&pid).copied().unwrap_or(0.0) as f32;
                                 if confidence < min_conf {
                                     continue;
                                 }
@@ -887,7 +1055,8 @@ async fn app_main() -> anyhow::Result<()> {
                                 seq += 1;
 
                                 // Für pipeline_runs sammeln
-                                final_decisions_map.insert(key.clone(), json!(answer.unwrap_or(false)));
+                                final_decisions_map
+                                    .insert(key.clone(), json!(answer.unwrap_or(false)));
                             }
                         }
 
@@ -902,16 +1071,32 @@ async fn app_main() -> anyhow::Result<()> {
                                 sum_v += norm * ww;
                                 sum_w += ww;
                             }
-                            if sum_w > 0.0 { (sum_v / sum_w).clamp(0.0, 1.0) } else { 0.0 }
+                            if sum_w > 0.0 {
+                                (sum_v / sum_w).clamp(0.0, 1.0)
+                            } else {
+                                0.0
+                            }
                         } else {
                             // compute_overall_score liefert Option<f32>
                             runner::compute_overall_score(&overall_inputs_bool).unwrap_or(0.0)
                         };
 
                         // 3b) pipeline_runs updaten (inkl. final_* Maps)
-                        let final_extraction_v = if final_extraction_map.is_empty() { Value::Null } else { Value::Object(final_extraction_map.clone()) };
-                        let final_scores_v     = if final_scores_map.is_empty()     { Value::Null } else { Value::Object(final_scores_map.clone()) };
-                        let final_decisions_v  = if final_decisions_map.is_empty()  { Value::Null } else { Value::Object(final_decisions_map.clone()) };
+                        let final_extraction_v = if final_extraction_map.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Object(final_extraction_map.clone())
+                        };
+                        let final_scores_v = if final_scores_map.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Object(final_scores_map.clone())
+                        };
+                        let final_decisions_v = if final_decisions_map.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::Object(final_decisions_map.clone())
+                        };
 
                         if let Err(e) = sqlx::query(
                             "UPDATE pipeline_runs
@@ -923,13 +1108,13 @@ async fn app_main() -> anyhow::Result<()> {
                                    final_decisions  = COALESCE($5, final_decisions)
                              WHERE id = $1",
                         )
-                            .bind(run_id)
-                            .bind(overall)
-                            .bind(final_extraction_v)
-                            .bind(final_scores_v)
-                            .bind(final_decisions_v)
-                            .execute(&pool)
-                            .await
+                        .bind(run_id)
+                        .bind(overall)
+                        .bind(final_extraction_v)
+                        .bind(final_scores_v)
+                        .bind(final_decisions_v)
+                        .execute(&pool)
+                        .await
                         {
                             warn!(%e, %run_id, "failed to finalize pipeline_run row");
                         }
@@ -1000,12 +1185,10 @@ async fn app_main() -> anyhow::Result<()> {
 
 /// Reads persisted OpenAI settings from the database and updates defaults.
 async fn configure_openai_from_settings(pool: &PgPool) -> anyhow::Result<()> {
-    let stored = sqlx::query_scalar::<_, String>(
-        "SELECT value FROM app_settings WHERE key = $1",
-    )
-    .bind(openai_settings::OPENAI_VERSION_KEY)
-    .fetch_optional(pool)
-    .await?;
+    let stored = sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = $1")
+        .bind(openai_settings::OPENAI_VERSION_KEY)
+        .fetch_optional(pool)
+        .await?;
 
     let mut selected = openai_settings::DEFAULT_OPENAI_VERSION.to_string();
     if let Some(value) = stored {

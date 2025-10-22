@@ -39,12 +39,73 @@ export interface JobSummary {
   tenant_id?: string | null;
   upload_url?: string | null;
   pipeline_id?: string | null;
+  pipeline_run_id?: string | null;
   upload_id?: number | null;
   pdf_id?: number | null;
 }
 
 export interface JobsResponse {
   jobs: JobSummary[];
+}
+
+export interface ProcessedFolderSummary {
+  job_id: string;
+  folder_id: string;
+  folder_name: string;
+  status: JobStatus;
+  progress: number;
+  message?: string | null;
+  tenant_id?: string | null;
+  pipeline_id?: string | null;
+  pipeline_run_id?: string | null;
+  upload_id?: number | null;
+  pdf_id?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProcessedFoldersResponse {
+  items: ProcessedFolderSummary[];
+}
+
+export interface ProcessedRunStarted {
+  job_id: string;
+  upload_id: number;
+  pdf_id?: number | null;
+  pipeline_id: string;
+}
+
+export interface ProcessedRunSkipped {
+  job_id: string;
+  reason: string;
+}
+
+export interface ProcessedRunResponse {
+  started: ProcessedRunStarted[];
+  skipped: ProcessedRunSkipped[];
+}
+
+export type AggregatedJobSource = 'sharepoint' | 'pipeline';
+
+export interface AggregatedJobEntry {
+  id: string;
+  source: AggregatedJobSource;
+  status: string;
+  status_category: JobStatus;
+  progress: number;
+  message?: string | null;
+  folder_name?: string | null;
+  pipeline_name?: string | null;
+  sharepoint_job_id?: string | null;
+  pipeline_id?: string | null;
+  pdf_id?: number | null;
+  upload_id?: number | null;
+  created_at: string;
+  updated_at?: string | null;
+}
+
+export interface AggregatedJobsResponse {
+  jobs: AggregatedJobEntry[];
 }
 
 export interface CreateJobsRequest {
