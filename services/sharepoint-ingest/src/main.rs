@@ -484,7 +484,7 @@ async fn run_processed_folders(
         return Err(ErrorBadRequest("job_ids required"));
     }
 
-    let mut client = state
+    let client = state
         .db_pool
         .get()
         .await
@@ -747,7 +747,7 @@ fn spawn_job_worker(state: AppState, job: ManagedJob) {
         });
 
         if let Err(err) = wait_until_running(&jobs, job_id, &mut control_rx).await {
-            handle_control_error(err, &jobs, job_id, &config, &graph).await;
+            handle_control_error(err, &jobs, job_id).await;
             return;
         }
 
@@ -941,14 +941,7 @@ async fn wait_until_running(
     }
 }
 
-async fn handle_control_error(
-    err: JobRunError,
-    jobs: &JobRegistry,
-    job_id: Uuid,
-    config: &Arc<Config>,
-    graph: &Arc<MsGraphClient>,
-) {
-    let snapshot = jobs.get(&job_id).map(|j| j.state.lock().clone());
+async fn handle_control_error(err: JobRunError, jobs: &JobRegistry, job_id: Uuid) {
     match err {
         JobRunError::Canceled => {
             jobs.update(&job_id, |s| {

@@ -334,7 +334,7 @@ pub fn job_summary(job: &ManagedJob) -> JobSummary {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct JobPersistence {
     tx: mpsc::UnboundedSender<JobState>,
 }
