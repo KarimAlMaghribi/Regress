@@ -139,6 +139,8 @@ struct ProcessedFolderItem {
     pipeline_run_id: Option<Uuid>,
     upload_id: Option<i32>,
     pdf_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    upload_status: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -465,11 +467,13 @@ async fn list_processed_folders(
         .map_err(actix_web::error::ErrorInternalServerError)?;
     let rows = client
         .query(
-            "SELECT id, folder_id, folder_name, status, progress, message, tenant_id,
-                    pipeline_id, pipeline_run_id, upload_id, pdf_id, created_at, updated_at
-             FROM sharepoint_jobs
-             WHERE status = 'succeeded' AND upload_id IS NOT NULL
-             ORDER BY updated_at DESC",
+            "SELECT sp.id, sp.folder_id, sp.folder_name, sp.status, sp.progress, sp.message, sp.tenant_id,
+                    sp.pipeline_id, sp.pipeline_run_id, sp.upload_id, sp.pdf_id, sp.created_at, sp.updated_at,
+                    u.status AS upload_status
+             FROM sharepoint_jobs sp
+             JOIN uploads u ON u.id = sp.upload_id
+             WHERE sp.status = 'succeeded' AND sp.upload_id IS NOT NULL AND lower(u.status) = 'ready'
+             ORDER BY sp.updated_at DESC",
             &[],
         )
         .await
@@ -492,6 +496,7 @@ async fn list_processed_folders(
             pipeline_run_id: row.get("pipeline_run_id"),
             upload_id: row.get("upload_id"),
             pdf_id: row.get("pdf_id"),
+            upload_status: Some(row.get("upload_status")),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         });
@@ -548,7 +553,10 @@ async fn run_processed_folders(
     for job_id in &payload.job_ids {
         let row = client
             .query_opt(
-                "SELECT status, upload_id, pdf_id, folder_name FROM sharepoint_jobs WHERE id = $1",
+                "SELECT sp.status, sp.upload_id, sp.pdf_id, sp.folder_name, u.status AS upload_status
+                 FROM sharepoint_jobs sp
+                 LEFT JOIN uploads u ON u.id = sp.upload_id
+                 WHERE sp.id = $1",
                 &[job_id],
             )
             .await
@@ -581,6 +589,19 @@ async fn run_processed_folders(
             continue;
         }
         let upload_id = upload_id.unwrap();
+        let upload_status: Option<String> = row.get("upload_status");
+        let is_ready = upload_status
+            .as_deref()
+            .map(|status| status.eq_ignore_ascii_case("ready"))
+            .unwrap_or(false);
+        if !is_ready {
+            let status = upload_status.as_deref().unwrap_or("unknown");
+            skipped.push(ProcessedRunSkipped {
+                job_id: *job_id,
+                reason: format!("upload status is {status}"),
+            });
+            continue;
+        }
         let pdf_id: Option<i32> = row.get("pdf_id");
         let folder_name: String = row.get("folder_name");
 

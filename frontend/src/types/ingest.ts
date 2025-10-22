@@ -60,6 +60,7 @@ export interface ProcessedFolderSummary {
   pipeline_run_id?: string | null;
   upload_id?: number | null;
   pdf_id?: number | null;
+  upload_status?: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -146,6 +146,45 @@ const formatDateTime = (value?: string | null): string => {
   return date.toLocaleString();
 };
 
+const uploadStatusLabels: Record<string, string> = {
+  ready: 'Text fertig',
+  ocr: 'OCR läuft',
+  merging: 'Upload läuft',
+  error: 'Fehler',
+  failed: 'Fehlgeschlagen',
+};
+
+const getUploadStatusLabel = (value: string): string => {
+  const normalized = value.toLowerCase();
+  if (uploadStatusLabels[normalized]) {
+    return uploadStatusLabels[normalized];
+  }
+  return value
+    .split(/[_\s]+/)
+    .filter((part) => part.length > 0)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+};
+
+const getUploadStatusColor = (
+  value: string,
+): 'default' | 'primary' | 'secondary' | 'error' | 'info' | 'success' | 'warning' => {
+  const normalized = value.toLowerCase();
+  switch (normalized) {
+    case 'ready':
+      return 'success';
+    case 'ocr':
+      return 'info';
+    case 'merging':
+      return 'warning';
+    case 'failed':
+    case 'error':
+      return 'error';
+    default:
+      return 'default';
+  }
+};
+
 export default function SharePointUpload() {
   const [tab, setTab] = React.useState(0);
   const [folders, setFolders] = React.useState<FolderSummary[]>([]);
@@ -569,6 +608,7 @@ export default function SharePointUpload() {
             <TableCell>Ordner</TableCell>
             <TableCell>Mandant</TableCell>
             <TableCell>Status</TableCell>
+            <TableCell>Textstatus</TableCell>
             <TableCell>Fortschritt</TableCell>
             <TableCell>Pipeline</TableCell>
             <TableCell>Upload</TableCell>
@@ -581,6 +621,7 @@ export default function SharePointUpload() {
             const checked = selectedProcessed.includes(item.job_id);
             const percent = toPercent(item.progress);
             const tenantLabel = item.tenant_id ? tenantNameMap.get(item.tenant_id) ?? item.tenant_id : null;
+            const uploadStatus = item.upload_status ?? null;
             return (
               <TableRow key={item.job_id} hover selected={checked}>
                 <TableCell padding="checkbox">
@@ -602,6 +643,19 @@ export default function SharePointUpload() {
                 </TableCell>
                 <TableCell>
                   <Chip label={item.status} size="small" color={statusChipColor[item.status]} />
+                </TableCell>
+                <TableCell>
+                  {uploadStatus ? (
+                    <Chip
+                      label={getUploadStatusLabel(uploadStatus)}
+                      size="small"
+                      color={getUploadStatusColor(uploadStatus)}
+                    />
+                  ) : (
+                    <Typography variant="body2" color="text.secondary">
+                      —
+                    </Typography>
+                  )}
                 </TableCell>
                 <TableCell>
                   <Stack spacing={1} sx={{minWidth: 140}}>
