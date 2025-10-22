@@ -170,8 +170,8 @@ export async function triggerJobAction(jobId: string, action: 'pause' | 'resume'
   return data;
 }
 
-export async function fetchProcessedFolders() {
-  const { data } = await client.get<ProcessedFoldersResponse>('processed-folders');
+export async function fetchProcessedFolders(params?: {stage?: 'pending' | 'completed' | 'finished' | 'all'}) {
+  const { data } = await client.get<ProcessedFoldersResponse>('processed-folders', {params});
   return data;
 }
 
