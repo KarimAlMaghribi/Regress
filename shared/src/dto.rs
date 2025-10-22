@@ -35,7 +35,14 @@ pub struct UploadRequest {
 #[derive(Debug, Serialize, Deserialize)]
 /// Response returned after a successful upload request.
 pub struct UploadResponse {
+    /// Legacy string identifier for backwards compatibility (PDF id as string).
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Database identifier of the upload entry, when available.
+    pub upload_id: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Numeric PDF identifier.
+    pub pdf_id: Option<i32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -430,7 +430,11 @@ async fn upload(
     );
     info!(id, "published pdf-merged event");
 
-    Ok(HttpResponse::Ok().json(UploadResponse { id: id.to_string() }))
+    Ok(HttpResponse::Ok().json(UploadResponse {
+        id: id.to_string(),
+        upload_id: Some(upload_id),
+        pdf_id: Some(id),
+    }))
 }
 
 /// Returns recent uploads for the administrative UI.
