@@ -32,6 +32,7 @@ JSON_KEY: {json_key}
 ANFORDERUNG:
 - Prüfe, ob der Prompt präzise beschreibt, welche fachlichen Informationen (z. B. Deckungsdetails, beteiligte Parteien, Schadenhöhe) extrahiert werden sollen.
 - Bewerte, ob alle relevanten Versicherungskonzepte, Fristen oder Policenmerkmale berücksichtigt werden.
+- Stelle sicher, dass der Prompt genau einen eindeutig benannten Wert verlangt (z. B. ein einzelnes JSON-Feld oder eine klar definierte Zeichenkette).
 - Achte auf Robustheit gegen fehlende Angaben oder widersprüchliche Informationen in Schadenunterlagen.
 
 PROMPT_TEXT:
@@ -40,7 +41,8 @@ PROMPT_TEXT:
 const SCORING_TEMPLATE: &str = r#"PROMPT_TYP: ScoringPrompt
 GEWICHT: {weight}
 ANFORDERUNG:
-- Prüfe, ob der Prompt eine eindeutige Ja/Nein-Entscheidung (oder Ternärlabel) inklusive Begründung verlangt.
+- Prüfe, ob der Prompt eine eindeutige Ja/Nein-Entscheidung inklusive Begründung verlangt.
+- Stelle sicher, dass als finale Ausgabe ausschließlich "true" oder "false" akzeptiert werden.
 - Überprüfe, ob die geforderten Begründungen auf relevante Vertrags- und Schadeninformationen Bezug nehmen.
 - Bewerte, ob das Regelwerk konsistent mit den fachlichen Bewertungsrichtlinien und Gewichtungen im Schadenmanagement ist.
 
@@ -52,6 +54,7 @@ GEWICHT: {weight}
 ANFORDERUNG:
 - Prüfe, ob der Prompt klar definiert, welche fachlichen Eingaben (Scoring-Ergebnisse, Extraktionen) als Entscheidungsgrundlage dienen.
 - Stelle sicher, dass Ausgabekategorien, Schwellenwerte oder Routing-Anweisungen fachlich sinnvoll und nachvollziehbar beschrieben werden.
+- Stelle sicher, dass die finale Entscheidung ausschließlich als "true" oder "false" formuliert ist.
 - Bewerte, ob Sonder- und Fehlerfälle (z. B. Kulanz, Betrugsverdacht, regulatorische Vorgaben) angemessen adressiert werden.
 
 PROMPT_TEXT:
