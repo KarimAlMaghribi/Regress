@@ -49,7 +49,7 @@ function AnimatedRoutes() {
       {pattern: /^\/history$/, title: 'History'},
       {pattern: /^\/tenants$/, title: 'Tenants'},
       {pattern: /^\/settings$/, title: 'Settings'},
-      {pattern: /^\/ingest$/, title: 'SharePoint Upload'},
+      {pattern: /^\/ingest(\/.*)?$/, title: 'SharePoint Upload'},
       {pattern: /^\/help$/, title: 'Help'},
     ];
 
@@ -71,7 +71,7 @@ function AnimatedRoutes() {
           <Route path="/result/:id" element={<PageFade><Result/></PageFade>}/>
           <Route path="/history" element={<PageFade><History/></PageFade>}/>
           <Route path="/tenants" element={<PageFade><TenantsPage/></PageFade>}/>
-          <Route path="/ingest" element={<PageFade><SharePointUpload/></PageFade>}/>
+          <Route path="/ingest/*" element={<PageFade><SharePointUpload/></PageFade>}/>
           <Route path="/settings" element={<PageFade><Settings/></PageFade>}/>
           <Route path="/help" element={<PageFade><Help/></PageFade>}/>
           <Route path="*" element={<PageFade><Dashboard/></PageFade>}/>
