@@ -210,7 +210,6 @@ async fn create_jobs(
         }
     });
     let tenant_override = payload.tenant_id;
-
     let app_state = state.get_ref().clone();
     let mut created = Vec::new();
     for folder_id in &payload.folder_ids {
@@ -231,6 +230,7 @@ async fn create_jobs(
             filenames_override.clone(),
             upload_override.clone(),
             tenant_override,
+            None,
         );
         let summary = job_summary(&job);
         spawn_job_worker(app_state.clone(), job);
@@ -323,6 +323,7 @@ async fn retry_job(
         snapshot.filenames_override,
         snapshot.upload_url,
         snapshot.tenant_id,
+        snapshot.pipeline_id,
     );
     let summary = job_summary(&job);
     let app_state = state.get_ref().clone();
@@ -480,12 +481,14 @@ async fn run_job_inner(
     let upload_name = format!("{}-merged.pdf", sanitize_filename(&snapshot.folder_name));
     let upload_override = snapshot.upload_url.clone();
     let tenant_override = snapshot.tenant_id;
+    let pipeline_override = snapshot.pipeline_id;
     let upload_result = uploader
         .upload(
             &merged_path,
             &upload_name,
             upload_override.as_deref(),
             tenant_override,
+            pipeline_override,
         )
         .await
         .map_err(JobRunError::Failure)?;
