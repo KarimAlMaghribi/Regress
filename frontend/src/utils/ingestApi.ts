@@ -63,11 +63,8 @@ export const normalizeSharePointBase = (value: string | undefined): string | und
 
   try {
     const url = new URL(normalized);
-    const trimmedPath = stripTrailingSlash(url.pathname || '');
-    if (trimmedPath !== '' && trimmedPath !== '/') {
-      const normalizedPath = ensureSharePointPath(url.pathname || '');
-      url.pathname = normalizedPath;
-    }
+    const normalizedPath = ensureSharePointPath(url.pathname || '');
+    url.pathname = normalizedPath;
 
     return stripTrailingSlash(url.toString());
   } catch {
