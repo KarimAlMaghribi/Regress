@@ -22,6 +22,7 @@ interface PipelineState {
   deletePipeline: (id: string) => Promise<void>;
   loadPipeline: (id: string) => Promise<void>;
   createPipeline: (name: string) => Promise<string>;
+  duplicatePipeline: (id: string) => Promise<string>;
   updateName: (name: string) => Promise<void>;
   addStepAt: (index: number, step: PipelineStep) => Promise<void>;
   updateStep: (id: string, changes: Partial<PipelineStep>) => Promise<void>;
@@ -31,6 +32,20 @@ interface PipelineState {
 }
 
 const API = import.meta.env.VITE_API_URL || 'http://localhost:8084';
+
+function parseSteps(json: any): PipelineStep[] {
+  const list: any[] = Array.isArray(json?.steps) ? json.steps : [];
+  return list.map((s) => ({
+    id: s.id,
+    type: s.type,
+    promptId: s.promptId ?? s.prompt_id,
+    yesKey: (s.yesKey ?? s.yes_key) || undefined,
+    noKey: (s.noKey ?? s.no_key) || undefined,
+    route: s.route || undefined,
+    active: s.active !== false,
+    config: s.config ?? undefined,
+  }));
+}
 
 export const usePipelineStore = create<PipelineState>((set, get) => ({
   name: '',
@@ -55,17 +70,7 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     const res = await fetch(`${API}/pipelines/${id}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    const steps: PipelineStep[] = (json.steps || []).map((s: any) => ({
-      id: s.id,
-      type: s.type,
-      promptId: s.promptId ?? s.prompt_id,
-      yesKey: (s.yesKey ?? s.yes_key) || undefined,
-      noKey: (s.noKey ?? s.no_key) || undefined,
-      route: s.route || undefined,
-      active: s.active !== false,
-      // WICHTIG: config aus dem Backend übernehmen
-      config: s.config ?? undefined,
-    }));
+    const steps = parseSteps(json);
     set({ name: json.name, steps, currentPipelineId: id, dirty: false });
   },
 
@@ -77,16 +82,16 @@ export const usePipelineStore = create<PipelineState>((set, get) => ({
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const json = await res.json();
-    const steps: PipelineStep[] = (json.steps || []).map((s: any) => ({
-      id: s.id,
-      type: s.type,
-      promptId: s.promptId ?? s.prompt_id,
-      yesKey: (s.yesKey ?? s.yes_key) || undefined,
-      noKey: (s.noKey ?? s.no_key) || undefined,
-      route: s.route || undefined,
-      active: s.active !== false,
-      config: s.config ?? undefined,
-    }));
+    const steps = parseSteps(json);
+    set({ name: json.name, steps, currentPipelineId: json.id, dirty: false });
+    return json.id as string;
+  },
+
+  async duplicatePipeline(id) {
+    const res = await fetch(`${API}/pipelines/${id}/duplicate`, { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const json = await res.json();
+    const steps = parseSteps(json);
     set({ name: json.name, steps, currentPipelineId: json.id, dirty: false });
     return json.id as string;
   },
