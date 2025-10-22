@@ -161,6 +161,29 @@ async fn store_config(pool: &PgPool, id: Uuid, cfg: &PipelineConfig) -> Result<(
     }
 }
 
+async fn generate_copy_name(pool: &PgPool, original: &str) -> Result<String, HttpResponse> {
+    let mut counter = 1;
+    loop {
+        let candidate = if counter == 1 {
+            format!("{}_copy", original)
+        } else {
+            format!("{}_copy_{}", original, counter)
+        };
+
+        let exists = sqlx::query_scalar::<_, i64>("SELECT 1 FROM pipelines WHERE name = $1")
+            .bind(&candidate)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| HttpResponse::InternalServerError().finish())?;
+
+        if exists.is_none() {
+            return Ok(candidate);
+        }
+
+        counter += 1;
+    }
+}
+
 async fn fetch_setting(pool: &PgPool, key: &str) -> Result<Option<String>, sqlx::Error> {
     sqlx::query_scalar::<_, String>("SELECT value FROM app_settings WHERE key = $1")
         .bind(key)
@@ -229,7 +252,13 @@ async fn put_openai_version(
         }));
     }
 
-    match store_setting(&data.pool, openai_settings::OPENAI_VERSION_KEY, &payload.version).await {
+    match store_setting(
+        &data.pool,
+        openai_settings::OPENAI_VERSION_KEY,
+        &payload.version,
+    )
+    .await
+    {
         Ok(()) => HttpResponse::Ok().json(OpenAiVersionResponse {
             key: payload.version.clone(),
             endpoint: openai_settings::endpoint_for(&payload.version),
@@ -413,6 +442,50 @@ async fn create_pipeline(
         .await
     {
         Ok(_) => HttpResponse::Created().json(PipelineInfo { id, name, steps }),
+        Err(e) => {
+            error!("insert error: {}", e);
+            HttpResponse::InternalServerError().finish()
+        }
+    }
+}
+
+async fn duplicate_pipeline(data: web::Data<AppState>, path: web::Path<Uuid>) -> impl Responder {
+    let source_id = *path;
+    let mut cfg = match fetch_config(&data.pool, source_id).await {
+        Ok(cfg) => cfg,
+        Err(err) => return err,
+    };
+
+    let new_name = match generate_copy_name(&data.pool, &cfg.name).await {
+        Ok(name) => name,
+        Err(err) => return err,
+    };
+
+    cfg.name = new_name.clone();
+    cfg.steps.iter_mut().for_each(|step| {
+        step.id = Uuid::new_v4();
+    });
+
+    let steps = cfg.steps.clone();
+    let new_id = Uuid::new_v4();
+
+    let jsonv = match serde_json::to_value(&cfg) {
+        Ok(v) => v,
+        Err(_) => return HttpResponse::InternalServerError().finish(),
+    };
+
+    match sqlx::query("INSERT INTO pipelines (id, name, config_json) VALUES ($1,$2,$3)")
+        .bind(new_id)
+        .bind(&cfg.name)
+        .bind(jsonv)
+        .execute(&data.pool)
+        .await
+    {
+        Ok(_) => HttpResponse::Created().json(PipelineInfo {
+            id: new_id,
+            name: new_name,
+            steps,
+        }),
         Err(e) => {
             error!("insert error: {}", e);
             HttpResponse::InternalServerError().finish()
@@ -778,6 +851,10 @@ async fn main() -> std::io::Result<()> {
                     .route(web::get().to(get_pipeline))
                     .route(web::put().to(update_pipeline))
                     .route(web::delete().to(delete_pipeline)),
+            )
+            .route(
+                "/pipelines/{id}/duplicate",
+                web::post().to(duplicate_pipeline),
             )
             .route("/pipelines/{id}/steps", web::put().to(add_step))
             .route("/pipelines/{id}/steps/order", web::put().to(reorder_steps))

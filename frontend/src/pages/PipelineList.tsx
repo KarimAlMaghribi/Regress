@@ -19,6 +19,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import AddIcon from '@mui/icons-material/Add';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import FileCopyIcon from '@mui/icons-material/FileCopy';
 import TrendingUpIcon from '@mui/icons-material/TrendingUp';
 import TrendingFlatIcon from '@mui/icons-material/TrendingFlat';
 import TrendingDownIcon from '@mui/icons-material/TrendingDown';
@@ -71,7 +72,7 @@ function Toolbar({
 
 export default function PipelineList() {
   const theme = useTheme();
-  const { listPipelines, deletePipeline, createPipeline, confirmIfDirty } =
+  const { listPipelines, deletePipeline, createPipeline, duplicatePipeline, confirmIfDirty } =
       usePipelineStore();
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
@@ -114,6 +115,17 @@ export default function PipelineList() {
     if (!window.confirm('Pipeline wirklich löschen?')) return;
     await deletePipeline(id);
     load();
+  };
+
+  const handleDuplicate = async (id: string) => {
+    if (!confirmIfDirty()) return;
+    try {
+      const newId = await duplicatePipeline(id);
+      await load();
+      navigate('/pipeline/' + newId);
+    } catch {
+      /* noop */
+    }
   };
 
   const handleCopyId = async (id: string) => {
@@ -164,7 +176,7 @@ export default function PipelineList() {
     {
       field: 'actions',
       headerName: 'Aktionen',
-      width: 140,
+      width: 180,
       sortable: false,
       filterable: false,
       align: 'center',
@@ -174,6 +186,11 @@ export default function PipelineList() {
             <Tooltip title="Bearbeiten">
               <IconButton onClick={() => handleEdit(params.row.id)}>
                 <EditIcon />
+              </IconButton>
+            </Tooltip>
+            <Tooltip title="Duplizieren">
+              <IconButton onClick={() => handleDuplicate(params.row.id)}>
+                <FileCopyIcon />
               </IconButton>
             </Tooltip>
             <Tooltip title="Löschen">
