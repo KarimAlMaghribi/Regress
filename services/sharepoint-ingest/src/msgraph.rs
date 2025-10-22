@@ -11,8 +11,6 @@ use rand::Rng;
 use reqwest::{Client, Method, RequestBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::{fs::File, io::AsyncWriteExt, time::sleep};
-use tracing::warn;
-
 use crate::config::Config;
 
 const GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
