@@ -1,9 +1,10 @@
 //! REST API for managing prompts, groups and pipeline associations.
 
+use awc::Client;
 use axum::{
     extract::{Path, State, Query},
     http::StatusCode,
-    routing::{get, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use sea_orm::{
@@ -14,6 +15,7 @@ use sea_orm::prelude::Decimal;
 use serde::{Deserialize, Serialize};
 use shared::config::Settings;
 use shared::dto::PromptType;
+use shared::openai_client::PromptError;
 use std::str::FromStr;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
@@ -22,12 +24,14 @@ use tracing_subscriber::{fmt, EnvFilter};
 use uuid::Uuid;
 
 mod model;
+mod review;
 use model::{
     group::{Entity as GroupEntity, ActiveModel as GroupActiveModel},
     group_prompt::{Entity as GroupPromptEntity, ActiveModel as GroupPromptActiveModel},
     pipeline::{Entity as PipelineEntity, ActiveModel as PipelineActiveModel},
     prompt::{Entity as Prompt, ActiveModel as PromptActiveModel},
 };
+use review::{PromptReview, ReviewError};
 
 /// Ensures the database connection string disables SSL for local setups.
 fn ensure_sslmode_disable(url: &str) -> String {
@@ -171,6 +175,31 @@ async fn get_prompt(
         return Err(not_found());
     };
     Ok(model.text)
+}
+
+async fn evaluate_prompt_handler(
+    Path(id): Path<i32>,
+    State(db): State<Arc<DatabaseConnection>>,
+) -> Result<Json<PromptReview>, (StatusCode, Json<ErrorResponse>)> {
+    let Some(model) = Prompt::find_by_id(id).one(&*db).await.map_err(int_err)? else {
+        return Err(not_found());
+    };
+
+    let prompt_type = PromptType::from_str(&model.prompt_type)
+        .map_err(|_| bad_request("unsupported prompt type"))?;
+
+    let client = Client::default();
+    let review = review::evaluate_prompt(
+        &client,
+        &model.text,
+        prompt_type,
+        decimal_to_f64_opt(model.weight),
+        model.json_key.as_deref(),
+    )
+    .await
+    .map_err(map_review_err)?;
+
+    Ok(Json(review))
 }
 
 async fn create_prompt(
@@ -478,6 +507,87 @@ fn not_found() -> (StatusCode, Json<ErrorResponse>) {
     (StatusCode::NOT_FOUND, Json(ErrorResponse { error: "Not found".into() }))
 }
 
+fn map_review_err(err: ReviewError) -> (StatusCode, Json<ErrorResponse>) {
+    match err {
+        ReviewError::Decode(e) => {
+            error!("prompt review parse error: {}", e);
+            (
+                StatusCode::BAD_GATEWAY,
+                Json(ErrorResponse { error: "Ungültige Antwort vom Bewertungsmodell".into() }),
+            )
+        }
+        ReviewError::OpenAi(source) => match source {
+            PromptError::Network(msg) => {
+                error!("prompt review network error: {}", msg);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse { error: format!("Bewertung nicht erreichbar: {}", msg) }),
+                )
+            }
+            PromptError::Http(code) => {
+                error!("prompt review http error: {}", code);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse { error: format!("Bewertung antwortete mit HTTP {}", code) }),
+                )
+            }
+            PromptError::Parse(e) => {
+                error!("prompt review invalid payload: {}", e);
+                (
+                    StatusCode::BAD_GATEWAY,
+                    Json(ErrorResponse { error: "Bewertungsantwort konnte nicht interpretiert werden".into() }),
+                )
+            }
+            other => {
+                error!("prompt review failed: {}", other);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse { error: format!("Bewertung fehlgeschlagen: {}", other) }),
+                )
+            }
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::extract::State;
+    use sea_orm::{DatabaseBackend, MockDatabase};
+
+    #[tokio::test]
+    async fn evaluate_prompt_handler_returns_not_found() {
+        let conn = MockDatabase::new(DatabaseBackend::Postgres)
+            .append_query_results([Vec::<model::prompt::Model>::new()])
+            .into_connection();
+        let db = Arc::new(conn);
+
+        let result = evaluate_prompt_handler(Path(1), State(db)).await;
+
+        assert!(result.is_err());
+        let (status, Json(body)) = result.err().unwrap();
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body.error, "Not found");
+    }
+
+    #[test]
+    fn map_review_err_maps_network_to_bad_gateway() {
+        let (status, Json(body)) = map_review_err(ReviewError::OpenAi(PromptError::Network("timeout".into())));
+
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert!(body.error.contains("Bewertung nicht erreichbar"));
+    }
+
+    #[test]
+    fn map_review_err_maps_decode_to_bad_gateway() {
+        let err = serde_json::from_str::<serde_json::Value>("not json").unwrap_err();
+        let (status, Json(body)) = map_review_err(ReviewError::Decode(err));
+
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(body.error, "Ungültige Antwort vom Bewertungsmodell");
+    }
+}
+
 /* ---------------- Bootstrap: Prompts-Schema sicherstellen ---------------- */
 
 async fn ensure_prompt_schema(db: &DatabaseConnection) -> Result<(), sea_orm::DbErr> {
@@ -548,6 +658,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/prompts", get(list_prompts).post(create_prompt))
         .route("/prompts/:id", get(get_prompt).put(update_prompt).delete(delete_prompt))
+        .route("/prompts/:id/evaluate", post(evaluate_prompt_handler))
         .route("/prompts/:id/favorite", put(set_favorite))
         .route("/prompt-groups", get(list_groups).post(create_group))
         .route("/prompt-groups/:id", put(update_group))

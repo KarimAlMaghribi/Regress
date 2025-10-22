@@ -13,6 +13,9 @@ import {
   Divider,
   Typography,
   Paper,
+  Collapse,
+  Alert,
+  CircularProgress,
 } from '@mui/material';
 import ToggleButton from '@mui/material/ToggleButton';
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
@@ -24,6 +27,7 @@ import TextSnippetIcon from '@mui/icons-material/TextSnippet';
 import LeaderboardIcon from '@mui/icons-material/Leaderboard';
 import AltRouteIcon from '@mui/icons-material/AltRoute';
 import LabelOutlinedIcon from '@mui/icons-material/LabelOutlined';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import { alpha, useTheme } from '@mui/material/styles';
 import PageHeader from '../components/PageHeader';
 
@@ -36,6 +40,29 @@ interface Prompt {
   json_key?: string; // Backend-Feld bleibt bestehen – UI nennt es "Name"
   favorite: boolean;
   type: PromptType;
+}
+
+type ReviewScoreLabel = 'excellent' | 'good' | 'fair' | 'poor';
+type ReviewIssueSeverity = 'low' | 'medium' | 'high';
+
+interface PromptReviewScore {
+  value: number;
+  label: ReviewScoreLabel;
+}
+
+interface PromptReviewIssue {
+  area: string;
+  severity: ReviewIssueSeverity;
+  detail: string;
+}
+
+interface PromptReviewResult {
+  score: PromptReviewScore;
+  strengths: string[];
+  issues: PromptReviewIssue[];
+  guardrails: string[];
+  suggested_prompt: string;
+  notes: string[];
 }
 
 declare global {
@@ -74,6 +101,32 @@ export default function Prompts() {
   const [newWeight, setNewWeight] = useState(1);
   const [newJsonKey, setNewJsonKey] = useState('');
   const [newType, setNewType] = useState<PromptType>('ExtractionPrompt');
+  const [reviewById, setReviewById] = useState<Record<number, PromptReviewResult | undefined>>({});
+  const [reviewErrors, setReviewErrors] = useState<Record<number, string | undefined>>({});
+  const [loadingReviewId, setLoadingReviewId] = useState<number | null>(null);
+
+  const scoreLabelMap: Record<ReviewScoreLabel, string> = {
+    excellent: 'Exzellent',
+    good: 'Gut',
+    fair: 'Durchschnittlich',
+    poor: 'Verbesserungswürdig',
+  };
+  const scoreColorMap: Record<ReviewScoreLabel, 'success' | 'info' | 'warning' | 'error'> = {
+    excellent: 'success',
+    good: 'info',
+    fair: 'warning',
+    poor: 'error',
+  };
+  const issueSeverityColor: Record<ReviewIssueSeverity, 'success' | 'warning' | 'error'> = {
+    low: 'success',
+    medium: 'warning',
+    high: 'error',
+  };
+  const issueSeverityLabel: Record<ReviewIssueSeverity, string> = {
+    low: 'Niedrig',
+    medium: 'Mittel',
+    high: 'Hoch',
+  };
 
   useEffect(() => {
     if (newType === 'ExtractionPrompt') setNewWeight(1);
@@ -87,7 +140,11 @@ export default function Prompts() {
   const load = () => {
     fetch(`${getBase()}/prompts`)
     .then((r) => r.json())
-    .then(setPrompts)
+    .then((data: Prompt[]) => {
+      setPrompts(data);
+      setReviewById({});
+      setReviewErrors({});
+    })
     .catch((e) => console.error('Prompts laden', e));
   };
 
@@ -133,6 +190,42 @@ export default function Prompts() {
     fetch(`${getBase()}/prompts/${id}`, { method: 'DELETE' })
     .then(load)
     .catch((e) => console.error('Prompt löschen', e));
+  };
+
+  const reviewPrompt = (id: number) => {
+    setLoadingReviewId(id);
+    setReviewErrors((prev) => ({ ...prev, [id]: undefined }));
+    fetch(`${getBase()}/prompts/${id}/evaluate`, { method: 'POST' })
+    .then(async (res) => {
+      if (!res.ok) {
+        let message = `Bewertung fehlgeschlagen (${res.status})`;
+        try {
+          const data = await res.json();
+          if (data?.error) message = data.error;
+        } catch (err) {
+          console.warn('Fehlerantwort konnte nicht gelesen werden', err);
+        }
+        throw new Error(message);
+      }
+      return res.json();
+    })
+    .then((data: PromptReviewResult) => {
+      setReviewById((prev) => ({ ...prev, [id]: data }));
+    })
+    .catch((err: Error) => {
+      setReviewErrors((prev) => ({ ...prev, [id]: err.message }));
+    })
+    .finally(() => {
+      setLoadingReviewId((prev) => (prev === id ? null : prev));
+    });
+  };
+
+  const adoptSuggestion = (id: number) => {
+    const suggestion = reviewById[id]?.suggested_prompt;
+    if (!suggestion) return;
+    setPrompts((items) =>
+        items.map((it) => (it.id === id ? { ...it, text: suggestion } : it))
+    );
   };
 
   return (
@@ -284,6 +377,9 @@ export default function Prompts() {
           {prompts.map((p) => {
             const meta = typeMeta(p.type);
             const canSave = p.type !== 'ExtractionPrompt' || (p.json_key && p.json_key.trim().length > 0);
+            const review = reviewById[p.id];
+            const reviewError = reviewErrors[p.id];
+            const isReviewLoading = loadingReviewId === p.id;
             return (
                 <Card
                     key={p.id}
@@ -406,9 +502,179 @@ export default function Prompts() {
                       )}
                       <Chip size="small" label={`ID: ${p.id}`} variant="outlined" sx={{ borderRadius: 2 }} />
                     </Stack>
+
+                    {reviewError && (
+                        <Alert severity="error" sx={{ mt: 2, borderRadius: 2 }}>
+                          {reviewError}
+                        </Alert>
+                    )}
+
+                    <Collapse in={Boolean(review)} unmountOnExit>
+                      {review && (
+                          <Box
+                              sx={{
+                                mt: 2,
+                                borderRadius: 2,
+                                border: `1px solid ${accent.subtleBorder}`,
+                                background: alpha(
+                                    theme.palette.primary.main,
+                                    theme.palette.mode === 'dark' ? 0.12 : 0.06
+                                ),
+                                p: 2,
+                              }}
+                          >
+                            <Stack spacing={1.5}>
+                              <Stack
+                                  direction={{ xs: 'column', sm: 'row' }}
+                                  spacing={1.5}
+                                  alignItems={{ sm: 'center' }}
+                                  justifyContent="space-between"
+                              >
+                                <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                                  <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                                    LLM-Review
+                                  </Typography>
+                                  <Chip
+                                      size="small"
+                                      color={scoreColorMap[review.score.label]}
+                                      label={`${review.score.value}/100 · ${scoreLabelMap[review.score.label]}`}
+                                      sx={{ borderRadius: 2 }}
+                                  />
+                                </Stack>
+                                <Button
+                                    size="small"
+                                    variant="outlined"
+                                    onClick={() => adoptSuggestion(p.id)}
+                                    disabled={!review.suggested_prompt.trim()}
+                                    sx={{ borderRadius: 2 }}
+                                >
+                                  Vorschlag übernehmen
+                                </Button>
+                              </Stack>
+
+                              {review.suggested_prompt && (
+                                  <Paper
+                                      variant="outlined"
+                                      sx={{
+                                        borderRadius: 2,
+                                        p: 1.5,
+                                        bgcolor: alpha(
+                                            theme.palette.background.paper,
+                                            theme.palette.mode === 'dark' ? 0.35 : 0.6
+                                        ),
+                                      }}
+                                  >
+                                    <Typography
+                                        component="pre"
+                                        sx={{
+                                          m: 0,
+                                          whiteSpace: 'pre-wrap',
+                                          fontFamily: 'var(--font-mono)',
+                                          fontSize: '0.85rem',
+                                        }}
+                                    >
+                                      {review.suggested_prompt}
+                                    </Typography>
+                                  </Paper>
+                              )}
+
+                              {review.strengths?.length ? (
+                                  <Box>
+                                    <Typography variant="caption" color="text.secondary">
+                                      Stärken
+                                    </Typography>
+                                    <Stack spacing={0.5} mt={0.5}>
+                                      {review.strengths.map((item, idx) => (
+                                          <Typography key={`strength-${idx}`} variant="body2">
+                                            • {item}
+                                          </Typography>
+                                      ))}
+                                    </Stack>
+                                  </Box>
+                              ) : null}
+
+                              {review.issues?.length ? (
+                                  <Box>
+                                    <Typography variant="caption" color="text.secondary">
+                                      Risiken &amp; Lücken
+                                    </Typography>
+                                    <Stack spacing={1} mt={0.5}>
+                                      {review.issues.map((issue, idx) => (
+                                          <Paper key={`issue-${idx}`} variant="outlined" sx={{ borderRadius: 2, p: 1.25 }}>
+                                            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+                                              <Chip size="small" variant="outlined" label={issue.area} sx={{ borderRadius: 2 }} />
+                                              <Chip
+                                                  size="small"
+                                                  color={issueSeverityColor[issue.severity]}
+                                                  label={issueSeverityLabel[issue.severity]}
+                                                  sx={{ borderRadius: 2 }}
+                                              />
+                                            </Stack>
+                                            <Typography variant="body2" sx={{ mt: 0.75 }}>
+                                              {issue.detail}
+                                            </Typography>
+                                          </Paper>
+                                      ))}
+                                    </Stack>
+                                  </Box>
+                              ) : null}
+
+                              {review.guardrails?.length ? (
+                                  <Box>
+                                    <Typography variant="caption" color="text.secondary">
+                                      Guardrails
+                                    </Typography>
+                                    <Stack spacing={0.5} mt={0.5}>
+                                      {review.guardrails.map((item, idx) => (
+                                          <Typography key={`guardrail-${idx}`} variant="body2">
+                                            • {item}
+                                          </Typography>
+                                      ))}
+                                    </Stack>
+                                  </Box>
+                              ) : null}
+
+                              {review.notes?.length ? (
+                                  <Box>
+                                    <Typography variant="caption" color="text.secondary">
+                                      Notizen
+                                    </Typography>
+                                    <Stack spacing={0.5} mt={0.5}>
+                                      {review.notes.map((item, idx) => (
+                                          <Typography key={`note-${idx}`} variant="body2" color="text.secondary">
+                                            • {item}
+                                          </Typography>
+                                      ))}
+                                    </Stack>
+                                  </Box>
+                              ) : null}
+                            </Stack>
+                          </Box>
+                      )}
+                    </Collapse>
                   </CardContent>
 
                   <CardActions sx={{ justifyContent: 'flex-end', pt: 0, gap: 1 }}>
+                    <Tooltip title="Verbesserung vorschlagen">
+                      <span>
+                        <Button
+                            onClick={() => reviewPrompt(p.id)}
+                            variant="outlined"
+                            size="small"
+                            startIcon={
+                              isReviewLoading ? (
+                                  <CircularProgress color="inherit" size={16} />
+                              ) : (
+                                  <AutoFixHighIcon />
+                              )
+                            }
+                            disabled={isReviewLoading}
+                            sx={{ borderRadius: 2 }}
+                        >
+                          {/* kein Label – nur Icon */}
+                        </Button>
+                      </span>
+                    </Tooltip>
                     <Button onClick={() => save(p)} variant="contained" size="small" startIcon={<SaveIcon />} disabled={!canSave} sx={{ borderRadius: 2 }}>
                       {/* kein Label – nur Icon */}
                     </Button>
