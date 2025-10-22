@@ -2,10 +2,9 @@
 
 use crate::dto::{ScoringResult, TernaryLabel, TextPosition};
 use crate::openai_settings;
-use actix_web::http::header;
-use awc::Client;
 use once_cell::sync::Lazy;
 use openai::chat::{ChatCompletionMessage, ChatCompletionMessageRole};
+use reqwest::{header, Client};
 use serde::de::Error as _; // for JsonError::custom(...)
 use serde::Serialize;
 use serde_json::{json, Error as JsonError, Value as JsonValue};
@@ -919,15 +918,14 @@ pub async fn call_openai_chat(
         model
     );
 
-    let mut request = client.post(endpoint.clone());
-    request = match auth_style {
-        AuthStyle::ApiKey => request.insert_header(("api-key", key.clone())),
-        AuthStyle::BearerToken => {
-            request.insert_header((header::AUTHORIZATION, format!("Bearer {}", key)))
-        }
+    let request = match auth_style {
+        AuthStyle::ApiKey => client.post(endpoint.clone()).header("api-key", key.clone()),
+        AuthStyle::BearerToken => client
+            .post(endpoint.clone())
+            .header(header::AUTHORIZATION, format!("Bearer {}", key)),
     };
 
-    let mut res = request.send_json(&payload).await.map_err(|e| {
+    let res = request.json(&payload).send().await.map_err(|e| {
         error!("network error to OpenAI: {e}");
         PromptError::Network(e.to_string())
     })?;
@@ -935,9 +933,10 @@ pub async fn call_openai_chat(
     let status = res.status();
     debug!(status = %status, endpoint = %endpoint, kind = ?endpoint_kind, "← headers = {:?}", res.headers());
     let bytes = res
-        .body()
+        .bytes()
         .await
         .map_err(|e| PromptError::Network(e.to_string()))?;
+    let bytes = bytes.to_vec();
     let body_preview = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]).to_string();
     debug!("← body[0..512] = {}", body_preview);
 
@@ -1058,7 +1057,10 @@ pub fn resolve_page_for_quote_value(
 
 /// Executes an extraction prompt and returns the structured answer.
 pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, PromptError> {
-    let client = Client::builder().timeout(Duration::from_secs(120)).finish();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| PromptError::Network(e.to_string()))?;
     let prompt = fetch_prompt(prompt_id).await?;
 
     let system_en = "You are an extraction engine. Follow the contract strictly.";
@@ -1112,7 +1114,10 @@ pub async fn extract(prompt_id: i32, input: &str) -> Result<OpenAiAnswer, Prompt
 
 /// Executes a scoring prompt and normalises the tri-state result.
 pub async fn score(prompt_id: i32, document: &str) -> Result<ScoringResult, PromptError> {
-    let client = Client::builder().timeout(Duration::from_secs(120)).finish();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| PromptError::Network(e.to_string()))?;
     let question = fetch_prompt(prompt_id).await?;
     let msgs = build_scoring_prompt(document, &question);
 
@@ -1227,7 +1232,10 @@ pub async fn decide(
     document: &str,
     state: &HashMap<String, serde_json::Value>,
 ) -> Result<OpenAiAnswer, PromptError> {
-    let client = Client::builder().timeout(Duration::from_secs(120)).finish();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| PromptError::Network(e.to_string()))?;
     let prompt = fetch_prompt(prompt_id).await?;
 
     let system = DECISION_GUARD_PREFIX;
@@ -1298,33 +1306,39 @@ pub async fn dummy(_name: &str) -> Result<serde_json::Value, PromptError> {
 
 /// Downloads the prompt content from the prompt manager service.
 async fn fetch_prompt(id: i32) -> Result<String, PromptError> {
-    let client = Client::builder().timeout(Duration::from_secs(120)).finish();
+    let client = Client::builder()
+        .timeout(Duration::from_secs(120))
+        .build()
+        .map_err(|e| PromptError::Network(e.to_string()))?;
     let base =
         std::env::var("PROMPT_MANAGER_URL").unwrap_or_else(|_| "http://prompt-manager:8082".into());
     let url = format!("{}/prompts/{}", base, id);
     let mut last_err: Option<PromptError> = None;
     for i in 0..=3 {
-        match client.get(url.clone()).send().await {
-            Ok(mut resp) if resp.status().is_success() => match resp.body().await {
-                Ok(text) => {
-                    debug!(id, %url, "prompt fetched ({} bytes)", text.len());
-                    return Ok(String::from_utf8_lossy(&text).to_string());
-                }
-                Err(e) => {
-                    warn!(id, retry = i, "fetch_prompt body read error: {e}");
-                    last_err = Some(PromptError::Network(e.to_string()));
-                }
-            },
+        match client.get(&url).send().await {
             Ok(resp) => {
                 let status = resp.status();
-                warn!(
-                    id,
-                    %url,
-                    status = %status,
-                    retry = i,
-                    "fetch_prompt HTTP error"
-                );
-                last_err = Some(PromptError::Http(status.as_u16()));
+                if status.is_success() {
+                    match resp.text().await {
+                        Ok(text) => {
+                            debug!(id, %url, "prompt fetched ({} bytes)", text.len());
+                            return Ok(text);
+                        }
+                        Err(e) => {
+                            warn!(id, retry = i, "fetch_prompt body read error: {e}");
+                            last_err = Some(PromptError::Network(e.to_string()));
+                        }
+                    }
+                } else {
+                    warn!(
+                        id,
+                        %url,
+                        status = %status,
+                        retry = i,
+                        "fetch_prompt HTTP error"
+                    );
+                    last_err = Some(PromptError::Http(status.as_u16()));
+                }
             }
             Err(e) => {
                 warn!(id, retry = i, "fetch_prompt network error: {e}");
