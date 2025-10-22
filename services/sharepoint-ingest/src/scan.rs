@@ -121,8 +121,7 @@ mod tests {
             .suffix(".pdf")
             .tempfile()
             .expect("temp pdf file");
-        tmp.write_all(b"%PDF-1.7\n")
-            .expect("write pdf header");
+        tmp.write_all(b"%PDF-1.7\n").expect("write pdf header");
         assert_pdf(tmp.path()).expect("valid pdf should pass");
     }
 }

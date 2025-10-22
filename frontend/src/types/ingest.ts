@@ -20,6 +20,14 @@ export interface FolderListResponse {
 
 export type JobOrder = 'alpha' | 'name_asc' | 'name_desc';
 
+export interface UploadResultSummary {
+  status: string;
+  response: unknown;
+  uploaded_at: string;
+  upload_id?: number | null;
+  pdf_id?: number | null;
+}
+
 export interface JobSummary {
   id: string;
   folder_id: string;
@@ -27,9 +35,12 @@ export interface JobSummary {
   status: JobStatus;
   progress: number;
   message?: string | null;
-  output?: unknown;
+  output?: UploadResultSummary;
   tenant_id?: string | null;
   upload_url?: string | null;
+  pipeline_id?: string | null;
+  upload_id?: number | null;
+  pdf_id?: number | null;
 }
 
 export interface JobsResponse {
@@ -42,6 +53,13 @@ export interface CreateJobsRequest {
   filenames?: Record<string, string[]>;
   tenant_id?: string;
   upload_url?: string;
+}
+
+export interface UploadListEntry {
+  id: number;
+  pdf_id: number | null;
+  status: string;
+  names?: string[];
 }
 
 export interface CreateJobsResponse {

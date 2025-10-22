@@ -54,6 +54,9 @@ pub struct JobState {
     pub output: Option<UploadResult>,
     pub upload_url: Option<String>,
     pub tenant_id: Option<Uuid>,
+    pub pipeline_id: Option<Uuid>,
+    pub upload_id: Option<i32>,
+    pub pdf_id: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -79,6 +82,8 @@ impl JobState {
 
     /// Records the outcome produced by the upload adapter.
     pub fn set_output(&mut self, output: UploadResult) {
+        self.upload_id = output.upload_id;
+        self.pdf_id = output.pdf_id;
         self.output = Some(output);
         self.updated_at = Utc::now();
     }
@@ -115,6 +120,9 @@ pub struct JobSummary {
     pub filenames_override: Option<Vec<String>>,
     pub upload_url: Option<String>,
     pub tenant_id: Option<Uuid>,
+    pub pipeline_id: Option<Uuid>,
+    pub upload_id: Option<i32>,
+    pub pdf_id: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -139,6 +147,7 @@ impl JobRegistry {
         filenames_override: Option<Vec<String>>,
         upload_url: Option<String>,
         tenant_id: Option<Uuid>,
+        pipeline_id: Option<Uuid>,
     ) -> ManagedJob {
         let id = Uuid::new_v4();
         let (tx, _rx) = watch::channel(JobCommand::Run);
@@ -155,6 +164,9 @@ impl JobRegistry {
             output: None,
             upload_url,
             tenant_id,
+            pipeline_id,
+            upload_id: None,
+            pdf_id: None,
             created_at: now,
             updated_at: now,
         };
@@ -191,6 +203,9 @@ impl JobRegistry {
                     filenames_override: state.filenames_override.clone(),
                     upload_url: state.upload_url.clone(),
                     tenant_id: state.tenant_id,
+                    pipeline_id: state.pipeline_id,
+                    upload_id: state.upload_id,
+                    pdf_id: state.pdf_id,
                     created_at: state.created_at,
                     updated_at: state.updated_at,
                 }
@@ -257,6 +272,9 @@ pub fn job_summary(job: &ManagedJob) -> JobSummary {
         filenames_override: state.filenames_override.clone(),
         upload_url: state.upload_url.clone(),
         tenant_id: state.tenant_id,
+        pipeline_id: state.pipeline_id,
+        upload_id: state.upload_id,
+        pdf_id: state.pdf_id,
         created_at: state.created_at,
         updated_at: state.updated_at,
     }
