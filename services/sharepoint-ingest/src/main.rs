@@ -1919,11 +1919,12 @@ async fn run_job_inner(
 
     let state_pipeline_id = jobs
         .get(&job_id)
-        .map(|managed| managed.state.lock().pipeline_id);
+        .and_then(|managed| managed.state.lock().pipeline_id);
     let pipeline_assigned_in_state = state_pipeline_id.is_some();
-    let pipeline_candidate = state_pipeline_id.or(snapshot.pipeline_id);
+    let snapshot_pipeline_id = snapshot.pipeline_id;
+    let pipeline_candidate = state_pipeline_id.or(snapshot_pipeline_id);
     let pipeline_id = if pipeline_candidate.is_some()
-        && (snapshot.pipeline_id.is_some() || !snapshot.auto_managed || pipeline_assigned_in_state)
+        && (snapshot_pipeline_id.is_some() || !snapshot.auto_managed || pipeline_assigned_in_state)
     {
         pipeline_candidate
     } else {
