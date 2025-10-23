@@ -2,12 +2,13 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use reqwest::multipart::{Form, Part};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tracing::warn;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -39,9 +40,17 @@ impl UploadAdapter {
             .timeout(timeout)
             .build()
             .context("building upload client")?;
+        let trimmed = base_url.trim();
+        let normalized = normalize_upload_endpoint(trimmed);
+        if normalized.is_empty() {
+            return Err(anyhow!("upload base URL must not be empty"));
+        }
+        if normalized != trimmed {
+            warn!(original = %trimmed, normalized = %normalized, "normalizing legacy upload URL");
+        }
         Ok(Self {
             client,
-            base_url,
+            base_url: normalized,
             token,
         })
     }
@@ -71,7 +80,18 @@ impl UploadAdapter {
             .mime_str("application/pdf")?;
         form = form.part("file", part);
         let mut target_url = match override_url {
-            Some(url) => url.trim().to_string(),
+            Some(url) => {
+                let trimmed = url.trim();
+                if trimmed.is_empty() {
+                    self.base_url.clone()
+                } else {
+                    let normalized = normalize_upload_endpoint(trimmed);
+                    if normalized != trimmed {
+                        warn!(original = %trimmed, normalized = %normalized, "normalizing legacy upload URL override");
+                    }
+                    normalized
+                }
+            }
             None => self.base_url.clone(),
         };
         if let Some(tenant) = &tenant_value {
@@ -134,5 +154,27 @@ impl UploadAdapter {
             upload_id,
             pdf_id,
         })
+    }
+}
+
+fn normalize_upload_endpoint(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let (base, query) = match trimmed.split_once('?') {
+        Some((base, query)) => (base, Some(query)),
+        None => (trimmed, None),
+    };
+    let base = base.trim_end_matches('/');
+    let normalized_base = if let Some(prefix) = base.strip_suffix("/api/upload") {
+        let prefix = prefix.trim_end_matches('/');
+        format!("{}/upload", prefix)
+    } else {
+        base.to_string()
+    };
+    match query {
+        Some(q) if !q.is_empty() => format!("{}?{}", normalized_base, q),
+        _ => normalized_base,
     }
 }
