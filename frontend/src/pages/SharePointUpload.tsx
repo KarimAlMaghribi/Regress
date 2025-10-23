@@ -41,7 +41,6 @@ import {
   fetchProcessedFolders,
   runProcessedFolders,
   fetchAggregatedJobs,
-  upsertAutomationRule,
   fetchAutomationSettings,
   updateAutomationSetting,
 } from '../utils/ingestApi';
@@ -53,7 +52,6 @@ import type {
   ProcessedFolderSummary,
   AggregatedJobEntry,
   AggregatedJobSource,
-  AutomationUpsertRequest,
   AutomationDefaultSettings,
   AutomationDefaultUpdate,
 } from '../types/ingest';
@@ -203,7 +201,6 @@ export default function SharePointUpload() {
   const [foldersLoading, setFoldersLoading] = React.useState(false);
   const [creatingJobs, setCreatingJobs] = React.useState(false);
   const [order, setOrder] = React.useState<JobOrder>('alpha');
-  const [automationSaving, setAutomationSaving] = React.useState<string | null>(null);
   const [automationDefaultsLoading, setAutomationDefaultsLoading] = React.useState(false);
   const [automationDefaultsError, setAutomationDefaultsError] = React.useState<string | null>(null);
   const [ingestAutomation, setIngestAutomation] = React.useState<AutomationDefaultSettings | null>(null);
@@ -236,6 +233,12 @@ export default function SharePointUpload() {
     tenants.forEach((tenant) => map.set(tenant.id, tenant.name));
     return map;
   }, [tenants]);
+
+  const pipelineNameMap = React.useMemo(() => {
+    const map = new Map<string, string>();
+    pipelines.forEach((pipeline) => map.set(pipeline.id, pipeline.name));
+    return map;
+  }, [pipelines]);
 
   const globalIngestEnabled = ingestAutomation?.enabled ?? false;
   const ingestTenantValue = ingestAutomation?.tenant_id ?? '';
@@ -743,95 +746,6 @@ export default function SharePointUpload() {
     await loadAggregatedJobs();
   }, [loadJobs, loadAggregatedJobs]);
 
-  const applyAutomationUpdates = React.useCallback(
-    async (folder: FolderSummary, updates: AutomationUpsertRequest) => {
-      setAutomationSaving(folder.id);
-      try {
-        const current = folder.automation ?? {
-          tenant_id: tenantId ?? null,
-          pipeline_id: null,
-          auto_ingest: false,
-          auto_pipeline: false,
-          last_seen: undefined,
-          updated_at: undefined,
-        };
-        let nextAutoIngest = updates.auto_ingest ?? current.auto_ingest;
-        let nextAutoPipeline = updates.auto_pipeline ?? current.auto_pipeline;
-        if (updates.auto_ingest === false) {
-          nextAutoPipeline = false;
-        }
-        if (updates.auto_pipeline === true) {
-          nextAutoIngest = true;
-        }
-        const payload: AutomationUpsertRequest = {
-          folder_name: folder.name,
-          tenant_id:
-            updates.tenant_id !== undefined
-              ? updates.tenant_id
-              : current.tenant_id ?? (tenantId || null),
-          pipeline_id:
-            updates.pipeline_id !== undefined
-              ? updates.pipeline_id
-              : current.pipeline_id ?? null,
-          auto_ingest: nextAutoIngest,
-          auto_pipeline: nextAutoPipeline,
-        };
-        const updated = await upsertAutomationRule(folder.id, payload);
-        const automation = {
-          tenant_id: updated.tenant_id ?? null,
-          pipeline_id: updated.pipeline_id ?? null,
-          auto_ingest: updated.auto_ingest,
-          auto_pipeline: updated.auto_pipeline,
-          last_seen: updated.last_seen ?? undefined,
-          updated_at: updated.updated_at,
-        };
-        const source = updated.managed_by_default ? 'default' : 'folder';
-        setFolders((prev) =>
-          prev.map((item) =>
-            item.id === folder.id ? {...item, automation, automation_source: source} : item,
-          ),
-        );
-      } catch (error) {
-        setFolderError(getErrorMessage(error));
-      } finally {
-        setAutomationSaving(null);
-      }
-    },
-    [tenantId, setFolders, setFolderError],
-  );
-
-  const handleAutomationToggle = React.useCallback(
-    async (folder: FolderSummary, enabled: boolean) => {
-      await applyAutomationUpdates(folder, {auto_ingest: enabled});
-    },
-    [applyAutomationUpdates],
-  );
-
-  const handleAutoPipelineToggle = React.useCallback(
-    async (folder: FolderSummary, enabled: boolean) => {
-      const fallbackPipeline = folder.automation?.pipeline_id ?? pipelines[0]?.id ?? null;
-      await applyAutomationUpdates(folder, {
-        auto_pipeline: enabled,
-        pipeline_id: enabled ? fallbackPipeline : folder.automation?.pipeline_id ?? null,
-      });
-    },
-    [applyAutomationUpdates, pipelines],
-  );
-
-  const handleAutomationTenantChange = React.useCallback(
-    async (folder: FolderSummary, value: string | null) => {
-      await applyAutomationUpdates(folder, {tenant_id: value});
-    },
-    [applyAutomationUpdates],
-  );
-
-  const handleAutomationPipelineChange = React.useCallback(
-    async (folder: FolderSummary, value: string | null) => {
-      await applyAutomationUpdates(folder, {pipeline_id: value});
-    },
-    [applyAutomationUpdates],
-  );
-
   const renderFoldersTable = () => {
     if (foldersLoading) {
       return (
@@ -875,13 +789,29 @@ export default function SharePointUpload() {
           {folders.map((folder) => {
             const checked = selectedFolders.includes(folder.id);
             const automation = folder.automation;
-            const isSaving = automationSaving === folder.id;
             const autoIngest = automation?.auto_ingest ?? false;
             const autoPipeline = automation?.auto_pipeline ?? false;
-            const automationTenant = automation?.tenant_id ?? '';
-            const automationPipeline = automation?.pipeline_id ?? '';
+            const automationTenant = automation?.tenant_id ?? null;
+            const automationPipeline = automation?.pipeline_id ?? null;
             const automationSource = folder.automation_source ?? 'folder';
             const isGlobal = automationSource === 'default';
+            const tenantLabel =
+              automationTenant != null
+                ? tenantNameMap.get(automationTenant) ?? automationTenant
+                : null;
+            const pipelineLabel =
+              automationPipeline != null
+                ? pipelineNameMap.get(automationPipeline) ?? automationPipeline
+                : null;
+            const ingestDescription = isGlobal
+              ? 'Gesteuert durch den globalen Schalter im Tab „Anlagen“.'
+              : 'Nur Anzeige – passe die Automatik über den globalen Tab-Schalter an.';
+            const pipelineStartDescription = isGlobal
+              ? 'Pipelines werden über den globalen Schalter im Tab „Verarbeitung“ gestartet.'
+              : 'Nur Anzeige – verwalte Pipeline-Starts über den Tab „Verarbeitung“.';
+            const pipelineAssignmentDescription = isGlobal
+              ? 'Pipeline-Standard aus dem Tab „Verarbeitung“.'
+              : 'Historische Ordnerregel – Änderungen über globale Einstellungen.';
             return (
               <TableRow key={folder.id} hover selected={checked}>
                 <TableCell padding="checkbox">
@@ -907,108 +837,59 @@ export default function SharePointUpload() {
                   </Stack>
                 </TableCell>
                 <TableCell align="right">{folder.file_count}</TableCell>
-                <TableCell>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Switch
-                      checked={autoIngest}
-                      onChange={(_, value) => handleAutomationToggle(folder, value)}
-                      disabled={isSaving || isGlobal}
-                      inputProps={{'aria-label': 'Automatisch verarbeiten'}}
+                <TableCell sx={{minWidth: 220}}>
+                  <Stack spacing={0.5}>
+                    <Chip
+                      label={autoIngest ? 'Aktiv' : 'Inaktiv'}
+                      size="small"
+                      color={autoIngest ? 'success' : 'default'}
                     />
-                    {isSaving && <CircularProgress size={16} />}
+                    <Typography variant="caption" color="text.secondary">
+                      {ingestDescription}
+                    </Typography>
                   </Stack>
                 </TableCell>
-                <TableCell sx={{minWidth: 180}}>
-                  <FormControl
-                    size="small"
-                    sx={{minWidth: 160}}
-                    disabled={
-                      isSaving ||
-                      !autoIngest ||
-                      tenants.length === 0 ||
-                      tenantsLoading ||
-                      isGlobal
-                    }
-                  >
-                    <InputLabel id={`automation-tenant-${folder.id}`}>Mandant</InputLabel>
-                    <Select
-                      labelId={`automation-tenant-${folder.id}`}
-                      value={automationTenant ?? ''}
-                      label="Mandant"
-                      onChange={(event: SelectChangeEvent<string>) =>
-                        handleAutomationTenantChange(
-                          folder,
-                          event.target.value === '' ? null : event.target.value,
-                        )
-                      }
-                    >
-                      <MenuItem value="">
-                        <em>Mandant wählen</em>
-                      </MenuItem>
-                      {tenants.map((tenant) => (
-                        <MenuItem key={tenant.id} value={tenant.id}>
-                          {tenant.name}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
-                </TableCell>
-                <TableCell>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Switch
-                      checked={autoPipeline}
-                      onChange={(_, value) => handleAutoPipelineToggle(folder, value)}
-                      disabled={
-                        isSaving ||
-                        !autoIngest ||
-                        pipelines.length === 0 ||
-                        pipelinesLoading ||
-                        isGlobal
-                      }
-                      inputProps={{'aria-label': 'Pipeline automatisch starten'}}
-                    />
-                    {autoPipeline && pipelines.length === 0 && !isGlobal && (
-                      <Typography variant="caption" color="text.secondary">
-                        Keine Pipelines vorhanden
+                <TableCell sx={{minWidth: 220}}>
+                  <Stack spacing={0.5}>
+                    {tenantLabel ? (
+                      <Chip label={tenantLabel} size="small" />
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        —
                       </Typography>
                     )}
+                    <Typography variant="caption" color="text.secondary">
+                      {isGlobal
+                        ? 'Vorgabe aus dem globalen Tab-Schalter.'
+                        : 'Keine Bearbeitung pro Ordner – nutze den globalen Tab-Schalter.'}
+                    </Typography>
                   </Stack>
                 </TableCell>
-                <TableCell sx={{minWidth: 200}}>
-                  <FormControl
-                    size="small"
-                    sx={{minWidth: 180}}
-                    disabled={
-                      isSaving ||
-                      !autoIngest ||
-                      pipelines.length === 0 ||
-                      pipelinesLoading ||
-                      isGlobal
-                    }
-                  >
-                    <InputLabel id={`automation-pipeline-${folder.id}`}>Pipeline</InputLabel>
-                    <Select
-                      labelId={`automation-pipeline-${folder.id}`}
-                      value={automationPipeline ?? ''}
-                      label="Pipeline"
-                      onChange={(event: SelectChangeEvent<string>) =>
-                        handleAutomationPipelineChange(
-                          folder,
-                          event.target.value === '' ? null : event.target.value,
-                        )
-                      }
-                      displayEmpty
-                    >
-                      <MenuItem value="">
-                        <em>Keine</em>
-                      </MenuItem>
-                      {pipelines.map((pipeline) => (
-                        <MenuItem key={pipeline.id} value={pipeline.id}>
-                          {pipeline.name}
-                        </MenuItem>
-                      ))}
-                    </Select>
-                  </FormControl>
+                <TableCell sx={{minWidth: 220}}>
+                  <Stack spacing={0.5}>
+                    <Chip
+                      label={autoPipeline ? 'Aktiv' : 'Inaktiv'}
+                      size="small"
+                      color={autoPipeline ? 'info' : 'default'}
+                    />
+                    <Typography variant="caption" color="text.secondary">
+                      {pipelineStartDescription}
+                    </Typography>
+                  </Stack>
+                </TableCell>
+                <TableCell sx={{minWidth: 220}}>
+                  <Stack spacing={0.5}>
+                    {pipelineLabel ? (
+                      <Chip label={pipelineLabel} size="small" />
+                    ) : (
+                      <Typography variant="body2" color="text.secondary">
+                        —
+                      </Typography>
+                    )}
+                    <Typography variant="caption" color="text.secondary">
+                      {pipelineAssignmentDescription}
+                    </Typography>
+                  </Stack>
                 </TableCell>
               </TableRow>
             );
@@ -1017,7 +898,6 @@ export default function SharePointUpload() {
       </Table>
     );
   };
-
   const renderPendingProcessedTable = () => {
     if (pendingLoading && pendingProcessed.length === 0) {
       return (
