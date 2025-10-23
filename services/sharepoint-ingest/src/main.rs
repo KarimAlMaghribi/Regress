@@ -1505,6 +1505,23 @@ fn spawn_pipeline_result_consumer(state: AppState) {
     });
 }
 
+fn ensure_ingest_pipeline_disabled(rule: &mut AutomationRecord) -> bool {
+    if !rule.auto_ingest {
+        return false;
+    }
+
+    let mut changed = false;
+    if rule.pipeline_id.is_some() {
+        rule.pipeline_id = None;
+        changed = true;
+    }
+    if rule.auto_pipeline {
+        rule.auto_pipeline = false;
+        changed = true;
+    }
+    changed
+}
+
 async fn poll_automation_once(state: &AppState) -> anyhow::Result<()> {
     let folders = state
         .graph
@@ -1615,10 +1632,25 @@ async fn poll_automation_once(state: &AppState) -> anyhow::Result<()> {
 
     let rules: Vec<AutomationRecord> = rule_map.into_values().collect();
 
-    for rule in &rules {
+    for mut rule in rules {
         if !rule.auto_ingest {
             continue;
         }
+
+        let pipeline_reset = ensure_ingest_pipeline_disabled(&mut rule);
+        if pipeline_reset {
+            client
+                .execute(
+                    "UPDATE sharepoint_automation
+                     SET pipeline_id = NULL,
+                         auto_pipeline = FALSE,
+                         updated_at = now()
+                     WHERE folder_id = $1",
+                    &[&rule.folder_id],
+                )
+                .await?;
+        }
+
         let Some(folder) = folder_map.get(&rule.folder_id) else {
             continue;
         };
@@ -1633,12 +1665,6 @@ async fn poll_automation_once(state: &AppState) -> anyhow::Result<()> {
             continue;
         }
 
-        let pipeline_id = if rule.auto_pipeline {
-            rule.pipeline_id
-        } else {
-            None
-        };
-
         let job = state.jobs.create_job(
             folder.id.clone(),
             folder.name.clone(),
@@ -1646,7 +1672,7 @@ async fn poll_automation_once(state: &AppState) -> anyhow::Result<()> {
             None,
             None,
             rule.tenant_id,
-            pipeline_id,
+            None,
             true,
         );
         let job_id = job.state.lock().id;
@@ -1666,6 +1692,7 @@ async fn poll_automation_once(state: &AppState) -> anyhow::Result<()> {
             %job_id,
             folder = %folder.name,
             auto_pipeline = rule.auto_pipeline,
+            pipeline_reset = pipeline_reset,
             source = source,
             "automation job created"
         );
@@ -2146,6 +2173,66 @@ fn map_pipeline_progress(status: &str) -> f32 {
         "completed" | "finished" | "finalized" => 1.0,
         "failed" | "timeout" | "error" | "canceled" => 1.0,
         _ => 1.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    fn make_rule(
+        auto_ingest: bool,
+        pipeline_id: Option<Uuid>,
+        auto_pipeline: bool,
+    ) -> AutomationRecord {
+        AutomationRecord {
+            folder_id: "folder".to_string(),
+            folder_name: "Folder".to_string(),
+            tenant_id: Some(Uuid::new_v4()),
+            pipeline_id,
+            auto_ingest,
+            auto_pipeline,
+            managed_by_default: false,
+            last_seen: None,
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn ensure_ingest_pipeline_disabled_clears_settings() {
+        let pipeline = Uuid::new_v4();
+        let mut rule = make_rule(true, Some(pipeline), true);
+
+        let changed = ensure_ingest_pipeline_disabled(&mut rule);
+
+        assert!(changed);
+        assert!(rule.pipeline_id.is_none());
+        assert!(!rule.auto_pipeline);
+    }
+
+    #[test]
+    fn ensure_ingest_pipeline_disabled_noops_when_already_disabled() {
+        let mut rule = make_rule(true, None, false);
+
+        let changed = ensure_ingest_pipeline_disabled(&mut rule);
+
+        assert!(!changed);
+        assert!(rule.pipeline_id.is_none());
+        assert!(!rule.auto_pipeline);
+    }
+
+    #[test]
+    fn ensure_ingest_pipeline_disabled_ignores_non_ingest_rules() {
+        let pipeline = Uuid::new_v4();
+        let mut rule = make_rule(false, Some(pipeline), true);
+
+        let changed = ensure_ingest_pipeline_disabled(&mut rule);
+
+        assert!(!changed);
+        assert!(rule.pipeline_id.is_some());
+        assert!(rule.auto_pipeline);
     }
 }
 
