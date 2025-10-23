@@ -137,23 +137,33 @@ export interface CreateJobsRequest {
   pipeline_id?: string;
 }
 
-export interface AutomationDefaultSettings {
-  scope: 'ingest' | 'processing' | (string & {});
+export type AutomationScope = 'ingest' | 'processing';
+
+interface AutomationDefaultBase<S extends AutomationScope> {
+  scope: S;
   enabled: boolean;
   tenant_id?: string | null;
-  pipeline_id?: string | null;
   updated_at: string;
 }
+
+export type AutomationDefaultSettings =
+  | (AutomationDefaultBase<'ingest'> & {pipeline_id?: null})
+  | (AutomationDefaultBase<'processing'> & {pipeline_id?: string | null});
 
 export interface AutomationDefaultsResponse {
   items: AutomationDefaultSettings[];
 }
 
-export interface AutomationDefaultUpdate {
-  enabled: boolean;
-  tenant_id?: string | null;
-  pipeline_id?: string | null;
-}
+export type AutomationDefaultUpdate<S extends AutomationScope = AutomationScope> = S extends 'processing'
+  ? {
+      enabled: boolean;
+      tenant_id?: string | null;
+      pipeline_id?: string | null;
+    }
+  : {
+      enabled: boolean;
+      tenant_id?: string | null;
+    };
 
 export interface UploadListEntry {
   id: number;

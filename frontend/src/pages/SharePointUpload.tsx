@@ -242,7 +242,6 @@ export default function SharePointUpload() {
 
   const globalIngestEnabled = ingestAutomation?.enabled ?? false;
   const ingestTenantValue = ingestAutomation?.tenant_id ?? '';
-  const ingestPipelineValue = ingestAutomation?.pipeline_id ?? '';
   const globalProcessingEnabled = processingAutomation?.enabled ?? false;
   const processingPipelineValue = processingAutomation?.pipeline_id ?? '';
 
@@ -403,7 +402,7 @@ export default function SharePointUpload() {
   );
 
   const applyAutomationSettingUpdate = React.useCallback(
-    async (scope: 'ingest' | 'processing', payload: AutomationDefaultUpdate) => {
+    async <S extends 'ingest' | 'processing'>(scope: S, payload: AutomationDefaultUpdate<S>) => {
       setAutomationDefaultsSaving(scope);
       setSuccessMessage(null);
       try {
@@ -435,18 +434,17 @@ export default function SharePointUpload() {
           setAutomationDefaultsError('Bitte wähle zuerst einen Mandanten für die Automatik aus.');
           return;
         }
-        const update: AutomationDefaultUpdate = {
+        const update: AutomationDefaultUpdate<'ingest'> = {
           enabled: true,
           tenant_id: fallbackTenant,
-          pipeline_id: ingestAutomation?.pipeline_id ?? null,
         };
         await applyAutomationSettingUpdate('ingest', update);
       } else {
-        await applyAutomationSettingUpdate('ingest', {
+        const update: AutomationDefaultUpdate<'ingest'> = {
           enabled: false,
           tenant_id: null,
-          pipeline_id: null,
-        });
+        };
+        await applyAutomationSettingUpdate('ingest', update);
       }
     },
     [applyAutomationSettingUpdate, ingestAutomation, tenantId, tenants],
@@ -461,25 +459,9 @@ export default function SharePointUpload() {
         setAutomationDefaultsError('Der Mandant darf nicht leer sein.');
         return;
       }
-      const update: AutomationDefaultUpdate = {
+      const update: AutomationDefaultUpdate<'ingest'> = {
         enabled: true,
         tenant_id: value,
-        pipeline_id: ingestAutomation.pipeline_id ?? null,
-      };
-      await applyAutomationSettingUpdate('ingest', update);
-    },
-    [applyAutomationSettingUpdate, ingestAutomation],
-  );
-
-  const handleIngestAutomationPipelineChange = React.useCallback(
-    async (value: string | null) => {
-      if (!ingestAutomation || !ingestAutomation.enabled) {
-        return;
-      }
-      const update: AutomationDefaultUpdate = {
-        enabled: true,
-        tenant_id: ingestAutomation.tenant_id ?? null,
-        pipeline_id: value,
       };
       await applyAutomationSettingUpdate('ingest', update);
     },
@@ -1477,7 +1459,11 @@ export default function SharePointUpload() {
                   </Typography>
                 )}
               </Stack>
-              <Stack direction={{xs: 'column', md: 'row'}} spacing={2}>
+              <Stack
+                direction={{xs: 'column', md: 'row'}}
+                spacing={2}
+                alignItems={{xs: 'flex-start', md: 'center'}}
+              >
                 <FormControl
                   size="small"
                   sx={{minWidth: 200}}
@@ -1507,35 +1493,9 @@ export default function SharePointUpload() {
                     ))}
                   </Select>
                 </FormControl>
-                <FormControl
-                  size="small"
-                  sx={{minWidth: 200}}
-                  disabled={
-                    !globalIngestEnabled || automationDefaultsSaving === 'ingest' || pipelinesLoading
-                  }
-                >
-                  <InputLabel id="global-automation-pipeline">Pipeline (optional)</InputLabel>
-                  <Select
-                    labelId="global-automation-pipeline"
-                    value={ingestPipelineValue}
-                    label="Pipeline (optional)"
-                    onChange={(event: SelectChangeEvent<string>) =>
-                      handleIngestAutomationPipelineChange(
-                        event.target.value === '' ? null : event.target.value,
-                      )
-                    }
-                    displayEmpty
-                  >
-                    <MenuItem value="">
-                      <em>Keine Pipeline</em>
-                    </MenuItem>
-                    {pipelines.map((pipeline) => (
-                      <MenuItem key={pipeline.id} value={pipeline.id}>
-                        {pipeline.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
+                <Typography variant="body2" color="text.secondary" sx={{maxWidth: 360}}>
+                  Pipelines werden im Tab „Verarbeitung“ gewählt.
+                </Typography>
               </Stack>
               {globalIngestEnabled && (
                 <Typography variant="body2" color="text.secondary">
