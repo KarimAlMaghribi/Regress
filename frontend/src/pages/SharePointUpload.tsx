@@ -206,6 +206,8 @@ export default function SharePointUpload() {
   const [ingestAutomation, setIngestAutomation] = React.useState<AutomationDefaultSettings | null>(null);
   const [processingAutomation, setProcessingAutomation] = React.useState<AutomationDefaultSettings | null>(null);
   const [automationDefaultsSaving, setAutomationDefaultsSaving] = React.useState<'ingest' | 'processing' | null>(null);
+  const [ingestTenantSelection, setIngestTenantSelection] = React.useState<string>('');
+  const [processingPipelineSelection, setProcessingPipelineSelection] = React.useState<string>('');
   const [jobs, setJobs] = React.useState<JobSummary[]>([]);
   const [jobsLoading, setJobsLoading] = React.useState(false);
   const [jobError, setJobError] = React.useState<string | null>(null);
@@ -241,9 +243,29 @@ export default function SharePointUpload() {
   }, [pipelines]);
 
   const globalIngestEnabled = ingestAutomation?.enabled ?? false;
-  const ingestTenantValue = ingestAutomation?.tenant_id ?? '';
   const globalProcessingEnabled = processingAutomation?.enabled ?? false;
-  const processingPipelineValue = processingAutomation?.pipeline_id ?? '';
+  const ingestTenantValue = ingestTenantSelection;
+  const processingPipelineValue = processingPipelineSelection;
+
+  React.useEffect(() => {
+    setIngestTenantSelection(ingestAutomation?.tenant_id ?? '');
+  }, [ingestAutomation?.tenant_id]);
+
+  React.useEffect(() => {
+    setProcessingPipelineSelection(processingAutomation?.pipeline_id ?? '');
+  }, [processingAutomation?.pipeline_id]);
+
+  const ingestToggleDisabled =
+    automationDefaultsLoading ||
+    automationDefaultsSaving === 'ingest' ||
+    tenants.length === 0 ||
+    (!globalIngestEnabled && ingestTenantValue === '');
+
+  const processingToggleDisabled =
+    automationDefaultsLoading ||
+    automationDefaultsSaving === 'processing' ||
+    pipelines.length === 0 ||
+    (!globalProcessingEnabled && processingPipelineValue === '');
 
   React.useEffect(() => {
     if (!tenantId && tenants.length === 1) {
@@ -428,15 +450,13 @@ export default function SharePointUpload() {
   const handleIngestAutomationToggleGlobal = React.useCallback(
     async (enabled: boolean) => {
       if (enabled) {
-        const fallbackTenantCandidate = tenantId || tenants[0]?.id || null;
-        const fallbackTenant = ingestAutomation?.tenant_id ?? fallbackTenantCandidate;
-        if (!fallbackTenant) {
+        if (!ingestTenantValue) {
           setAutomationDefaultsError('Bitte wähle zuerst einen Mandanten für die Automatik aus.');
           return;
         }
         const update: AutomationDefaultUpdate<'ingest'> = {
           enabled: true,
-          tenant_id: fallbackTenant,
+          tenant_id: ingestTenantValue,
         };
         await applyAutomationSettingUpdate('ingest', update);
       } else {
@@ -447,16 +467,21 @@ export default function SharePointUpload() {
         await applyAutomationSettingUpdate('ingest', update);
       }
     },
-    [applyAutomationSettingUpdate, ingestAutomation, tenantId, tenants],
+    [applyAutomationSettingUpdate, ingestTenantValue],
   );
 
   const handleIngestAutomationTenantChange = React.useCallback(
     async (value: string | null) => {
-      if (!ingestAutomation || !ingestAutomation.enabled) {
+      const normalized = value ?? '';
+      setIngestTenantSelection(normalized);
+      if (!value) {
+        if (ingestAutomation?.enabled) {
+          setAutomationDefaultsError('Der Mandant darf nicht leer sein.');
+        }
         return;
       }
-      if (!value) {
-        setAutomationDefaultsError('Der Mandant darf nicht leer sein.');
+      setAutomationDefaultsError(null);
+      if (!ingestAutomation || !ingestAutomation.enabled) {
         return;
       }
       const update: AutomationDefaultUpdate<'ingest'> = {
@@ -471,15 +496,13 @@ export default function SharePointUpload() {
   const handleProcessingAutomationToggleGlobal = React.useCallback(
     async (enabled: boolean) => {
       if (enabled) {
-        const fallbackPipeline = processingAutomation?.pipeline_id ?? pipelines[0]?.id ?? null;
-        if (!fallbackPipeline) {
-          setAutomationDefaultsError('Keine Pipeline verfügbar, um die Automatik zu aktivieren.');
+        if (!processingPipelineValue) {
+          setAutomationDefaultsError('Bitte wähle zuerst eine Pipeline für die Automatik aus.');
           return;
         }
-        const update: AutomationDefaultUpdate = {
+        const update: AutomationDefaultUpdate<'processing'> = {
           enabled: true,
-          tenant_id: null,
-          pipeline_id: fallbackPipeline,
+          pipeline_id: processingPipelineValue,
         };
         await applyAutomationSettingUpdate('processing', update);
       } else {
@@ -490,19 +513,24 @@ export default function SharePointUpload() {
         });
       }
     },
-    [applyAutomationSettingUpdate, processingAutomation, pipelines],
+    [applyAutomationSettingUpdate, processingPipelineValue],
   );
 
   const handleProcessingAutomationPipelineChange = React.useCallback(
     async (value: string | null) => {
+      const normalized = value ?? '';
+      setProcessingPipelineSelection(normalized);
+      if (!value) {
+        if (processingAutomation?.enabled) {
+          setAutomationDefaultsError('Bitte wähle eine Pipeline für die Automatik aus.');
+        }
+        return;
+      }
+      setAutomationDefaultsError(null);
       if (!processingAutomation || !processingAutomation.enabled) {
         return;
       }
-      if (!value) {
-        setAutomationDefaultsError('Bitte wähle eine Pipeline für die Automatik aus.');
-        return;
-      }
-      const update: AutomationDefaultUpdate = {
+      const update: AutomationDefaultUpdate<'processing'> = {
         enabled: true,
         tenant_id: null,
         pipeline_id: value,
@@ -1441,11 +1469,7 @@ export default function SharePointUpload() {
                   <Switch
                     checked={globalIngestEnabled}
                     onChange={(_, value) => handleIngestAutomationToggleGlobal(value)}
-                    disabled={
-                      automationDefaultsLoading ||
-                      automationDefaultsSaving === 'ingest' ||
-                      tenants.length === 0
-                    }
+                    disabled={ingestToggleDisabled}
                     inputProps={{'aria-label': 'globale Anlagen-Automatik'}}
                   />
                   <Typography variant="subtitle1">Automatisch alle Anlagen verarbeiten</Typography>
@@ -1453,6 +1477,11 @@ export default function SharePointUpload() {
                     <CircularProgress size={16} />
                   )}
                 </Stack>
+                {!globalIngestEnabled && ingestTenantValue === '' && tenants.length > 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    Wähle einen Mandanten, um die Automatik zu aktivieren.
+                  </Typography>
+                )}
                 {ingestAutomation?.updated_at && (
                   <Typography variant="caption" color="text.secondary">
                     Aktualisiert: {formatDateTime(ingestAutomation.updated_at)}
@@ -1468,7 +1497,6 @@ export default function SharePointUpload() {
                   size="small"
                   sx={{minWidth: 200}}
                   disabled={
-                    !globalIngestEnabled ||
                     automationDefaultsSaving === 'ingest' ||
                     tenants.length === 0 ||
                     tenantsLoading
@@ -1589,11 +1617,7 @@ export default function SharePointUpload() {
                   <Switch
                     checked={globalProcessingEnabled}
                     onChange={(_, value) => handleProcessingAutomationToggleGlobal(value)}
-                    disabled={
-                      automationDefaultsLoading ||
-                      automationDefaultsSaving === 'processing' ||
-                      pipelines.length === 0
-                    }
+                    disabled={processingToggleDisabled}
                     inputProps={{'aria-label': 'globale Pipeline-Automatik'}}
                   />
                   <Typography variant="subtitle1">Pipelines automatisch starten</Typography>
@@ -1601,6 +1625,11 @@ export default function SharePointUpload() {
                     <CircularProgress size={16} />
                   )}
                 </Stack>
+                {!globalProcessingEnabled && processingPipelineValue === '' && pipelines.length > 0 && (
+                  <Typography variant="caption" color="text.secondary">
+                    Wähle eine Pipeline, um die Automatik zu aktivieren.
+                  </Typography>
+                )}
                 {processingAutomation?.updated_at && (
                   <Typography variant="caption" color="text.secondary">
                     Aktualisiert: {formatDateTime(processingAutomation.updated_at)}
@@ -1611,7 +1640,6 @@ export default function SharePointUpload() {
                 size="small"
                 sx={{minWidth: 200}}
                 disabled={
-                  !globalProcessingEnabled ||
                   automationDefaultsSaving === 'processing' ||
                   pipelines.length === 0 ||
                   pipelinesLoading
