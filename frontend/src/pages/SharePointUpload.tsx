@@ -92,6 +92,8 @@ const jobActionMessages: Record<'pause' | 'resume' | 'cancel' | 'retry', string>
   retry: 'Job erneut gestartet.',
 };
 
+const ACTIVE_AUTOMATION_STATUSES: readonly JobStatus[] = ['queued', 'running'];
+
 function getErrorMessage(error: unknown) {
   if (axios.isAxiosError(error)) {
     const status = error.response?.status;
@@ -291,21 +293,36 @@ export default function SharePointUpload() {
     }
   }, [pipelines, processingPipelineId]);
 
-  const loadFolders = React.useCallback(async () => {
-    setFoldersLoading(true);
-    setFolderError(null);
-    try {
-      const data = await fetchFolders();
-      setFolders(data.items);
-      setFolderMeta({base: data.base, total: data.total});
-    } catch (error) {
-      setFolderError(getErrorMessage(error));
-      setFolders([]);
-      setFolderMeta(null);
-    } finally {
-      setFoldersLoading(false);
-    }
-  }, []);
+  const loadFolders = React.useCallback(
+    async (options?: {silent?: boolean}) => {
+      const silent = options?.silent ?? false;
+      if (!silent) {
+        setFoldersLoading(true);
+        setFolderError(null);
+      }
+      try {
+        const data = await fetchFolders();
+        setFolders(data.items);
+        setFolderMeta({base: data.base, total: data.total});
+        const availableFolderIds = new Set(data.items.map((item) => item.id));
+        setSelectedFolders((prev) => {
+          const filtered = prev.filter((id) => availableFolderIds.has(id));
+          return filtered.length === prev.length ? prev : filtered;
+        });
+        setFolderError(null);
+      } catch (error) {
+        setFolderError(getErrorMessage(error));
+        setFolders([]);
+        setFolderMeta(null);
+        setSelectedFolders((prev) => (prev.length === 0 ? prev : []));
+      } finally {
+        if (!silent) {
+          setFoldersLoading(false);
+        }
+      }
+    },
+    [],
+  );
 
   const loadAutomationSettings = React.useCallback(
     async (options?: {silent?: boolean}) => {
@@ -431,10 +448,11 @@ export default function SharePointUpload() {
         const updated = await updateAutomationSetting(scope, payload);
         if (scope === 'ingest') {
           setIngestAutomation(updated);
-          await loadFolders();
+          await loadFolders({silent: true});
         } else {
           setProcessingAutomation(updated);
           await loadPendingProcessed({silent: true});
+          await loadFolders({silent: true});
         }
         setAutomationDefaultsError(null);
         setSuccessMessage('Automatisierung aktualisiert.');
@@ -621,6 +639,51 @@ export default function SharePointUpload() {
     };
   }, [loadJobs, loadAggregatedJobs]);
 
+  const autoManagedJobIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    jobs.forEach((job) => {
+      if (job.auto_managed) {
+        ids.add(job.id);
+      }
+    });
+    return ids;
+  }, [jobs]);
+
+  const hasActiveAutoIngestJobs = React.useMemo(
+    () => jobs.some((job) => job.auto_managed && ACTIVE_AUTOMATION_STATUSES.includes(job.status)),
+    [jobs],
+  );
+
+  const hasActiveAutoPipelineRuns = React.useMemo(() => {
+    if (autoManagedJobIds.size === 0) {
+      return false;
+    }
+    return aggregatedJobs.some((entry) => {
+      if (!entry.sharepoint_job_id) {
+        return false;
+      }
+      if (!autoManagedJobIds.has(entry.sharepoint_job_id)) {
+        return false;
+      }
+      return ACTIVE_AUTOMATION_STATUSES.includes(entry.status_category);
+    });
+  }, [aggregatedJobs, autoManagedJobIds]);
+
+  React.useEffect(() => {
+    if (!hasActiveAutoIngestJobs && !hasActiveAutoPipelineRuns) {
+      return undefined;
+    }
+
+    void loadFolders({silent: true});
+    const intervalId = window.setInterval(() => {
+      void loadFolders({silent: true});
+    }, INGEST_POLL_INTERVAL);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [hasActiveAutoIngestJobs, hasActiveAutoPipelineRuns, loadFolders]);
+
   const allSelected = folders.length > 0 && selectedFolders.length === folders.length;
   const isIndeterminate = selectedFolders.length > 0 && !allSelected;
 
@@ -698,6 +761,7 @@ export default function SharePointUpload() {
       await loadCompletedProcessed({silent: true});
       await loadJobs({silent: true});
       await loadAggregatedJobs({silent: true});
+      await loadFolders({silent: true});
     } catch (error) {
       setPendingError(getErrorMessage(error));
     } finally {
@@ -729,6 +793,7 @@ export default function SharePointUpload() {
       setSelectedFolders([]);
       await loadJobs();
       await loadAggregatedJobs({silent: true});
+      await loadFolders({silent: true});
     } catch (error) {
       setFolderError(getErrorMessage(error));
     } finally {
@@ -1567,7 +1632,7 @@ export default function SharePointUpload() {
               </Select>
             </FormControl>
             <Stack direction="row" spacing={1}>
-              <Button variant="outlined" onClick={loadFolders} disabled={foldersLoading}>
+              <Button variant="outlined" onClick={() => loadFolders()} disabled={foldersLoading}>
                 Aktualisieren
               </Button>
               <Button
