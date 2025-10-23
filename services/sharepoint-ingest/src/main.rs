@@ -586,11 +586,17 @@ fn automation_from_row(row: &Row) -> AutomationRecord {
 }
 
 fn default_from_row(row: &Row) -> DefaultAutomationSettings {
+    let scope: String = row.get("scope");
+    let pipeline_id = if scope == "ingest" {
+        None
+    } else {
+        row.get("pipeline_id")
+    };
     DefaultAutomationSettings {
-        scope: row.get("scope"),
+        scope,
         enabled: row.get("enabled"),
         tenant_id: row.get("tenant_id"),
-        pipeline_id: row.get("pipeline_id"),
+        pipeline_id,
         updated_at: row.get("updated_at"),
     }
 }
@@ -655,6 +661,11 @@ async fn upsert_automation_default(
     scope: &str,
     payload: &AutomationDefaultUpdateRequest,
 ) -> anyhow::Result<DefaultAutomationSettings> {
+    let pipeline_id: Option<Uuid> = if scope == "ingest" {
+        None
+    } else {
+        payload.pipeline_id
+    };
     let row = client
         .query_one(
             "INSERT INTO sharepoint_automation_defaults (scope, enabled, tenant_id, pipeline_id)
@@ -665,12 +676,7 @@ async fn upsert_automation_default(
                  pipeline_id = EXCLUDED.pipeline_id,
                  updated_at = now()
              RETURNING scope, enabled, tenant_id, pipeline_id, updated_at",
-            &[
-                &scope,
-                &payload.enabled,
-                &payload.tenant_id,
-                &payload.pipeline_id,
-            ],
+            &[&scope, &payload.enabled, &payload.tenant_id, &pipeline_id],
         )
         .await?;
     Ok(default_from_row(&row))
@@ -873,6 +879,12 @@ async fn upsert_automation_setting(
         return Err(ErrorBadRequest("unknown automation scope"));
     }
 
+    if normalized == "ingest" && payload.pipeline_id.is_some() {
+        return Err(ErrorBadRequest(
+            "ingest automation no longer accepts pipeline_id",
+        ));
+    }
+
     if payload.enabled {
         if normalized == "ingest" && payload.tenant_id.is_none() {
             return Err(ErrorBadRequest(
@@ -935,9 +947,6 @@ async fn create_jobs(
     let fallback_tenant = ingest_default
         .filter(|default| default.enabled)
         .and_then(|default| default.tenant_id);
-    let fallback_pipeline = ingest_default
-        .filter(|default| default.enabled)
-        .and_then(|default| default.pipeline_id);
     drop(db_client);
 
     let upload_override = payload.upload_url.as_ref().and_then(|url| {
@@ -949,7 +958,7 @@ async fn create_jobs(
         }
     });
     let tenant_override = payload.tenant_id.or(fallback_tenant);
-    let pipeline_override = payload.pipeline_id.or(fallback_pipeline);
+    let pipeline_override = payload.pipeline_id;
     let app_state = state.get_ref().clone();
     let mut created = Vec::new();
     for folder_id in &payload.folder_ids {
@@ -1529,38 +1538,32 @@ async fn poll_automation_once(state: &AppState) -> anyhow::Result<()> {
 
     if let Some(default) = ingest_default.clone() {
         if default.enabled {
-            let auto_pipeline = default.pipeline_id.is_some();
             for folder in folder_map.values() {
                 if let Some(existing) = rule_map.get(&folder.id) {
                     if existing.managed_by_default {
                         let needs_update = existing.tenant_id != default.tenant_id
-                            || existing.pipeline_id != default.pipeline_id
+                            || existing.pipeline_id.is_some()
                             || !existing.auto_ingest
-                            || existing.auto_pipeline != auto_pipeline;
+                            || existing.auto_pipeline;
                         if needs_update {
                             client
                                 .execute(
                                     "UPDATE sharepoint_automation
                                      SET tenant_id = $2,
-                                         pipeline_id = $3,
+                                         pipeline_id = NULL,
                                          auto_ingest = TRUE,
-                                         auto_pipeline = $4,
+                                         auto_pipeline = FALSE,
                                          managed_by_default = TRUE,
                                          updated_at = now()
                                      WHERE folder_id = $1",
-                                    &[
-                                        &folder.id,
-                                        &default.tenant_id,
-                                        &default.pipeline_id,
-                                        &auto_pipeline,
-                                    ],
+                                    &[&folder.id, &default.tenant_id],
                                 )
                                 .await?;
                             if let Some(updated) = rule_map.get_mut(&folder.id) {
                                 updated.tenant_id = default.tenant_id;
-                                updated.pipeline_id = default.pipeline_id;
+                                updated.pipeline_id = None;
                                 updated.auto_ingest = true;
-                                updated.auto_pipeline = auto_pipeline;
+                                updated.auto_pipeline = false;
                                 updated.managed_by_default = true;
                                 updated.updated_at = now;
                             }
@@ -1573,10 +1576,10 @@ async fn poll_automation_once(state: &AppState) -> anyhow::Result<()> {
                     .query_opt(
                         "INSERT INTO sharepoint_automation (
                              folder_id, folder_name, tenant_id, pipeline_id, auto_ingest, auto_pipeline, managed_by_default, last_seen
-                         ) VALUES ($1, $2, $3, $4, TRUE, $5, TRUE, $6)
+                         ) VALUES ($1, $2, $3, NULL, TRUE, FALSE, TRUE, $4)
                          ON CONFLICT (folder_id) DO NOTHING
                          RETURNING folder_id, folder_name, tenant_id, pipeline_id, auto_ingest, auto_pipeline, managed_by_default, last_seen, updated_at",
-                        &[&folder.id, &folder.name, &default.tenant_id, &default.pipeline_id, &auto_pipeline, &now],
+                        &[&folder.id, &folder.name, &default.tenant_id, &now],
                     )
                     .await?;
                 if let Some(row) = inserted {
@@ -1914,10 +1917,18 @@ async fn run_job_inner(
         s.set_output(upload_result.clone());
     });
 
-    let pipeline_id = jobs
+    let state_pipeline_id = jobs
         .get(&job_id)
-        .map(|managed| managed.state.lock().pipeline_id)
-        .unwrap_or(snapshot.pipeline_id);
+        .map(|managed| managed.state.lock().pipeline_id);
+    let pipeline_assigned_in_state = state_pipeline_id.is_some();
+    let pipeline_candidate = state_pipeline_id.or(snapshot.pipeline_id);
+    let pipeline_id = if pipeline_candidate.is_some()
+        && (snapshot.pipeline_id.is_some() || !snapshot.auto_managed || pipeline_assigned_in_state)
+    {
+        pipeline_candidate
+    } else {
+        None
+    };
 
     let upload_ready = upload_result.upload_id;
 

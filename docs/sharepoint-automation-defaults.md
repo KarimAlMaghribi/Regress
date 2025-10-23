@@ -5,7 +5,7 @@ Global SharePoint automation defaults allow operators to toggle automation for e
 - `ingest`: Controls automatic job creation for folders arriving in the **Anlagen** tab.
 - `processing`: Controls automatic pipeline starts for completed uploads that appear in the **Verarbeitung** tab.
 
-Each scope stores whether it is enabled along with optional identifiers that are required when the scope is active. The configuration lives in the `sharepoint_automation_defaults` table and integrates with the existing folder automation table through the `managed_by_default` flag.
+Each scope stores whether it is enabled along with the identifiers that are required when the scope is active. The ingest scope only records the tenant responsible for uploads, whereas the processing scope keeps the pipeline identifier that should be triggered once uploads are ready. The configuration lives in the `sharepoint_automation_defaults` table and integrates with the existing folder automation table through the `managed_by_default` flag.
 
 ## API Endpoints
 
@@ -14,11 +14,11 @@ The ingest service now exposes dedicated endpoints for querying and updating def
 - `GET /automation/settings` returns all default configurations.
 - `PUT /automation/settings/{scope}` updates a single scope. Only `ingest` and `processing` are accepted.
 
-When enabling ingest defaults you must provide `tenant_id`. When enabling processing defaults you must provide `pipeline_id`. Payloads omit identifiers when disabling automation, leaving existing values untouched for later reuse.
+When enabling ingest defaults you must provide `tenant_id`. Passing a `pipeline_id` for this scope is rejected because pipeline automation now lives exclusively in the processing scope. When enabling processing defaults you must provide `pipeline_id`. Payloads omit identifiers when disabling automation, leaving existing values untouched for later reuse.
 
 ## Poller Behaviour
 
-During each automation poll cycle the service loads both folder rules and defaults. If ingest defaults are enabled, the poller ensures that every visible SharePoint folder has an automation rule marked `managed_by_default`. Newly discovered folders receive rules that mirror the global tenant (and optional pipeline) selection, while previously default-managed folders are updated to keep their metadata and timestamps fresh. Disabling ingest defaults removes any `managed_by_default` rules without touching manual ones.
+During each automation poll cycle the service loads both folder rules and defaults. If ingest defaults are enabled, the poller ensures that every visible SharePoint folder has an automation rule marked `managed_by_default`. Newly discovered folders receive rules that mirror the global tenant selection while explicitly clearing any pipeline references, and previously default-managed folders are updated to keep their metadata and timestamps fresh. Disabling ingest defaults removes any `managed_by_default` rules without touching manual ones.
 
 Jobs spawned from these defaults are flagged as `auto_managed` and post an "Automatischer Import (global) gestartet" message so the UI can distinguish globally triggered runs.
 
@@ -26,7 +26,7 @@ Processing defaults focus on pipeline execution. Whenever the default is enabled
 
 ## Manual Job Creation
 
-The `POST /automation/jobs` endpoint continues to support manual job creation. If the ingest default is enabled and the incoming request omits explicit `tenant_id` or `pipeline_id` overrides, the service injects the global defaults so that on-demand jobs stay aligned with the tab configuration.
+The `POST /automation/jobs` endpoint continues to support manual job creation. If the ingest default is enabled and the incoming request omits an explicit `tenant_id`, the service injects the global tenant so that on-demand jobs stay aligned with the tab configuration. Pipeline assignments must now be provided explicitly (for example via the processing tab) to trigger automatic runs.
 
 ## UI Integration
 
@@ -37,3 +37,7 @@ The SharePoint upload UI now focuses on the global switches at the top of the **
 - Defaults are stored with timestamps, allowing administrators to audit changes.
 - Disabling a scope keeps previously configured identifiers so that re-enabling automation restores them automatically.
 - Manually created folder rules always override defaults and are preserved across toggles.
+
+## Data Clean-up
+
+Deployment of this change set includes a migration that clears lingering `auto_pipeline` flags and pipeline identifiers from default-managed folder automation entries as well as from the ingest default itself. This ensures that only processing automation (or manual operator actions) can set pipeline assignments going forward.
