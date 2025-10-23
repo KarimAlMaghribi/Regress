@@ -12,6 +12,7 @@ import {
   AutomationDefaultsResponse,
   AutomationDefaultSettings,
   AutomationDefaultUpdate,
+  AutomationScope,
 } from '../types/ingest';
 
 type RuntimeEnv = {
@@ -193,9 +194,9 @@ export async function fetchAutomationSettings() {
   return data;
 }
 
-export async function updateAutomationSetting(
-  scope: string,
-  payload: AutomationDefaultUpdate,
+export async function updateAutomationSetting<S extends AutomationScope>(
+  scope: S,
+  payload: AutomationDefaultUpdate<S>,
 ) {
   const encoded = encodeURIComponent(scope);
   const { data } = await client.put<AutomationDefaultSettings>(`automation/settings/${encoded}`, payload);
