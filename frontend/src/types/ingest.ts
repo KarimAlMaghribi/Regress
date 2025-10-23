@@ -20,6 +20,7 @@ export interface FolderSummary {
   name: string;
   file_count: number;
   automation?: FolderAutomationSummary;
+  automation_source?: 'folder' | 'default';
 }
 
 export interface FolderListResponse {
@@ -143,6 +144,7 @@ export interface AutomationRuleSummary {
   pipeline_id?: string | null;
   auto_ingest: boolean;
   auto_pipeline: boolean;
+   managed_by_default: boolean;
   last_seen?: string | null;
   updated_at: string;
 }
@@ -157,6 +159,24 @@ export interface AutomationUpsertRequest {
   pipeline_id?: string | null;
   auto_ingest?: boolean;
   auto_pipeline?: boolean;
+}
+
+export interface AutomationDefaultSettings {
+  scope: 'ingest' | 'processing' | (string & {});
+  enabled: boolean;
+  tenant_id?: string | null;
+  pipeline_id?: string | null;
+  updated_at: string;
+}
+
+export interface AutomationDefaultsResponse {
+  items: AutomationDefaultSettings[];
+}
+
+export interface AutomationDefaultUpdate {
+  enabled: boolean;
+  tenant_id?: string | null;
+  pipeline_id?: string | null;
 }
 
 export interface UploadListEntry {
