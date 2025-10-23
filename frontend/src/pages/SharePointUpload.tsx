@@ -42,6 +42,8 @@ import {
   runProcessedFolders,
   fetchAggregatedJobs,
   upsertAutomationRule,
+  fetchAutomationSettings,
+  updateAutomationSetting,
 } from '../utils/ingestApi';
 import type {
   FolderSummary,
@@ -52,6 +54,8 @@ import type {
   AggregatedJobEntry,
   AggregatedJobSource,
   AutomationUpsertRequest,
+  AutomationDefaultSettings,
+  AutomationDefaultUpdate,
 } from '../types/ingest';
 import {useTenants} from '../hooks/useTenants';
 import {usePipelineList} from '../hooks/usePipelineList';
@@ -200,6 +204,11 @@ export default function SharePointUpload() {
   const [creatingJobs, setCreatingJobs] = React.useState(false);
   const [order, setOrder] = React.useState<JobOrder>('alpha');
   const [automationSaving, setAutomationSaving] = React.useState<string | null>(null);
+  const [automationDefaultsLoading, setAutomationDefaultsLoading] = React.useState(false);
+  const [automationDefaultsError, setAutomationDefaultsError] = React.useState<string | null>(null);
+  const [ingestAutomation, setIngestAutomation] = React.useState<AutomationDefaultSettings | null>(null);
+  const [processingAutomation, setProcessingAutomation] = React.useState<AutomationDefaultSettings | null>(null);
+  const [automationDefaultsSaving, setAutomationDefaultsSaving] = React.useState<'ingest' | 'processing' | null>(null);
   const [jobs, setJobs] = React.useState<JobSummary[]>([]);
   const [jobsLoading, setJobsLoading] = React.useState(false);
   const [jobError, setJobError] = React.useState<string | null>(null);
@@ -227,6 +236,12 @@ export default function SharePointUpload() {
     tenants.forEach((tenant) => map.set(tenant.id, tenant.name));
     return map;
   }, [tenants]);
+
+  const globalIngestEnabled = ingestAutomation?.enabled ?? false;
+  const ingestTenantValue = ingestAutomation?.tenant_id ?? '';
+  const ingestPipelineValue = ingestAutomation?.pipeline_id ?? '';
+  const globalProcessingEnabled = processingAutomation?.enabled ?? false;
+  const processingPipelineValue = processingAutomation?.pipeline_id ?? '';
 
   React.useEffect(() => {
     if (!tenantId && tenants.length === 1) {
@@ -267,6 +282,32 @@ export default function SharePointUpload() {
       setFoldersLoading(false);
     }
   }, []);
+
+  const loadAutomationSettings = React.useCallback(
+    async (options?: {silent?: boolean}) => {
+      const silent = options?.silent ?? false;
+      if (!silent) {
+        setAutomationDefaultsLoading(true);
+      }
+      try {
+        const data = await fetchAutomationSettings();
+        const ingest = data.items.find((item) => item.scope === 'ingest') ?? null;
+        const processing = data.items.find((item) => item.scope === 'processing') ?? null;
+        setIngestAutomation(ingest ?? null);
+        setProcessingAutomation(processing ?? null);
+        setAutomationDefaultsError(null);
+      } catch (error) {
+        setAutomationDefaultsError(getErrorMessage(error));
+        setIngestAutomation(null);
+        setProcessingAutomation(null);
+      } finally {
+        if (!silent) {
+          setAutomationDefaultsLoading(false);
+        }
+      }
+    },
+    [],
+  );
 
   const loadJobs = React.useCallback(
     async (options?: {silent?: boolean}) => {
@@ -358,9 +399,140 @@ export default function SharePointUpload() {
     [],
   );
 
+  const applyAutomationSettingUpdate = React.useCallback(
+    async (scope: 'ingest' | 'processing', payload: AutomationDefaultUpdate) => {
+      setAutomationDefaultsSaving(scope);
+      setSuccessMessage(null);
+      try {
+        const updated = await updateAutomationSetting(scope, payload);
+        if (scope === 'ingest') {
+          setIngestAutomation(updated);
+          await loadFolders();
+        } else {
+          setProcessingAutomation(updated);
+          await loadPendingProcessed({silent: true});
+        }
+        setAutomationDefaultsError(null);
+        setSuccessMessage('Automatisierung aktualisiert.');
+      } catch (error) {
+        setAutomationDefaultsError(getErrorMessage(error));
+      } finally {
+        setAutomationDefaultsSaving(null);
+      }
+    },
+    [loadFolders, loadPendingProcessed],
+  );
+
+  const handleIngestAutomationToggleGlobal = React.useCallback(
+    async (enabled: boolean) => {
+      if (enabled) {
+        const fallbackTenant = ingestAutomation?.tenant_id ?? tenantId || tenants[0]?.id ?? null;
+        if (!fallbackTenant) {
+          setAutomationDefaultsError('Bitte wähle zuerst einen Mandanten für die Automatik aus.');
+          return;
+        }
+        const update: AutomationDefaultUpdate = {
+          enabled: true,
+          tenant_id: fallbackTenant,
+          pipeline_id: ingestAutomation?.pipeline_id ?? null,
+        };
+        await applyAutomationSettingUpdate('ingest', update);
+      } else {
+        await applyAutomationSettingUpdate('ingest', {
+          enabled: false,
+          tenant_id: null,
+          pipeline_id: null,
+        });
+      }
+    },
+    [applyAutomationSettingUpdate, ingestAutomation, tenantId, tenants],
+  );
+
+  const handleIngestAutomationTenantChange = React.useCallback(
+    async (value: string | null) => {
+      if (!ingestAutomation || !ingestAutomation.enabled) {
+        return;
+      }
+      if (!value) {
+        setAutomationDefaultsError('Der Mandant darf nicht leer sein.');
+        return;
+      }
+      const update: AutomationDefaultUpdate = {
+        enabled: true,
+        tenant_id: value,
+        pipeline_id: ingestAutomation.pipeline_id ?? null,
+      };
+      await applyAutomationSettingUpdate('ingest', update);
+    },
+    [applyAutomationSettingUpdate, ingestAutomation],
+  );
+
+  const handleIngestAutomationPipelineChange = React.useCallback(
+    async (value: string | null) => {
+      if (!ingestAutomation || !ingestAutomation.enabled) {
+        return;
+      }
+      const update: AutomationDefaultUpdate = {
+        enabled: true,
+        tenant_id: ingestAutomation.tenant_id ?? null,
+        pipeline_id: value,
+      };
+      await applyAutomationSettingUpdate('ingest', update);
+    },
+    [applyAutomationSettingUpdate, ingestAutomation],
+  );
+
+  const handleProcessingAutomationToggleGlobal = React.useCallback(
+    async (enabled: boolean) => {
+      if (enabled) {
+        const fallbackPipeline = processingAutomation?.pipeline_id ?? pipelines[0]?.id ?? null;
+        if (!fallbackPipeline) {
+          setAutomationDefaultsError('Keine Pipeline verfügbar, um die Automatik zu aktivieren.');
+          return;
+        }
+        const update: AutomationDefaultUpdate = {
+          enabled: true,
+          tenant_id: null,
+          pipeline_id: fallbackPipeline,
+        };
+        await applyAutomationSettingUpdate('processing', update);
+      } else {
+        await applyAutomationSettingUpdate('processing', {
+          enabled: false,
+          tenant_id: null,
+          pipeline_id: null,
+        });
+      }
+    },
+    [applyAutomationSettingUpdate, processingAutomation, pipelines],
+  );
+
+  const handleProcessingAutomationPipelineChange = React.useCallback(
+    async (value: string | null) => {
+      if (!processingAutomation || !processingAutomation.enabled) {
+        return;
+      }
+      if (!value) {
+        setAutomationDefaultsError('Bitte wähle eine Pipeline für die Automatik aus.');
+        return;
+      }
+      const update: AutomationDefaultUpdate = {
+        enabled: true,
+        tenant_id: null,
+        pipeline_id: value,
+      };
+      await applyAutomationSettingUpdate('processing', update);
+    },
+    [applyAutomationSettingUpdate, processingAutomation],
+  );
+
   React.useEffect(() => {
     loadFolders();
   }, [loadFolders]);
+
+  React.useEffect(() => {
+    loadAutomationSettings();
+  }, [loadAutomationSettings]);
 
   React.useEffect(() => {
     if (tab !== 1) {
@@ -612,8 +784,11 @@ export default function SharePointUpload() {
           last_seen: updated.last_seen ?? undefined,
           updated_at: updated.updated_at,
         };
+        const source = updated.managed_by_default ? 'default' : 'folder';
         setFolders((prev) =>
-          prev.map((item) => (item.id === folder.id ? {...item, automation} : item)),
+          prev.map((item) =>
+            item.id === folder.id ? {...item, automation, automation_source: source} : item,
+          ),
         );
       } catch (error) {
         setFolderError(getErrorMessage(error));
@@ -704,6 +879,8 @@ export default function SharePointUpload() {
             const autoPipeline = automation?.auto_pipeline ?? false;
             const automationTenant = automation?.tenant_id ?? '';
             const automationPipeline = automation?.pipeline_id ?? '';
+            const automationSource = folder.automation_source ?? 'folder';
+            const isGlobal = automationSource === 'default';
             return (
               <TableRow key={folder.id} hover selected={checked}>
                 <TableCell padding="checkbox">
@@ -715,7 +892,12 @@ export default function SharePointUpload() {
                 </TableCell>
                 <TableCell>
                   <Stack spacing={0.5}>
-                    <Typography variant="body2">{folder.name}</Typography>
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography variant="body2">{folder.name}</Typography>
+                      {automationSource === 'default' && (
+                        <Chip label="Global" size="small" color="secondary" />
+                      )}
+                    </Stack>
                     {automation?.last_seen && (
                       <Typography variant="caption" color="text.secondary">
                         Zuletzt gesehen: {formatDateTime(automation.last_seen)}
@@ -729,7 +911,7 @@ export default function SharePointUpload() {
                     <Switch
                       checked={autoIngest}
                       onChange={(_, value) => handleAutomationToggle(folder, value)}
-                      disabled={isSaving}
+                      disabled={isSaving || isGlobal}
                       inputProps={{'aria-label': 'Automatisch verarbeiten'}}
                     />
                     {isSaving && <CircularProgress size={16} />}
@@ -739,7 +921,13 @@ export default function SharePointUpload() {
                   <FormControl
                     size="small"
                     sx={{minWidth: 160}}
-                    disabled={isSaving || !autoIngest || tenants.length === 0 || tenantsLoading}
+                    disabled={
+                      isSaving ||
+                      !autoIngest ||
+                      tenants.length === 0 ||
+                      tenantsLoading ||
+                      isGlobal
+                    }
                   >
                     <InputLabel id={`automation-tenant-${folder.id}`}>Mandant</InputLabel>
                     <Select
@@ -770,11 +958,15 @@ export default function SharePointUpload() {
                       checked={autoPipeline}
                       onChange={(_, value) => handleAutoPipelineToggle(folder, value)}
                       disabled={
-                        isSaving || !autoIngest || pipelines.length === 0 || pipelinesLoading
+                        isSaving ||
+                        !autoIngest ||
+                        pipelines.length === 0 ||
+                        pipelinesLoading ||
+                        isGlobal
                       }
                       inputProps={{'aria-label': 'Pipeline automatisch starten'}}
                     />
-                    {autoPipeline && pipelines.length === 0 && (
+                    {autoPipeline && pipelines.length === 0 && !isGlobal && (
                       <Typography variant="caption" color="text.secondary">
                         Keine Pipelines vorhanden
                       </Typography>
@@ -786,7 +978,11 @@ export default function SharePointUpload() {
                     size="small"
                     sx={{minWidth: 180}}
                     disabled={
-                      isSaving || !autoIngest || pipelines.length === 0 || pipelinesLoading
+                      isSaving ||
+                      !autoIngest ||
+                      pipelines.length === 0 ||
+                      pipelinesLoading ||
+                      isGlobal
                     }
                   >
                     <InputLabel id={`automation-pipeline-${folder.id}`}>Pipeline</InputLabel>
@@ -1351,6 +1547,15 @@ export default function SharePointUpload() {
         </Tabs>
 
         <TabPanel value={tab} index={0}>
+          {automationDefaultsError && (
+            <Alert
+              severity="error"
+              sx={{mb: 2}}
+              onClose={() => setAutomationDefaultsError(null)}
+            >
+              {automationDefaultsError}
+            </Alert>
+          )}
           {folderError && (
             <Alert severity="error" sx={{mb: 2}} onClose={() => setFolderError(null)}>
               {folderError}
@@ -1361,6 +1566,103 @@ export default function SharePointUpload() {
               {tenantsError}
             </Alert>
           )}
+          <Box sx={{mb: 2, p: 2, border: 1, borderColor: 'divider', borderRadius: 1}}>
+            <Stack spacing={2}>
+              <Stack
+                direction={{xs: 'column', md: 'row'}}
+                spacing={2}
+                alignItems={{xs: 'flex-start', md: 'center'}}
+                justifyContent="space-between"
+              >
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Switch
+                    checked={globalIngestEnabled}
+                    onChange={(_, value) => handleIngestAutomationToggleGlobal(value)}
+                    disabled={
+                      automationDefaultsLoading ||
+                      automationDefaultsSaving === 'ingest' ||
+                      tenants.length === 0
+                    }
+                    inputProps={{'aria-label': 'globale Anlagen-Automatik'}}
+                  />
+                  <Typography variant="subtitle1">Automatisch alle Anlagen verarbeiten</Typography>
+                  {(automationDefaultsLoading || automationDefaultsSaving === 'ingest') && (
+                    <CircularProgress size={16} />
+                  )}
+                </Stack>
+                {ingestAutomation?.updated_at && (
+                  <Typography variant="caption" color="text.secondary">
+                    Aktualisiert: {formatDateTime(ingestAutomation.updated_at)}
+                  </Typography>
+                )}
+              </Stack>
+              <Stack direction={{xs: 'column', md: 'row'}} spacing={2}>
+                <FormControl
+                  size="small"
+                  sx={{minWidth: 200}}
+                  disabled={
+                    !globalIngestEnabled ||
+                    automationDefaultsSaving === 'ingest' ||
+                    tenants.length === 0 ||
+                    tenantsLoading
+                  }
+                >
+                  <InputLabel id="global-automation-tenant">Mandant</InputLabel>
+                  <Select
+                    labelId="global-automation-tenant"
+                    value={ingestTenantValue}
+                    label="Mandant"
+                    onChange={(event: SelectChangeEvent<string>) =>
+                      handleIngestAutomationTenantChange(event.target.value || null)
+                    }
+                  >
+                    <MenuItem value="" disabled>
+                      <em>Mandant wählen</em>
+                    </MenuItem>
+                    {tenants.map((tenant) => (
+                      <MenuItem key={tenant.id} value={tenant.id}>
+                        {tenant.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                <FormControl
+                  size="small"
+                  sx={{minWidth: 200}}
+                  disabled={
+                    !globalIngestEnabled || automationDefaultsSaving === 'ingest' || pipelinesLoading
+                  }
+                >
+                  <InputLabel id="global-automation-pipeline">Pipeline (optional)</InputLabel>
+                  <Select
+                    labelId="global-automation-pipeline"
+                    value={ingestPipelineValue}
+                    label="Pipeline (optional)"
+                    onChange={(event: SelectChangeEvent<string>) =>
+                      handleIngestAutomationPipelineChange(
+                        event.target.value === '' ? null : event.target.value,
+                      )
+                    }
+                    displayEmpty
+                  >
+                    <MenuItem value="">
+                      <em>Keine Pipeline</em>
+                    </MenuItem>
+                    {pipelines.map((pipeline) => (
+                      <MenuItem key={pipeline.id} value={pipeline.id}>
+                        {pipeline.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              </Stack>
+              {globalIngestEnabled && (
+                <Typography variant="body2" color="text.secondary">
+                  Alle neuen Ordner im Tab „Anlagen“ werden automatisch importiert.
+                </Typography>
+              )}
+            </Stack>
+          </Box>
           <Stack
             direction={{xs: 'column', sm: 'row'}}
             spacing={2}
@@ -1415,6 +1717,15 @@ export default function SharePointUpload() {
         </TabPanel>
 
         <TabPanel value={tab} index={1}>
+          {automationDefaultsError && (
+            <Alert
+              severity="error"
+              sx={{mb: 2}}
+              onClose={() => setAutomationDefaultsError(null)}
+            >
+              {automationDefaultsError}
+            </Alert>
+          )}
           {pendingError && (
             <Alert severity="error" sx={{mb: 2}} onClose={() => setPendingError(null)}>
               {pendingError}
@@ -1430,6 +1741,69 @@ export default function SharePointUpload() {
               Keine Pipelines verfügbar. Bitte lege im Pipeline-Manager einen Lauf an.
             </Alert>
           )}
+          <Box sx={{mb: 2, p: 2, border: 1, borderColor: 'divider', borderRadius: 1}}>
+            <Stack spacing={2}>
+              <Stack direction={{xs: 'column', md: 'row'}} spacing={2} alignItems={{xs: 'flex-start', md: 'center'}}>
+                <Stack direction="row" spacing={1} alignItems="center">
+                  <Switch
+                    checked={globalProcessingEnabled}
+                    onChange={(_, value) => handleProcessingAutomationToggleGlobal(value)}
+                    disabled={
+                      automationDefaultsLoading ||
+                      automationDefaultsSaving === 'processing' ||
+                      pipelines.length === 0
+                    }
+                    inputProps={{'aria-label': 'globale Pipeline-Automatik'}}
+                  />
+                  <Typography variant="subtitle1">Pipelines automatisch starten</Typography>
+                  {(automationDefaultsLoading || automationDefaultsSaving === 'processing') && (
+                    <CircularProgress size={16} />
+                  )}
+                </Stack>
+                {processingAutomation?.updated_at && (
+                  <Typography variant="caption" color="text.secondary">
+                    Aktualisiert: {formatDateTime(processingAutomation.updated_at)}
+                  </Typography>
+                )}
+              </Stack>
+              <FormControl
+                size="small"
+                sx={{minWidth: 200}}
+                disabled={
+                  !globalProcessingEnabled ||
+                  automationDefaultsSaving === 'processing' ||
+                  pipelines.length === 0 ||
+                  pipelinesLoading
+                }
+              >
+                <InputLabel id="global-processing-pipeline">Pipeline</InputLabel>
+                <Select
+                  labelId="global-processing-pipeline"
+                  value={processingPipelineValue}
+                  label="Pipeline"
+                  onChange={(event: SelectChangeEvent<string>) =>
+                    handleProcessingAutomationPipelineChange(
+                      event.target.value === '' ? null : event.target.value,
+                    )
+                  }
+                >
+                  <MenuItem value="">
+                    <em>Pipeline wählen</em>
+                  </MenuItem>
+                  {pipelines.map((pipeline) => (
+                    <MenuItem key={pipeline.id} value={pipeline.id}>
+                      {pipeline.name}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+              {globalProcessingEnabled && (
+                <Typography variant="body2" color="text.secondary">
+                  Fertige Uploads im Tab „Verarbeitung“ werden automatisch gestartet.
+                </Typography>
+              )}
+            </Stack>
+          </Box>
           <Stack
             direction={{xs: 'column', md: 'row'}}
             spacing={2}

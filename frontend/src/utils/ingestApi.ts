@@ -12,6 +12,9 @@ import {
   AutomationListResponse,
   AutomationRuleSummary,
   AutomationUpsertRequest,
+  AutomationDefaultsResponse,
+  AutomationDefaultSettings,
+  AutomationDefaultUpdate,
 } from '../types/ingest';
 
 type RuntimeEnv = {
@@ -198,6 +201,20 @@ export async function upsertAutomationRule(folderId: string, payload: Automation
     `automation/folders/${encodeURIComponent(folderId)}`,
     payload,
   );
+  return data;
+}
+
+export async function fetchAutomationSettings() {
+  const { data } = await client.get<AutomationDefaultsResponse>('automation/settings');
+  return data;
+}
+
+export async function updateAutomationSetting(
+  scope: string,
+  payload: AutomationDefaultUpdate,
+) {
+  const encoded = encodeURIComponent(scope);
+  const { data } = await client.put<AutomationDefaultSettings>(`automation/settings/${encoded}`, payload);
   return data;
 }
 
