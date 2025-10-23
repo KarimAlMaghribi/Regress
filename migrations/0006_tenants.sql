@@ -50,7 +50,8 @@ CREATE OR REPLACE VIEW v_pipeline_runs_with_tenant AS
 SELECT
     pr.*,
     t.id   AS tenant_id,
-    t.name AS tenant_name
+    t.name AS tenant_name,
+    ps.names AS pdf_names
 FROM pipeline_runs pr
          LEFT JOIN LATERAL (
     SELECT u.*
@@ -60,13 +61,15 @@ FROM pipeline_runs pr
     ORDER BY u.id DESC
         LIMIT 1
 ) u ON TRUE
-    LEFT JOIN tenants t ON t.id = u.tenant_id;
+    LEFT JOIN tenants t ON t.id = u.tenant_id
+    LEFT JOIN pdf_sources ps ON ps.pdf_id = pr.pdf_id;
 
 CREATE OR REPLACE VIEW v_analysis_history_with_tenant AS
 SELECT
     ah.*,
     t.id   AS tenant_id,
-    t.name AS tenant_name
+    t.name AS tenant_name,
+    ps.names AS pdf_names
 FROM analysis_history ah
          LEFT JOIN LATERAL (
     SELECT u.*
@@ -76,4 +79,5 @@ FROM analysis_history ah
     ORDER BY u.id DESC
         LIMIT 1
 ) u ON TRUE
-    LEFT JOIN tenants t ON t.id = u.tenant_id;
+    LEFT JOIN tenants t ON t.id = u.tenant_id
+    LEFT JOIN pdf_sources ps ON ps.pdf_id = ah.pdf_id;
