@@ -6,14 +6,14 @@ export type JobStatus =
   | 'failed'
   | 'canceled';
 
-export interface FolderAutomationSummary {
+export type FolderAutomationSummary = Readonly<{
   tenant_id?: string | null;
   pipeline_id?: string | null;
   auto_ingest: boolean;
   auto_pipeline: boolean;
   last_seen?: string | null;
   updated_at?: string | null;
-}
+}>;
 
 export interface FolderSummary {
   id: string;
@@ -135,30 +135,6 @@ export interface CreateJobsRequest {
   tenant_id?: string;
   upload_url?: string;
   pipeline_id?: string;
-}
-
-export interface AutomationRuleSummary {
-  folder_id: string;
-  folder_name: string;
-  tenant_id?: string | null;
-  pipeline_id?: string | null;
-  auto_ingest: boolean;
-  auto_pipeline: boolean;
-   managed_by_default: boolean;
-  last_seen?: string | null;
-  updated_at: string;
-}
-
-export interface AutomationListResponse {
-  items: AutomationRuleSummary[];
-}
-
-export interface AutomationUpsertRequest {
-  folder_name?: string;
-  tenant_id?: string | null;
-  pipeline_id?: string | null;
-  auto_ingest?: boolean;
-  auto_pipeline?: boolean;
 }
 
 export interface AutomationDefaultSettings {

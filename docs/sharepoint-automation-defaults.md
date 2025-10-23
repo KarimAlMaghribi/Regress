@@ -30,7 +30,7 @@ The `POST /automation/jobs` endpoint continues to support manual job creation. I
 
 ## UI Integration
 
-The SharePoint upload UI now displays switches at the top of the **Anlagen** and **Verarbeitung** tabs. These controls call the new default-setting endpoints, show the currently active tenant or pipeline, and disable per-folder automation switches whenever a folder is governed by the global default (labelled "Global").
+The SharePoint upload UI now focuses on the global switches at the top of the **Anlagen** and **Verarbeitung** tabs. These controls call the default-setting endpoints and surface the currently active tenant or pipeline selection. Folder rows only show read-only chips that indicate whether an entry follows the global defaults (labelled "Global") or represents a historical override. Per-folder switches and dropdowns have been removed in favour of inline helper texts that point operators to the relevant tab-level toggle.
 
 ## Operational Notes
 
