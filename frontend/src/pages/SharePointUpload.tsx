@@ -426,7 +426,8 @@ export default function SharePointUpload() {
   const handleIngestAutomationToggleGlobal = React.useCallback(
     async (enabled: boolean) => {
       if (enabled) {
-        const fallbackTenant = ingestAutomation?.tenant_id ?? tenantId || tenants[0]?.id ?? null;
+        const fallbackTenantCandidate = tenantId || tenants[0]?.id || null;
+        const fallbackTenant = ingestAutomation?.tenant_id ?? fallbackTenantCandidate;
         if (!fallbackTenant) {
           setAutomationDefaultsError('Bitte wähle zuerst einen Mandanten für die Automatik aus.');
           return;
